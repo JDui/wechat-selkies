@@ -13,7 +13,7 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 # Build arguments for multi-arch support
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-RUN echo "馃彈锔?Building WeChat-Selkies on $BUILDPLATFORM, targeting $TARGETPLATFORM"
+RUN echo "Building WeChat-Selkies on $BUILDPLATFORM, targeting $TARGETPLATFORM"
 
 # set environment variables
 RUN apt-get update && \
@@ -31,25 +31,33 @@ RUN apt-get update && \
 
 RUN pip install --no-cache-dir python-xlib
 
-# Install WeChat based on target architecture
+# Install WeChat based on target architecture (resolve latest URL/version from official Linux WeChat page)
 RUN case "$TARGETPLATFORM" in \
     "linux/amd64") \
-        WECHAT_URL="https://dldir1v6.qq.com/weixin/Universal/Linux/WeChatLinux_x86_64.deb"; \
+        WECHAT_ARCH_KEY="WeChatLinux_x86_64.deb"; \
+        WECHAT_FALLBACK_URL="https://dldir1v6.qq.com/weixin/Universal/Linux/WeChatLinux_x86_64.deb"; \
         WECHAT_ARCH="x86_64" ;; \
     "linux/arm64") \
-        WECHAT_URL="https://dldir1v6.qq.com/weixin/Universal/Linux/WeChatLinux_arm64.deb"; \
+        WECHAT_ARCH_KEY="WeChatLinux_arm64.deb"; \
+        WECHAT_FALLBACK_URL="https://dldir1v6.qq.com/weixin/Universal/Linux/WeChatLinux_arm64.deb"; \
         WECHAT_ARCH="arm64" ;; \
     *) \
-        echo "鉂?Unsupported platform: $TARGETPLATFORM" >&2; \
+        echo "Unsupported platform: $TARGETPLATFORM" >&2; \
         echo "Supported platforms: linux/amd64, linux/arm64" >&2; \
         exit 1 ;; \
     esac && \
-    echo "馃摝 Downloading WeChat for $WECHAT_ARCH architecture..." && \
+    WECHAT_PAGE_URL="https://linux.weixin.qq.com/" && \
+    WECHAT_PAGE="$(curl -fsSL "$WECHAT_PAGE_URL" | tr -d '\n')" && \
+    WECHAT_VERSION="$(echo "$WECHAT_PAGE" | sed -n 's/.*main-section__bd-version[^>]*>\([^<]*\)<.*/\1/p' | head -n 1)" && \
+    WECHAT_URL="$(echo "$WECHAT_PAGE" | grep -o "https://[^\"]*${WECHAT_ARCH_KEY}" | head -n 1)" && \
+    if [ -z "$WECHAT_URL" ]; then WECHAT_URL="$WECHAT_FALLBACK_URL"; fi && \
+    echo "Downloading WeChat for $WECHAT_ARCH architecture from: $WECHAT_URL (version: ${WECHAT_VERSION:-unknown})" && \
     curl -fsSL -o wechat.deb "$WECHAT_URL" && \
-    echo "馃敡 Installing WeChat..." && \
+    echo "Installing WeChat..." && \
     (dpkg -i wechat.deb || (apt-get update && apt-get install -f -y && dpkg -i wechat.deb)) && \
+    INSTALLED_WECHAT_VERSION="$(dpkg-deb -f wechat.deb Version 2>/dev/null || echo "${WECHAT_VERSION:-unknown}")" && \
     rm -f wechat.deb && \
-    echo "鉁?WeChat installation completed for $WECHAT_ARCH"
+    echo "WeChat installation completed for $WECHAT_ARCH (installed version: ${INSTALLED_WECHAT_VERSION})"
 
 # Install QQ based on target architecture (resolve latest URL from official Linux QQ config)
 RUN case "$TARGETPLATFORM" in \
@@ -92,7 +100,7 @@ RUN apt-get autoclean && \
 RUN sed -i '/<dock>/,/<\/dock>/s/<noStrut>no<\/noStrut>/<noStrut>yes<\/noStrut>/' /etc/xdg/openbox/rc.xml
 
 # set app name
-ENV TITLE="WeChat-Selkies"
+ENV TITLE="AXi-SNS-Box"
 ENV TZ="Asia/Shanghai"
 ENV LC_ALL="zh_CN.UTF-8"
 ENV AUTO_START_WECHAT="true"
@@ -103,13 +111,21 @@ ENV WATCHDOG_TRAY="true"
 ENV WATCHDOG_RESTART_WECHAT="true"
 ENV WATCHDOG_RESTART_QQ="true"
 ENV WATCHDOG_LOG_PATH="/config/logs/process-watchdog.log"
+ENV NOTIFICATION_BRIDGE_PORT="38081"
+ENV NOTIFICATION_BRIDGE_LOG_PATH="/config/logs/notification-bridge.log"
+ENV NOTIFICATION_BRIDGE_RAW_LOG_PATH="/config/logs/notification-bridge-raw.log"
+ENV NOTIFICATION_BRIDGE_MODE_PATH="/config/state/notification-bridge.json"
+ENV NOTIFICATION_BRIDGE_FALLBACK_POLL_MS="1200"
+ENV NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS="600"
+ENV NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED="true"
+ENV NOTIFICATION_BRIDGE_AUDIO_PEAK_THRESHOLD="0.095"
+ENV NOTIFICATION_BRIDGE_AUDIO_MIN_MS="110"
+ENV NOTIFICATION_BRIDGE_AUDIO_MAX_MS="3000"
+ENV NOTIFICATION_BRIDGE_AUDIO_DEDUPE_SECONDS="10"
 ENV X11_WATCHDOG="true"
-ENV X11_WATCHDOG_FAIL_THRESHOLD="2"
-ENV X11_HEALTHCHECK_TIMEOUT="2"
-ENV WECHAT_IDLE_KEEPALIVE="true"
-ENV WECHAT_KEEPALIVE_INTERVAL="1800"
-ENV WECHAT_KEEPALIVE_IDLE_SECONDS="1800"
-ENV WECHAT_KEEPALIVE_LOG_PATH="/config/logs/wechat-idle-keepalive.log"
+ENV X11_WATCHDOG_FAIL_THRESHOLD="6"
+ENV X11_HEALTHCHECK_TIMEOUT="4"
+ENV SELKIES_AWAKE_STATE_PATH="/tmp/selkies-client-awake.json"
 ENV QQ_EXTRA_FLAGS="--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer"
 ENV QQ_NICE_LEVEL="-2"
 ENV QQ_WATCHDOG_HANG_DETECT="true"
@@ -126,21 +142,35 @@ ENV SELKIES_DEFAULT_USE_CPU="false"
 ENV SELKIES_DEFAULT_H264_STREAMING_MODE="true"
 ENV SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY="false"
 ENV SELKIES_DEFAULT_H264_CRF="30"
+ENV SELKIES_DYNAMIC_LOW_LATENCY="true"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS="1200"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="32"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF="40"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_SCALE_PERCENT="85"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT="75"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER="true"
 ENV SELKIES_STREAM_WAIT_THRESHOLD_MS="35000"
+ENV SELKIES_STREAM_STALL_THRESHOLD_MS="18000"
+ENV SELKIES_STREAM_STALL_RESTART_LIMIT="2"
 ENV SELKIES_STREAM_RECOVER_COOLDOWN_MS="120000"
+ENV SELKIES_IDLE_CLEANUP_MINUTES="20"
 ENV SELKIES_LOCAL_LINK_OPEN="true"
 ENV SELKIES_LOCAL_LINK_POLL_INTERVAL_MS="800"
 ENV LOCAL_LINK_BRIDGE_PORT="38080"
 ENV LOCAL_LINK_BRIDGE_MAX_EVENTS="256"
 ENV LOCAL_LINK_BRIDGE_ALLOWED_SCHEMES="http,https,mailto"
 ENV LOCAL_LINK_BRIDGE_LOG_PATH="/config/logs/local-link-bridge.log"
+ENV SELKIES_LOCAL_LINK_LOG_PATH="/config/logs/local-link-open.log"
+ENV LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="10800"
+ENV ENABLE_STALONETRAY="false"
+ENV WATCHDOG_TRAY="false"
 ENV ENABLE_RIGHT_CLICK_SPLIT="true"
-ENV ENABLE_SPLIT_FAB="true"
+ENV ENABLE_SPLIT_FAB="false"
 ENV SPLIT_FAB_LOG_PATH="/config/logs/split-fab.log"
-ENV SPLIT_FAB_POSITION="top-center"
+ENV SPLIT_FAB_POSITION="bottom-center"
 
 # update favicon
-RUN cp /usr/share/icons/hicolor/128x128/apps/wechat.png /usr/share/selkies/www/icon.png
+RUN cp /usr/share/icons/hicolor/512x512/apps/qq.png /usr/share/selkies/www/icon.png
 
 # add local files
 COPY /root /
@@ -153,13 +183,18 @@ RUN sed -i 's/\r$//' \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
     /defaults/default.conf \
     /defaults/autostart \
+    /defaults/dunstrc \
     /defaults/menu.xml \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/notification_bridge.py \
+    /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \
+    /scripts/gio-wrapper.sh \
     /scripts/xdg-open-wrapper.sh \
     /scripts/x11-healthcheck.sh \
     /scripts/recover-xstack.sh \
+    /scripts/recover-ui-services.sh \
     /scripts/healthcheck.sh \
     /scripts/window_tiler.py \
     /scripts/patch_openbox_rc.py \
@@ -174,10 +209,14 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/notification_bridge.py \
+    /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \
+    /scripts/gio-wrapper.sh \
     /scripts/xdg-open-wrapper.sh \
     /scripts/x11-healthcheck.sh \
     /scripts/recover-xstack.sh \
+    /scripts/recover-ui-services.sh \
     /scripts/healthcheck.sh \
     /scripts/window_tiler.py \
     /scripts/patch_openbox_rc.py \
@@ -187,5 +226,6 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
 
 RUN if [ -x /usr/bin/xdg-open ] && [ ! -x /usr/bin/xdg-open.real ]; then mv /usr/bin/xdg-open /usr/bin/xdg-open.real; fi && \
     cp /scripts/xdg-open-wrapper.sh /usr/bin/xdg-open && \
-    chmod +x /usr/bin/xdg-open
-
+    chmod +x /usr/bin/xdg-open && \
+    if [ -x /usr/bin/gio ] && [ ! -x /usr/bin/gio.real ]; then mv /usr/bin/gio /usr/bin/gio.real; fi && \
+    if [ -x /usr/bin/gio.real ]; then cp /scripts/gio-wrapper.sh /usr/bin/gio && chmod +x /usr/bin/gio; fi

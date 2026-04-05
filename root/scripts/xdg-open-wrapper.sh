@@ -1,12 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-is_true() {
-    case "${1:-}" in
-        true|TRUE|1|yes|YES|on|ON) return 0 ;;
-        *) return 1 ;;
-    esac
-}
+. /scripts/local-link-open-helper.sh
 
 REAL_XDG_OPEN="/usr/bin/xdg-open.real"
 if [ ! -x "$REAL_XDG_OPEN" ]; then
@@ -17,7 +12,7 @@ if [ ! -x "$REAL_XDG_OPEN" ]; then
     exit 1
 fi
 
-TARGET="${1:-}"
+TARGET="$(extract_link_target "$@" || true)"
 if [ -z "$TARGET" ]; then
     exec "$REAL_XDG_OPEN" "$@"
 fi
@@ -26,32 +21,13 @@ if ! is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
     exec "$REAL_XDG_OPEN" "$@"
 fi
 
-case "$TARGET" in
-    http://*|https://*|mailto:*)
-        BRIDGE_PORT="${LOCAL_LINK_BRIDGE_PORT:-38080}"
-        if python3 - "$TARGET" "$BRIDGE_PORT" <<'PY'
-import json
-import sys
-import urllib.error
-import urllib.parse
-import urllib.request
+log_local_link_event "xdg-open invoked: $*"
 
-url = sys.argv[1]
-port = int(sys.argv[2])
-endpoint = "http://127.0.0.1:%d/push" % port
-payload = urllib.parse.urlencode({"url": url, "source": "xdg-open"}).encode("utf-8")
-request = urllib.request.Request(endpoint, data=payload, method="POST")
-request.add_header("Content-Type", "application/x-www-form-urlencoded")
-with urllib.request.urlopen(request, timeout=1.5) as response:
-    body = response.read().decode("utf-8", errors="replace")
-    parsed = json.loads(body)
-    if not parsed.get("ok", False):
-        raise RuntimeError("bridge rejected url")
-PY
-        then
-            exit 0
-        fi
-        ;;
-esac
+if bridge_local_link "$TARGET" "xdg-open"; then
+    log_local_link_event "xdg-open bridged: $TARGET"
+    exit 0
+fi
+
+log_local_link_event "xdg-open fallback: $TARGET"
 
 exec "$REAL_XDG_OPEN" "$@"

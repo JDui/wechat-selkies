@@ -15,8 +15,18 @@ DEFAULT_USE_CPU_RAW="${SELKIES_DEFAULT_USE_CPU:-false}"
 DEFAULT_H264_STREAMING_MODE_RAW="${SELKIES_DEFAULT_H264_STREAMING_MODE:-true}"
 DEFAULT_USE_PAINT_OVER_QUALITY_RAW="${SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY:-false}"
 DEFAULT_H264_CRF_RAW="${SELKIES_DEFAULT_H264_CRF:-30}"
+DEFAULT_DYNAMIC_LOW_LATENCY_RAW="${SELKIES_DYNAMIC_LOW_LATENCY:-true}"
+DEFAULT_DYNAMIC_LOW_LATENCY_HOLD_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS:-1200}"
+DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_FPS:-32}"
+DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF:-40}"
+DEFAULT_DYNAMIC_LOW_LATENCY_SCALE_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_SCALE_PERCENT:-85}"
+DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT:-75}"
+DEFAULT_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER:-true}"
 DEFAULT_STREAM_WAIT_THRESHOLD_RAW="${SELKIES_STREAM_WAIT_THRESHOLD_MS:-35000}"
+DEFAULT_STREAM_STALL_THRESHOLD_RAW="${SELKIES_STREAM_STALL_THRESHOLD_MS:-18000}"
+DEFAULT_STREAM_STALL_RESTART_LIMIT_RAW="${SELKIES_STREAM_STALL_RESTART_LIMIT:-2}"
 DEFAULT_STREAM_RECOVER_COOLDOWN_RAW="${SELKIES_STREAM_RECOVER_COOLDOWN_MS:-120000}"
+DEFAULT_IDLE_CLEANUP_MINUTES_RAW="${SELKIES_IDLE_CLEANUP_MINUTES:-20}"
 LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
 LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
 DRI_NODE_PATH="${DRI_NODE:-/dev/dri/renderD128}"
@@ -78,14 +88,66 @@ if ! [[ "$default_h264_crf" =~ ^[0-9]+$ ]] || [ "$default_h264_crf" -lt 5 ] || [
   default_h264_crf="30"
 fi
 
+default_dynamic_low_latency_js="true"
+case "${DEFAULT_DYNAMIC_LOW_LATENCY_RAW,,}" in
+  false|0|no|off) default_dynamic_low_latency_js="false" ;;
+  *) default_dynamic_low_latency_js="true" ;;
+esac
+
+default_dynamic_low_latency_hold_ms="${DEFAULT_DYNAMIC_LOW_LATENCY_HOLD_RAW}"
+if ! [[ "$default_dynamic_low_latency_hold_ms" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_hold_ms" -lt 300 ] || [ "$default_dynamic_low_latency_hold_ms" -gt 10000 ]; then
+  default_dynamic_low_latency_hold_ms="1200"
+fi
+
+default_dynamic_low_latency_fps="${DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW}"
+if ! [[ "$default_dynamic_low_latency_fps" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_fps" -lt 8 ] || [ "$default_dynamic_low_latency_fps" -gt 120 ]; then
+  default_dynamic_low_latency_fps="32"
+fi
+
+default_dynamic_low_latency_crf="${DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW}"
+if ! [[ "$default_dynamic_low_latency_crf" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_crf" -lt 5 ] || [ "$default_dynamic_low_latency_crf" -gt 60 ]; then
+  default_dynamic_low_latency_crf="40"
+fi
+
+default_dynamic_low_latency_scale="${DEFAULT_DYNAMIC_LOW_LATENCY_SCALE_RAW}"
+if ! [[ "$default_dynamic_low_latency_scale" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_scale" -lt 25 ] || [ "$default_dynamic_low_latency_scale" -gt 100 ]; then
+  default_dynamic_low_latency_scale="85"
+fi
+
+default_dynamic_low_latency_sample="${DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW}"
+if ! [[ "$default_dynamic_low_latency_sample" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_sample" -lt 33 ] || [ "$default_dynamic_low_latency_sample" -gt 100 ]; then
+  default_dynamic_low_latency_sample="75"
+fi
+
+default_dynamic_low_latency_disable_paint_js="true"
+case "${DEFAULT_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_RAW,,}" in
+  false|0|no|off) default_dynamic_low_latency_disable_paint_js="false" ;;
+  *) default_dynamic_low_latency_disable_paint_js="true" ;;
+esac
+
 default_stream_wait_threshold_ms="${DEFAULT_STREAM_WAIT_THRESHOLD_RAW}"
 if ! [[ "$default_stream_wait_threshold_ms" =~ ^[0-9]+$ ]] || [ "$default_stream_wait_threshold_ms" -lt 10000 ] || [ "$default_stream_wait_threshold_ms" -gt 300000 ]; then
   default_stream_wait_threshold_ms="35000"
 fi
 
+default_stream_stall_threshold_ms="${DEFAULT_STREAM_STALL_THRESHOLD_RAW}"
+if ! [[ "$default_stream_stall_threshold_ms" =~ ^[0-9]+$ ]] || [ "$default_stream_stall_threshold_ms" -lt 4000 ] || [ "$default_stream_stall_threshold_ms" -gt 120000 ]; then
+  default_stream_stall_threshold_ms="18000"
+fi
+
+default_stream_stall_restart_limit="${DEFAULT_STREAM_STALL_RESTART_LIMIT_RAW}"
+if ! [[ "$default_stream_stall_restart_limit" =~ ^[0-9]+$ ]] || [ "$default_stream_stall_restart_limit" -lt 1 ] || [ "$default_stream_stall_restart_limit" -gt 5 ]; then
+  default_stream_stall_restart_limit="2"
+fi
+
 default_stream_recover_cooldown_ms="${DEFAULT_STREAM_RECOVER_COOLDOWN_RAW}"
 if ! [[ "$default_stream_recover_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_stream_recover_cooldown_ms" -lt 30000 ] || [ "$default_stream_recover_cooldown_ms" -gt 600000 ]; then
   default_stream_recover_cooldown_ms="120000"
+fi
+
+default_idle_cleanup_minutes="${DEFAULT_IDLE_CLEANUP_MINUTES_RAW}"
+if ! [[ "$default_idle_cleanup_minutes" =~ ^[0-9]+$ ]] || [ "$default_idle_cleanup_minutes" -lt 5 ] || [ "$default_idle_cleanup_minutes" -gt 240 ]; then
+  default_idle_cleanup_minutes="20"
 fi
 
 local_link_open_js="true"
@@ -143,10 +205,21 @@ window.__SELKIES_RUNTIME__ = {
   defaultUsePaintOverQuality: ${default_use_paint_over_quality_js},
   defaultH264Crf: ${default_h264_crf},
   streamWaitThresholdMs: ${default_stream_wait_threshold_ms},
+  streamStallThresholdMs: ${default_stream_stall_threshold_ms},
+  streamStallRestartLimit: ${default_stream_stall_restart_limit},
   streamRecoverCooldownMs: ${default_stream_recover_cooldown_ms},
+  idleCleanupMinutes: ${default_idle_cleanup_minutes},
   localLinkOpenEnabled: ${local_link_open_js},
   localLinkPollIntervalMs: ${local_link_poll_interval_ms},
   defaultGamepadEnabled: ${default_gamepad_js},
+  gamepadUiEnabled: ${default_gamepad_js},
+  dynamicLowLatencyEnabled: ${default_dynamic_low_latency_js},
+  dynamicLowLatencyHoldMs: ${default_dynamic_low_latency_hold_ms},
+  dynamicLowLatencyFps: ${default_dynamic_low_latency_fps},
+  dynamicLowLatencyH264Crf: ${default_dynamic_low_latency_crf},
+  dynamicLowLatencyScalePercent: ${default_dynamic_low_latency_scale},
+  dynamicLowLatencySamplePercent: ${default_dynamic_low_latency_sample},
+  dynamicLowLatencyDisablePaintOver: ${default_dynamic_low_latency_disable_paint_js},
   defaultBinaryClipboard: ${default_binary_clipboard_js}
 };
 EOF

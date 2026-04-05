@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png?v=axi-sunglasses-v1">
   <link rel="manifest" href="manifest.json" crossorigin="use-credentials">
-  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="icon" type="image/png" href="icon.png?v=axi-sunglasses-v1">
   <script src="src/selkies-paste-config.js"></script>
   <script src="src/selkies-runtime-config.js"></script>
   <script src="src/selkies-runtime-overrides.js"></script>
@@ -19,6 +19,19 @@
   <div id="app"></div>
   <div id="root"></div>
   <div id="touch-gamepad-host"></div>
-  <script src="src/universalTouchGamepad.js"></script>
+  <script>
+    (function () {
+      var runtime = window.__SELKIES_RUNTIME__ || {};
+      var enabled = runtime.gamepadUiEnabled !== false;
+      var host = document.getElementById("touch-gamepad-host");
+      if (!enabled) {
+        if (host) host.remove();
+        return;
+      }
+      var script = document.createElement("script");
+      script.src = "src/universalTouchGamepad.js";
+      document.body.appendChild(script);
+    })();
+  </script>
 </body>
 </html>

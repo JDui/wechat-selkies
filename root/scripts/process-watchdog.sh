@@ -34,6 +34,10 @@ safe_restart() {
     local cmd="$2"
     local now
     now="$(date +%s)"
+    local min_cooldown=10
+    if [ "$name" = "x11-stack" ]; then
+        min_cooldown=60
+    fi
 
     local stamp_file="/tmp/watchdog-${name}.stamp"
     local last=0
@@ -42,7 +46,7 @@ safe_restart() {
     fi
 
     # simple cooldown to avoid tight restart loops
-    if [ $((now - last)) -lt 10 ]; then
+    if [ $((now - last)) -lt "${min_cooldown}" ]; then
         return
     fi
 
@@ -72,10 +76,20 @@ while true; do
         fi
     fi
 
+    if is_true "${WATCHDOG_NOTIFICATIONS:-true}"; then
+        if ! pgrep -x dunst >/dev/null 2>&1; then
+            safe_restart "dunst" "dunst -config /config/.config/dunst/dunstrc"
+        fi
+    fi
+
     if is_true "${AUTO_START_WECHAT:-true}" && is_true "${WATCHDOG_RESTART_WECHAT:-true}"; then
         if ! pgrep -af "/usr/bin/wechat" >/dev/null 2>&1; then
             safe_restart "wechat" "/usr/bin/wechat"
         fi
+    fi
+
+    if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
+        safe_restart "notification-bridge" "python3 -u /scripts/notification_bridge.py >>\"${NOTIFICATION_BRIDGE_LOG_PATH:-/config/logs/notification-bridge.log}\" 2>&1"
     fi
 
     if is_true "${AUTO_START_QQ:-false}" && is_true "${WATCHDOG_RESTART_QQ:-true}"; then
@@ -108,6 +122,7 @@ while true; do
         if /scripts/x11-healthcheck.sh; then
             echo "0" >"$x11_fail_counter_file"
         else
+            x11_rc=$?
             x11_fail_count=0
             if [ -f "$x11_fail_counter_file" ]; then
                 x11_fail_count="$(cat "$x11_fail_counter_file" 2>/dev/null || echo 0)"
@@ -117,10 +132,14 @@ while true; do
             fi
             x11_fail_count=$((x11_fail_count + 1))
             echo "$x11_fail_count" >"$x11_fail_counter_file"
-            log "x11 healthcheck failed (${x11_fail_count}/${x11_fail_threshold})"
+            log "x11 healthcheck failed rc=${x11_rc} (${x11_fail_count}/${x11_fail_threshold})"
             if [ "$x11_fail_count" -ge "$x11_fail_threshold" ]; then
-                echo "0" >"$x11_fail_counter_file"
-                safe_restart "x11-stack" "/scripts/recover-xstack.sh"
+                if [ "$x11_rc" -eq 2 ] || [ "$x11_rc" -eq 3 ] || [ "$x11_fail_count" -ge $((x11_fail_threshold * 3)) ]; then
+                    echo "0" >"$x11_fail_counter_file"
+                    safe_restart "x11-stack" "/scripts/recover-xstack.sh"
+                else
+                    safe_restart "x11-ui" "/scripts/recover-ui-services.sh"
+                fi
             fi
         fi
     fi

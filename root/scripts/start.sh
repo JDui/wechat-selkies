@@ -20,17 +20,113 @@ start_qq() {
 }
 
 start_tray() {
+    if ! is_true "${ENABLE_STALONETRAY:-false}"; then
+        pkill -x stalonetray >/dev/null 2>&1 || true
+        return
+    fi
     if ! pgrep -x stalonetray >/dev/null 2>&1; then
         nohup stalonetray --dockapp-mode simple >/dev/null 2>&1 &
     fi
+}
+
+sync_notification_theme() {
+    mkdir -p /config/.config/dunst
+    if [ ! -f /config/.config/dunst/dunstrc ] || ! cmp -s /defaults/dunstrc /config/.config/dunst/dunstrc; then
+        cp /defaults/dunstrc /config/.config/dunst/dunstrc
+    fi
+}
+
+start_notification_daemon() {
+    sync_notification_theme
+    if pgrep -x dunst >/dev/null 2>&1; then
+        return
+    fi
+    DUNST_LOG_PATH="${DUNST_LOG_PATH:-/config/logs/dunst.log}"
+    mkdir -p "$(dirname "$DUNST_LOG_PATH")"
+    nohup dunst -config /config/.config/dunst/dunstrc >>"$DUNST_LOG_PATH" 2>&1 &
 }
 
 start_local_link_bridge() {
     if ! pgrep -f "/scripts/local_link_bridge.py" >/dev/null 2>&1; then
         LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
         mkdir -p "$(dirname "$LOCAL_LINK_BRIDGE_LOG_PATH")"
-        nohup python3 /scripts/local_link_bridge.py >>"$LOCAL_LINK_BRIDGE_LOG_PATH" 2>&1 &
+        nohup python3 -u /scripts/local_link_bridge.py >>"$LOCAL_LINK_BRIDGE_LOG_PATH" 2>&1 &
     fi
+}
+
+start_notification_bridge() {
+    if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
+        NOTIFICATION_BRIDGE_LOG_PATH="${NOTIFICATION_BRIDGE_LOG_PATH:-/config/logs/notification-bridge.log}"
+        mkdir -p "$(dirname "$NOTIFICATION_BRIDGE_LOG_PATH")"
+        nohup python3 -u /scripts/notification_bridge.py >>"$NOTIFICATION_BRIDGE_LOG_PATH" 2>&1 &
+    fi
+}
+
+reset_local_link_logs() {
+    LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
+    SELKIES_LOCAL_LINK_LOG_PATH="${SELKIES_LOCAL_LINK_LOG_PATH:-/config/logs/local-link-open.log}"
+    mkdir -p "$(dirname "$LOCAL_LINK_BRIDGE_LOG_PATH")"
+    mkdir -p "$(dirname "$SELKIES_LOCAL_LINK_LOG_PATH")"
+    : >"$LOCAL_LINK_BRIDGE_LOG_PATH"
+    : >"$SELKIES_LOCAL_LINK_LOG_PATH"
+}
+
+start_local_link_log_reset_loop() {
+    if ! is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
+        return
+    fi
+    if pgrep -f "/scripts/local-link-log-reset-loop.sh" >/dev/null 2>&1; then
+        return
+    fi
+
+    LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="${LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS:-10800}"
+    if ! [[ "$LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [ "$LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS" -lt 300 ]; then
+        LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="10800"
+    fi
+
+    cat >/tmp/local-link-log-reset-loop.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
+SELKIES_LOCAL_LINK_LOG_PATH="${SELKIES_LOCAL_LINK_LOG_PATH:-/config/logs/local-link-open.log}"
+LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="${LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS:-10800}"
+while true; do
+    sleep "$LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS"
+    : >"$LOCAL_LINK_BRIDGE_LOG_PATH"
+    : >"$SELKIES_LOCAL_LINK_LOG_PATH"
+done
+EOF
+    chmod +x /tmp/local-link-log-reset-loop.sh
+    nohup /tmp/local-link-log-reset-loop.sh >/dev/null 2>&1 &
+}
+
+wait_local_link_bridge_ready() {
+    if ! is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
+        return 0
+    fi
+    local port="${LOCAL_LINK_BRIDGE_PORT:-38080}"
+    local retries="${LOCAL_LINK_BRIDGE_READY_RETRIES:-20}"
+    local delay="${LOCAL_LINK_BRIDGE_READY_DELAY_SECONDS:-0.25}"
+    python3 - "$port" "$retries" "$delay" <<'PY'
+import json
+import sys
+import time
+import urllib.request
+
+port = int(sys.argv[1])
+retries = int(float(sys.argv[2]))
+delay = float(sys.argv[3])
+url = f"http://127.0.0.1:{port}/health"
+for _ in range(max(1, retries)):
+    try:
+        with urllib.request.urlopen(url, timeout=1.0) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            if data.get("ok"):
+                sys.exit(0)
+    except Exception:
+        time.sleep(delay)
+sys.exit(1)
+PY
 }
 
 start_split_fab() {
@@ -38,14 +134,6 @@ start_split_fab() {
         SPLIT_FAB_LOG_PATH="${SPLIT_FAB_LOG_PATH:-/config/logs/split-fab.log}"
         mkdir -p "$(dirname "$SPLIT_FAB_LOG_PATH")"
         nohup python3 /scripts/split_fab.py >>"$SPLIT_FAB_LOG_PATH" 2>&1 &
-    fi
-}
-
-start_wechat_keepalive() {
-    if ! pgrep -af "/scripts/wechat/wechat-idle-keepalive.sh" >/dev/null 2>&1; then
-        WECHAT_KEEPALIVE_LOG_PATH="${WECHAT_KEEPALIVE_LOG_PATH:-/config/logs/wechat-idle-keepalive.log}"
-        mkdir -p "$(dirname "$WECHAT_KEEPALIVE_LOG_PATH")"
-        nohup /scripts/wechat/wechat-idle-keepalive.sh >>"$WECHAT_KEEPALIVE_LOG_PATH" 2>&1 &
     fi
 }
 
@@ -90,9 +178,14 @@ fi
 patch_openbox_right_click_menu
 
 start_tray
+start_notification_daemon
+start_notification_bridge
 
 if is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
+    reset_local_link_logs
     start_local_link_bridge
+    start_local_link_log_reset_loop
+    wait_local_link_bridge_ready || echo "[start] warning: local link bridge did not report ready in time" >&2
 fi
 
 # start WeChat application in the background if exists and auto-start enabled
@@ -112,13 +205,8 @@ if is_true "${PROCESS_WATCHDOG:-true}"; then
     nohup /scripts/process-watchdog.sh >>"$WATCHDOG_LOG_PATH" 2>&1 &
 fi
 
-# periodically poke WeChat only when session is idle to reduce overnight logout probability
-if is_true "${WECHAT_IDLE_KEEPALIVE:-true}"; then
-    start_wechat_keepalive
-fi
-
 # start split FAB process for quick left/right tiling when there are >=2 windows
-if is_true "${ENABLE_SPLIT_FAB:-true}"; then
+if is_true "${ENABLE_SPLIT_FAB:-false}"; then
     start_split_fab
 fi
 

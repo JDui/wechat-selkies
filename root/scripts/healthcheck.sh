@@ -35,11 +35,4 @@ if is_true "${AUTO_START_QQ:-false}" && is_true "${WATCHDOG_RESTART_QQ:-true}"; 
     fi
 fi
 
-if is_true "${WECHAT_IDLE_KEEPALIVE:-true}"; then
-    if ! pgrep -af "/scripts/wechat/wechat-idle-keepalive.sh" >/dev/null 2>&1; then
-        echo "wechat idle keepalive process missing"
-        exit 1
-    fi
-fi
-
 exit 0

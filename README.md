@@ -44,7 +44,37 @@
 - **自动分屏工具**：新增窗口右键分屏和悬浮分屏工具，支持左右对半分、上下对半分、都全屏三种模式。
 - **低延迟优化**：默认参数与编码策略针对交互延迟优化，并增加卡流自动恢复与 X11 自愈机制。
 - **QQ 新特性支持**：镜像构建阶段自动解析并安装最新 Linux QQ，叠加卡死检测与自动拉起能力。
-- **链接本地打开**：容器内应用触发链接打开时，由浏览器客户端在本机拉起新标签页打开链接。
+- **链接本地打开**：容器内应用触发链接打开时，前端先弹出确认卡片，再由本机浏览器打开，并记录跳转历史。
+
+## 大版本更新说明
+
+### 浏览器链接跳转
+
+- 容器内 QQ / 微信 触发 `http`、`https`、`mailto` 等链接时，不再直接在远端桌面里盲开。
+- 链接会先进入本地跳转桥接，由浏览器侧弹出确认卡片，用户确认后再交给本机默认浏览器处理。
+- 侧边栏会保留最近跳转历史，方便重复打开、复制链接和回溯刚刚处理过的地址。
+- 这套流程既减少远端桌面误打开，也更适合把聊天里的链接、群邀请、邮箱地址直接交给本机环境。
+
+### 底部快捷 Bar
+
+- 新增浏览器底部快捷 Bar，默认提供 `送剪板 / 微信 / 分屏 / QQ / 收剪板` 等常用动作。
+- 底部 Bar 已适配未读状态闪烁、窗口聚焦、剪贴板双向同步和分屏弹层。
+- 分屏入口保留三种高频布局，避免原始浮窗过重、过杂。
+- Bar 支持折叠成单个小按钮，并支持自动恢复，适合小屏或临时让出画面空间。
+
+### 穿透式消息推送
+
+- QQ / 微信 的消息事件可以不只停留在容器桌面内，而是同步穿透到本机浏览器侧。
+- 开启后，浏览器会在空闲时把积压通知逐条投递到本地 Notification，并联动标签标题、favicon 和底部按钮未读闪烁。
+- 侧边栏的 `妙妙小工具` 可以直接切换穿透模式、测试本地通知、调节 QQ 空闲切走时机。
+- 这让远程托管的 QQ / 微信 更接近“本机应用”的提醒体验，同时仍保留容器内原生提醒链路。
+
+### 自适应动态低延迟模式
+
+- 系统不再只依赖固定编码参数，而是会根据真实交互状态动态调节传输策略。
+- 在键鼠输入、滚轮、拖动、文件传输抢占等场景下，会优先保障交互流畅度，短时降低画质压力和发送拥塞。
+- 在空闲或恢复阶段，相关参数会自动回收，不需要手工切换模式。
+- 同时配合卡流恢复、X11 健康检查、进程守护和剪贴板/输入法修复，整体远程桌面体验会更稳定。
 
 ## 截图展示
 ![微信截图](./docs/images/wechat-selkies-1.jpg)
@@ -125,12 +155,9 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - AUTO_START_QQ=false          # default is false
           - PROCESS_WATCHDOG=true        # process watchdog for long-running stability
           - WATCHDOG_INTERVAL=10         # watchdog check interval (seconds)
-          - WATCHDOG_TRAY=true           # auto-restart stalonetray
+          - WATCHDOG_TRAY=false          # keep tray disabled unless you explicitly need it
           - WATCHDOG_RESTART_WECHAT=true # auto-restart WeChat when process exits
           - WATCHDOG_RESTART_QQ=true     # auto-restart QQ when process exits
-          - WECHAT_IDLE_KEEPALIVE=true   # idle-time WeChat keepalive poke
-          - WECHAT_KEEPALIVE_INTERVAL=1800      # keepalive interval in seconds
-          - WECHAT_KEEPALIVE_IDLE_SECONDS=1800  # only run keepalive when idle >= this value
           - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
           - QQ_NICE_LEVEL=-2             # process nice level, lower value = higher priority (requires permission)
           - QQ_WATCHDOG_HANG_DETECT=true
@@ -149,6 +176,8 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY=false
           - SELKIES_DEFAULT_H264_CRF=30
           - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
+          - SELKIES_STREAM_STALL_THRESHOLD_MS=18000
+          - SELKIES_STREAM_STALL_RESTART_LIMIT=2
           - SELKIES_STREAM_RECOVER_COOLDOWN_MS=120000
           - SELKIES_LOCAL_LINK_OPEN=true
           - SELKIES_LOCAL_LINK_POLL_INTERVAL_MS=800
@@ -212,12 +241,9 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
 | `AUTO_START_QQ` | `false` | 是否自动启动 QQ 客户端 |
 | `PROCESS_WATCHDOG` | `true` | 启用容器内进程看门狗 |
 | `WATCHDOG_INTERVAL` | `10` | 看门狗巡检间隔（秒） |
-| `WATCHDOG_TRAY` | `true` | 自动拉起 stalonetray 托盘进程 |
+| `WATCHDOG_TRAY` | `false` | 是否自动拉起 stalonetray 托盘进程（默认关闭，减少额外 X11 客户端） |
 | `WATCHDOG_RESTART_WECHAT` | `true` | 微信进程退出后自动重启 |
 | `WATCHDOG_RESTART_QQ` | `true` | QQ 进程退出后自动重启（仅在 AUTO_START_QQ=true 时） |
-| `WECHAT_IDLE_KEEPALIVE` | `true` | 空闲时定时激活微信窗口并触发轻量按键，降低隔夜掉线概率 |
-| `WECHAT_KEEPALIVE_INTERVAL` | `1800` | 微信保活巡检间隔（秒） |
-| `WECHAT_KEEPALIVE_IDLE_SECONDS` | `1800` | 仅当会话空闲超过该阈值时执行保活（秒） |
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | QQ 启动附加参数（降低 GPU 导致的卡死概率） |
 | `QQ_NICE_LEVEL` | `-2` | QQ 进程 nice 优先级（-20 到 19） |
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | 启用 QQ 卡死检测（进程存在但窗口不响应） |
@@ -238,8 +264,10 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
 | `SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY` | `false` | 默认关闭静态场景高质量叠加（降低突发延迟） |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | 默认 H264 CRF（优先降低编码负载与输入延迟） |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 页面处于 `Waiting for stream...` 且无视频流时，自动恢复阈值（毫秒） |
+| `SELKIES_STREAM_STALL_THRESHOLD_MS` | `18000` | 视频层已存在但帧进度停滞时，触发分级自愈的阈值（毫秒） |
+| `SELKIES_STREAM_STALL_RESTART_LIMIT` | `2` | 卡流自愈时，先尝试的视频/音频重启次数上限，超过后才刷新页面 |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | 自动恢复冷却时间（毫秒，防止循环刷新） |
-| `SELKIES_LOCAL_LINK_OPEN` | `true` | 启用容器应用链接在本地浏览器打开（QQ/微信点击链接） |
+| `SELKIES_LOCAL_LINK_OPEN` | `true` | 启用容器应用链接的本地跳转确认与历史记录（QQ/微信点击链接） |
 | `SELKIES_LOCAL_LINK_POLL_INTERVAL_MS` | `800` | 前端轮询链接事件间隔（毫秒） |
 | `LOCAL_LINK_BRIDGE_PORT` | `38080` | 容器内本地链接桥接服务端口（需与 nginx 配置保持一致） |
 | `LOCAL_LINK_BRIDGE_MAX_EVENTS` | `256` | 本地链接事件队列容量（环形缓存） |
@@ -283,6 +311,16 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
   - 增大 `shm_size` 与 `mem_limit`
   - 调整 `QQ_EXTRA_FLAGS`
   - 适度降低 `QQ_NICE_LEVEL`（例如 `-5`，需要容器内允许设置优先级）
+
+#### 微信版本与链接跳转说明
+
+- 镜像构建阶段会从微信 Linux 官方下载页 `https://linux.weixin.qq.com/` 解析当前版本号与对应架构的 deb 下载地址，解析失败时才回退到通用直链。
+- 微信/QQ 内触发外部链接时，前端不会再直接跳转，而是显示一个确认卡片：
+  - 可点按钮打开
+  - 可复制链接
+  - 可手动关闭
+  - 15 秒后自动关闭
+- 已处理过的跳转链接会记录到 Selkies 侧边栏中的 `Link jump history` 区域，方便回看与重新打开。
 
 #### 端口配置
 

@@ -8,7 +8,18 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   defaultUsePaintOverQuality: false,
   defaultH264Crf: 30,
   streamWaitThresholdMs: 35000,
+  streamStallThresholdMs: 18000,
+  streamStallRestartLimit: 2,
   streamRecoverCooldownMs: 120000,
+  idleCleanupMinutes: 20,
   defaultGamepadEnabled: false,
+  gamepadUiEnabled: false,
+  dynamicLowLatencyEnabled: true,
+  dynamicLowLatencyHoldMs: 1200,
+  dynamicLowLatencyFps: 32,
+  dynamicLowLatencyH264Crf: 40,
+  dynamicLowLatencyScalePercent: 85,
+  dynamicLowLatencySamplePercent: 75,
+  dynamicLowLatencyDisablePaintOver: true,
   defaultBinaryClipboard: true
 };

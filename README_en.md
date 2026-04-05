@@ -43,7 +43,37 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
 - **Low-Latency Optimization**: Tuned defaults for interaction latency, plus stream auto-recovery and X11 self-healing.
 - **New QQ Support Enhancements**: Build-time latest Linux QQ URL resolution, hang detection, and auto-restart.
-- **Open Links Locally**: Links triggered inside QQ/WeChat are forwarded and opened by the browser on the local client machine.
+- **Open Links Locally**: Links triggered inside QQ/WeChat now show a confirmation card first, then open in the local browser and are saved in jump history.
+
+## Major Update Highlights
+
+### Browser Link Handoff
+
+- Links triggered inside remote QQ / WeChat are no longer blindly opened inside the container desktop.
+- They now flow through a local jump bridge first, show a browser-side confirmation card, and then open with the local machine's default browser.
+- The sidebar keeps a short jump history so links can be reopened, copied, or reviewed later.
+- This is much more practical for chat links, invitations, and mail addresses that should really leave the remote session and continue on the local machine.
+
+### Bottom Action Bar
+
+- A persistent bottom action bar is now built into the browser UI for the most frequent actions: send clipboard, focus WeChat, split windows, focus QQ, and receive clipboard.
+- It is integrated with unread flashing state, window focus controls, bidirectional clipboard sync, and the compact split popover.
+- The split entry keeps only the three high-frequency layouts, which makes the UI lighter and faster to use.
+- The bar can collapse into a single button and auto-restore later, making it practical on smaller screens or during focused reading.
+
+### Passthrough Notifications
+
+- QQ / WeChat message events can now escape the container desktop and reach the local browser notification layer.
+- When enabled, the browser delivers queued notifications during idle time and syncs them with unread title flashing, favicon changes, and bottom bar button alerts.
+- The `Miaomiao Toolbox` sidebar section exposes the passthrough toggle, browser notification tests, and QQ idle defocus timing.
+- The result is much closer to a native local-app reminder flow while still preserving the original in-container notification path.
+
+### Adaptive Dynamic Low-Latency Mode
+
+- The session no longer depends only on fixed encoder settings. It now adjusts transport behavior based on real interaction state.
+- During mouse/keyboard activity, wheel input, dragging, or transfer contention, the pipeline temporarily prioritizes responsiveness over static quality.
+- Once interaction pressure is gone, those changes are rolled back automatically, so the user does not need to manage profiles manually.
+- Combined with stream recovery, X11 health checks, watchdogs, and IME/clipboard repair paths, the desktop feels more stable over long-running sessions.
 
 ## Screenshots
 ![WeChat Screenshot](./docs/images/wechat-selkies-1.jpg)
@@ -122,12 +152,9 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - AUTO_START_QQ=false          # default is false
           - PROCESS_WATCHDOG=true        # process watchdog for long-running stability
           - WATCHDOG_INTERVAL=10         # watchdog check interval (seconds)
-          - WATCHDOG_TRAY=true           # auto-restart stalonetray
+          - WATCHDOG_TRAY=false          # keep tray disabled unless you explicitly need it
           - WATCHDOG_RESTART_WECHAT=true # auto-restart WeChat when process exits
           - WATCHDOG_RESTART_QQ=true     # auto-restart QQ when process exits
-          - WECHAT_IDLE_KEEPALIVE=true   # idle-time WeChat keepalive poke
-          - WECHAT_KEEPALIVE_INTERVAL=1800      # keepalive interval in seconds
-          - WECHAT_KEEPALIVE_IDLE_SECONDS=1800  # only run keepalive when idle >= this value
           - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
           - QQ_NICE_LEVEL=-2             # process nice level, lower value = higher priority (requires permission)
           - QQ_WATCHDOG_HANG_DETECT=true
@@ -146,6 +173,8 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY=false
           - SELKIES_DEFAULT_H264_CRF=30
           - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
+          - SELKIES_STREAM_STALL_THRESHOLD_MS=18000
+          - SELKIES_STREAM_STALL_RESTART_LIMIT=2
           - SELKIES_STREAM_RECOVER_COOLDOWN_MS=120000
           - SELKIES_LOCAL_LINK_OPEN=true
           - SELKIES_LOCAL_LINK_POLL_INTERVAL_MS=800
@@ -209,12 +238,9 @@ Configure the following environment variables in `docker-compose.yml`:
 | `AUTO_START_QQ` | `false` | Whether to automatically start the QQ client |
 | `PROCESS_WATCHDOG` | `true` | Enable in-container process watchdog |
 | `WATCHDOG_INTERVAL` | `10` | Watchdog check interval in seconds |
-| `WATCHDOG_TRAY` | `true` | Auto-restart the stalonetray process |
+| `WATCHDOG_TRAY` | `false` | Auto-restart the stalonetray process (disabled by default to reduce extra X11 clients) |
 | `WATCHDOG_RESTART_WECHAT` | `true` | Auto-restart WeChat if process exits |
 | `WATCHDOG_RESTART_QQ` | `true` | Auto-restart QQ if process exits (only when AUTO_START_QQ=true) |
-| `WECHAT_IDLE_KEEPALIVE` | `true` | Periodically activate WeChat when session is idle to reduce overnight logout probability |
-| `WECHAT_KEEPALIVE_INTERVAL` | `1800` | WeChat keepalive check interval in seconds |
-| `WECHAT_KEEPALIVE_IDLE_SECONDS` | `1800` | Run keepalive only when user idle time exceeds this threshold |
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
 | `QQ_NICE_LEVEL` | `-2` | Nice level for QQ process (-20 to 19) |
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | Enable QQ hang detection (process alive but window unresponsive) |
@@ -235,8 +261,10 @@ Configure the following environment variables in `docker-compose.yml`:
 | `SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY` | `false` | Disable static-scene paint-over quality by default (less latency spikes) |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | Default H264 CRF tuned to lower encode load and input delay |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | Auto-recovery threshold in milliseconds when UI is stuck on `Waiting for stream...` |
+| `SELKIES_STREAM_STALL_THRESHOLD_MS` | `18000` | Threshold in milliseconds for stalled frame progress before staged self-healing starts |
+| `SELKIES_STREAM_STALL_RESTART_LIMIT` | `2` | Number of staged stream restart attempts before falling back to a page reload |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | Auto-recovery cooldown in milliseconds to avoid refresh loops |
-| `SELKIES_LOCAL_LINK_OPEN` | `true` | Enable opening QQ/WeChat links in the local browser on the client side |
+| `SELKIES_LOCAL_LINK_OPEN` | `true` | Enable local link confirmation flow and jump history for QQ/WeChat links |
 | `SELKIES_LOCAL_LINK_POLL_INTERVAL_MS` | `800` | Frontend polling interval for local-link events (milliseconds) |
 | `LOCAL_LINK_BRIDGE_PORT` | `38080` | In-container local-link bridge service port (must match nginx route) |
 | `LOCAL_LINK_BRIDGE_MAX_EVENTS` | `256` | Local-link event queue capacity (ring buffer) |
@@ -280,6 +308,16 @@ Notes:
   - increasing `shm_size` and `mem_limit`
   - tuning `QQ_EXTRA_FLAGS`
   - setting a lower `QQ_NICE_LEVEL` (for example `-5`, requires permission)
+
+#### WeChat Version and Link-Jump Notes
+
+- During image build, the WeChat deb URL and version are resolved from the official Linux WeChat page `https://linux.weixin.qq.com/`; the static universal download URL is only used as fallback.
+- External links triggered inside WeChat/QQ no longer open immediately. The frontend now shows a confirmation card where the user can:
+  - open the link
+  - copy the link
+  - close the card manually
+  - let it auto-dismiss after 15 seconds
+- Processed link jumps are stored in the Selkies sidebar under `Link jump history` for later review and reopening.
 
 #### Port Configuration
 
