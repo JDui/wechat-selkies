@@ -26,6 +26,9 @@ DEFAULT_STREAM_WAIT_THRESHOLD_RAW="${SELKIES_STREAM_WAIT_THRESHOLD_MS:-35000}"
 DEFAULT_STREAM_STALL_THRESHOLD_RAW="${SELKIES_STREAM_STALL_THRESHOLD_MS:-18000}"
 DEFAULT_STREAM_STALL_RESTART_LIMIT_RAW="${SELKIES_STREAM_STALL_RESTART_LIMIT:-2}"
 DEFAULT_STREAM_RECOVER_COOLDOWN_RAW="${SELKIES_STREAM_RECOVER_COOLDOWN_MS:-120000}"
+DEFAULT_VIDEO_CORRUPTION_WATCHDOG_RAW="${SELKIES_VIDEO_CORRUPTION_WATCHDOG:-true}"
+DEFAULT_VIDEO_SOFT_RECOVER_LIMIT_RAW="${SELKIES_VIDEO_SOFT_RECOVER_LIMIT:-2}"
+DEFAULT_VIDEO_RECOVER_COOLDOWN_RAW="${SELKIES_VIDEO_RECOVER_COOLDOWN_MS:-120000}"
 DEFAULT_IDLE_CLEANUP_MINUTES_RAW="${SELKIES_IDLE_CLEANUP_MINUTES:-20}"
 LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
 LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
@@ -145,6 +148,22 @@ if ! [[ "$default_stream_recover_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_stre
   default_stream_recover_cooldown_ms="120000"
 fi
 
+default_video_corruption_watchdog_js="true"
+case "${DEFAULT_VIDEO_CORRUPTION_WATCHDOG_RAW,,}" in
+  false|0|no|off) default_video_corruption_watchdog_js="false" ;;
+  *) default_video_corruption_watchdog_js="true" ;;
+esac
+
+default_video_soft_recover_limit="${DEFAULT_VIDEO_SOFT_RECOVER_LIMIT_RAW}"
+if ! [[ "$default_video_soft_recover_limit" =~ ^[0-9]+$ ]] || [ "$default_video_soft_recover_limit" -lt 1 ] || [ "$default_video_soft_recover_limit" -gt 5 ]; then
+  default_video_soft_recover_limit="2"
+fi
+
+default_video_recover_cooldown_ms="${DEFAULT_VIDEO_RECOVER_COOLDOWN_RAW}"
+if ! [[ "$default_video_recover_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_video_recover_cooldown_ms" -lt 30000 ] || [ "$default_video_recover_cooldown_ms" -gt 600000 ]; then
+  default_video_recover_cooldown_ms="120000"
+fi
+
 default_idle_cleanup_minutes="${DEFAULT_IDLE_CLEANUP_MINUTES_RAW}"
 if ! [[ "$default_idle_cleanup_minutes" =~ ^[0-9]+$ ]] || [ "$default_idle_cleanup_minutes" -lt 5 ] || [ "$default_idle_cleanup_minutes" -gt 240 ]; then
   default_idle_cleanup_minutes="20"
@@ -208,6 +227,9 @@ window.__SELKIES_RUNTIME__ = {
   streamStallThresholdMs: ${default_stream_stall_threshold_ms},
   streamStallRestartLimit: ${default_stream_stall_restart_limit},
   streamRecoverCooldownMs: ${default_stream_recover_cooldown_ms},
+  videoCorruptionWatchdog: ${default_video_corruption_watchdog_js},
+  videoSoftRecoverLimit: ${default_video_soft_recover_limit},
+  videoRecoverCooldownMs: ${default_video_recover_cooldown_ms},
   idleCleanupMinutes: ${default_idle_cleanup_minutes},
   localLinkOpenEnabled: ${local_link_open_js},
   localLinkPollIntervalMs: ${local_link_poll_interval_ms},

@@ -45,6 +45,9 @@ services:
       - X11_WATCHDOG=true
       - X11_WATCHDOG_FAIL_THRESHOLD=6
       - X11_HEALTHCHECK_TIMEOUT=4
+      - SELKIES_SESSION_MODE=pin-takeover
+      - SELKIES_SESSION_STATE_PATH=/run/selkies-active-session.json
+      - SELKIES_SESSION_AUTH_PORT=38082
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
       - QQ_NICE_LEVEL=-2
       - QQ_WATCHDOG_HANG_DETECT=true
@@ -64,6 +67,9 @@ services:
       - SELKIES_DEFAULT_H264_CRF=30
       - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
       - SELKIES_STREAM_RECOVER_COOLDOWN_MS=120000
+      - SELKIES_VIDEO_CORRUPTION_WATCHDOG=true
+      - SELKIES_VIDEO_SOFT_RECOVER_LIMIT=2
+      - SELKIES_VIDEO_RECOVER_COOLDOWN_MS=120000
       # - CUSTOM_USER=<Your Name>   # legacy field; kept for compatibility
       # - PASSWORD=<Your PIN>       # PIN-only login (no username input)
       # - SELKIES_PASTE_IMAGE_MAX_SIZE=20971520 # max image size in bytes

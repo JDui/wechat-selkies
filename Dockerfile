@@ -122,6 +122,10 @@ ENV NOTIFICATION_BRIDGE_AUDIO_PEAK_THRESHOLD="0.095"
 ENV NOTIFICATION_BRIDGE_AUDIO_MIN_MS="110"
 ENV NOTIFICATION_BRIDGE_AUDIO_MAX_MS="3000"
 ENV NOTIFICATION_BRIDGE_AUDIO_DEDUPE_SECONDS="10"
+ENV SELKIES_SESSION_MODE="pin-takeover"
+ENV SELKIES_SESSION_STATE_PATH="/run/selkies-active-session.json"
+ENV SELKIES_SESSION_AUTH_PORT="38082"
+ENV SELKIES_SESSION_COOKIE_NAME="selkies_session"
 ENV X11_WATCHDOG="true"
 ENV X11_WATCHDOG_FAIL_THRESHOLD="6"
 ENV X11_HEALTHCHECK_TIMEOUT="4"
@@ -153,6 +157,9 @@ ENV SELKIES_STREAM_WAIT_THRESHOLD_MS="35000"
 ENV SELKIES_STREAM_STALL_THRESHOLD_MS="18000"
 ENV SELKIES_STREAM_STALL_RESTART_LIMIT="2"
 ENV SELKIES_STREAM_RECOVER_COOLDOWN_MS="120000"
+ENV SELKIES_VIDEO_CORRUPTION_WATCHDOG="true"
+ENV SELKIES_VIDEO_SOFT_RECOVER_LIMIT="2"
+ENV SELKIES_VIDEO_RECOVER_COOLDOWN_MS="120000"
 ENV SELKIES_IDLE_CLEANUP_MINUTES="20"
 ENV SELKIES_LOCAL_LINK_OPEN="true"
 ENV SELKIES_LOCAL_LINK_POLL_INTERVAL_MS="800"
@@ -187,6 +194,7 @@ RUN sed -i 's/\r$//' \
     /defaults/menu.xml \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/session_auth_bridge.py \
     /scripts/notification_bridge.py \
     /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \
@@ -209,6 +217,7 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/session_auth_bridge.py \
     /scripts/notification_bridge.py \
     /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \

@@ -62,6 +62,14 @@ start_notification_bridge() {
     fi
 }
 
+start_session_auth_bridge() {
+    if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
+        SELKIES_SESSION_AUTH_LOG_PATH="${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}"
+        mkdir -p "$(dirname "$SELKIES_SESSION_AUTH_LOG_PATH")"
+        nohup python3 -u /scripts/session_auth_bridge.py >>"$SELKIES_SESSION_AUTH_LOG_PATH" 2>&1 &
+    fi
+}
+
 reset_local_link_logs() {
     LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
     SELKIES_LOCAL_LINK_LOG_PATH="${SELKIES_LOCAL_LINK_LOG_PATH:-/config/logs/local-link-open.log}"
@@ -179,6 +187,7 @@ patch_openbox_right_click_menu
 
 start_tray
 start_notification_daemon
+start_session_auth_bridge
 start_notification_bridge
 
 if is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then

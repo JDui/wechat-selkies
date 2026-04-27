@@ -11,6 +11,7 @@ CHPORT="${CUSTOM_HTTPS_PORT:-3001}"
 CWS="${CUSTOM_WS_PORT:-8082}"
 CLINK="${LOCAL_LINK_BRIDGE_PORT:-38080}"
 CNOTIFY="${NOTIFICATION_BRIDGE_PORT:-38081}"
+CAUTH="${SELKIES_SESSION_AUTH_PORT:-38082}"
 SFOLDER="${SUBFOLDER:-/}"
 FILE_MANAGER_PATH="${FILE_MANAGER_PATH:-$HOME/Desktop}"
 DASHBOARD="${DASHBOARD:-selkies-dashboard}"
@@ -71,6 +72,7 @@ sed -i "s/3001/$CHPORT/g" "${NGINX_CONFIG}"
 sed -i "s/CWS/$CWS/g" "${NGINX_CONFIG}"
 sed -i "s/CLINK/$CLINK/g" "${NGINX_CONFIG}"
 sed -i "s/CNOTIFY/$CNOTIFY/g" "${NGINX_CONFIG}"
+sed -i "s/CAUTH/$CAUTH/g" "${NGINX_CONFIG}"
 sed -i "s|SUBFOLDER|$SFOLDER|g" "${NGINX_CONFIG}"
 sed -i "s|REPLACE_DOWNLOADS_PATH|$FILE_MANAGER_PATH|g" "${NGINX_CONFIG}"
 s6-setuidgid abc mkdir -p "${FILE_MANAGER_PATH}"
@@ -92,6 +94,18 @@ sed -i "s/PW_TOKEN/$(escape_sed_replacement "$PW_TOKEN")/g" "${NGINX_CONFIG}"
 sed -i "s|PW_PREFIX|$(escape_sed_replacement "$PW_PREFIX")|g" "${NGINX_CONFIG}"
 sed -i "s|PW_COOKIE_PATH|$(escape_sed_replacement "$PW_COOKIE_PATH")|g" "${NGINX_CONFIG}"
 sed -i "s/PW_PASSWORD/$(escape_sed_replacement "$PW_PASSWORD_ESCAPED")/g" "${NGINX_CONFIG}"
+
+start_session_auth_bridge() {
+  if pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
+    return
+  fi
+  SESSION_AUTH_LOG_PATH="${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}"
+  mkdir -p "$(dirname "$SESSION_AUTH_LOG_PATH")"
+  export SELKIES_SESSION_COOKIE_PATH="$PW_COOKIE_PATH"
+  nohup python3 -u /scripts/session_auth_bridge.py >>"$SESSION_AUTH_LOG_PATH" 2>&1 &
+}
+
+start_session_auth_bridge
 
 cat > /usr/share/selkies/www/password-login.html <<EOF
 <!doctype html>
@@ -248,10 +262,10 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
 <body>
     <form class="card" id="pinForm" autocomplete="off">
     <div class="brand"><span class="brand-dot"></span><span>${TITLE:-Selkies}</span></div>
-    <h1>输入PIN码以校验权限</h1>
+    <h1>输入 PIN 码以校验权限</h1>
     <p class="err" id="err"></p>
     <input type="password" id="pin" placeholder="请输入 PIN" required autofocus>
-    <button type="submit">校验PIN码</button>
+    <button type="submit">校验 PIN 码</button>
     <div class="footer">Power by RedialC</div>
   </form>
   <script>
@@ -264,7 +278,7 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
       errEl.textContent = "";
       const pin = pinInput.value || "";
       if (!pin) {
-        errEl.textContent = "PIN 涓嶈兘涓虹┖";
+        errEl.textContent = "PIN 不能为空";
         return;
       }
       try {
@@ -274,21 +288,29 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
           credentials: "same-origin"
         });
         if (!resp.ok) {
-          errEl.textContent = "PIN 閿欒锛岃閲嶈瘯";
+          errEl.textContent = "PIN 不正确，请重试";
           pinInput.focus();
           pinInput.select();
           return;
         }
         const pageResp = await fetch(window.location.href, {
           credentials: "same-origin",
-          cache: "no-store"
+          cache: "no-store",
+          headers: {
+            "Accept": "text/html",
+            "X-Requested-With": "XMLHttpRequest"
+          }
         });
+        if (!pageResp.ok) {
+          errEl.textContent = "PIN 已通过，但页面加载失败，请重新输入";
+          return;
+        }
         const html = await pageResp.text();
         document.open();
         document.write(html);
         document.close();
       } catch (_) {
-        errEl.textContent = "缃戠粶寮傚父锛岃绋嶅悗鍐嶈瘯";
+        errEl.textContent = "网络异常，请稍后重试";
       }
     });
   </script>
