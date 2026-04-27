@@ -4,6 +4,10 @@
 
 当前维护分支：`AXiVer`
 
+## 界面截图
+
+![WeChat Selkies AXiVer 界面截图](./Demo.png)
+
 ## 主要功能
 
 - 浏览器访问微信 / QQ，无需在本机安装客户端。
