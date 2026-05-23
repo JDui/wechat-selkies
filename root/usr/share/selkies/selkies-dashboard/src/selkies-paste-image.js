@@ -13,8 +13,6 @@
   const maxBytes = Number(config.maxBytes) > 0 ? Number(config.maxBytes) : 20971520;
   const autoPaste = config.autoPaste !== false;
   let binaryClipboardEnabled = null;
-  let busy = false;
-  let ignorePaste = false;
   let lastPasteFingerprint = "";
   let lastPasteAt = 0;
   let lastRemotePasteAt = 0;
@@ -85,13 +83,6 @@
     return true;
   }
 
-  function isPasteShortcut(event) {
-    if (!event) return false;
-    const key = String(event.key || "").toLowerCase();
-    if (key !== "v") return false;
-    return (event.ctrlKey || event.metaKey) && !event.altKey;
-  }
-
   function rememberPasteFingerprint(fingerprint) {
     lastPasteFingerprint = String(fingerprint || "");
     lastPasteAt = Date.now();
@@ -151,8 +142,9 @@
     return null;
   }
 
-  async function sendClipboardPayload(payload) {
+  async function sendClipboardPayload(payload, options) {
     if (!payload) return false;
+    const skipDuplicateCheck = !!(options && options.skipDuplicateCheck);
     if (!window.selkiesSendClipboard || typeof window.selkiesSendClipboard !== "function") {
       showToast("Clipboard bridge not ready.", "error");
       return false;
@@ -160,7 +152,7 @@
 
     if (payload.type === "image") {
       const fingerprint = [payload.mime, payload.size, String(payload.buffer.byteLength || payload.size || 0)].join(":");
-      if (isDuplicatePasteFingerprint(fingerprint)) {
+      if (!skipDuplicateCheck && isDuplicatePasteFingerprint(fingerprint)) {
         return false;
       }
       rememberPasteFingerprint(fingerprint);
@@ -183,7 +175,7 @@
 
     if (payload.type === "text") {
       const fingerprint = ["text/plain", String((payload.text || "").length), String(payload.text || "").slice(0, 48)].join(":");
-      if (isDuplicatePasteFingerprint(fingerprint)) {
+      if (!skipDuplicateCheck && isDuplicatePasteFingerprint(fingerprint)) {
         return false;
       }
       rememberPasteFingerprint(fingerprint);
@@ -192,30 +184,6 @@
     }
 
     return false;
-  }
-
-  async function handlePasteShortcut() {
-    if (busy) return;
-    busy = true;
-    try {
-      const payload = await readClipboardPayload();
-      if (!payload) {
-        if (autoPaste) {
-          sendRemoteCtrlV();
-        }
-        return;
-      }
-      const sent = await sendClipboardPayload(payload);
-      if (sent && autoPaste) {
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        const ok = sendRemoteCtrlV();
-        if (!ok) {
-          showToast("Remote paste not available. Use Ctrl+V in session.", "warn");
-        }
-      }
-    } finally {
-      busy = false;
-    }
   }
 
   function extractImageFromClipboardData(clipboardData) {
@@ -231,26 +199,8 @@
   }
 
   document.addEventListener(
-    "keydown",
-    (event) => {
-      if (!isPasteShortcut(event)) return;
-      if (event.isComposing || event.keyCode === 229) return;
-      if (isEditableTarget(event.target)) return;
-      ignorePaste = true;
-      setTimeout(() => {
-        ignorePaste = false;
-      }, 500);
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      handlePasteShortcut();
-    },
-    true
-  );
-
-  document.addEventListener(
     "paste",
     (event) => {
-      if (ignorePaste) return;
       if (isEditableTarget(event.target)) return;
       const imageInfo = extractImageFromClipboardData(event.clipboardData);
       if (!imageInfo) return;
@@ -302,8 +252,6 @@
 
 
   window.__SELKIES_PASTE_IMAGE_RESET__ = function () {
-    busy = false;
-    ignorePaste = false;
     lastPasteFingerprint = "";
     lastPasteAt = 0;
     lastRemotePasteAt = 0;

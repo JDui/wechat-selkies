@@ -1,6 +1,9 @@
 (function () {
   "use strict";
 
+  // The bundled client checks this flag before pushing clipboard contents on focus.
+  window.clipboard_enabled = false;
+
   var runtime = window.__SELKIES_RUNTIME__ || {};
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
   var CPU_ONLY_ENCODERS = new Set(["jpeg", "x264enc-striped"]);
@@ -39,7 +42,7 @@
   var pendingRemoteClipboardPull = null;
   var imeFocusTimer = null;
   var imeCompositionActive = false;
-  var clipboardSyncBurstTimerIds = [];
+  var clipboardShortcutBusy = false;
   var activeDataSockets = [];
   var lastClipboardTriggerAt = 0;
   var streamRestartTimer = null;
@@ -251,6 +254,44 @@
         if (!event || typeof event.data !== "string") return;
         if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
           noteVideoHealthEvent("pipeline-reset");
+        }
+        if (event.data === "clipboard_nochange" || event.data === "clipboard_unavailable") {
+          if (pendingRemoteClipboardPull && pendingRemoteClipboardPull.timerId) {
+            window.clearTimeout(pendingRemoteClipboardPull.timerId);
+          }
+          var statusTaskId = pendingRemoteClipboardPull && pendingRemoteClipboardPull.taskId ? pendingRemoteClipboardPull.taskId : "clipboard-force-remote";
+          pendingRemoteClipboardPull = null;
+          setActivityTask(statusTaskId, {
+            title: event.data === "clipboard_nochange" ? "\u8fdc\u7aef\u526a\u8d34\u677f\u6ca1\u6709\u65b0\u53d8\u5316" : "\u672a\u8bfb\u53d6\u5230\u8fdc\u7aef\u526a\u8d34\u677f",
+            detail: event.data === "clipboard_nochange"
+              ? "\u5df2\u68c0\u67e5 Selkies \u4f1a\u8bdd\u526a\u8d34\u677f\uff0c\u5185\u5bb9\u4e0e\u4e0a\u6b21\u540c\u6b65\u4e00\u81f4\uff0c\u672a\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f\u3002"
+              : "\u8fdc\u7aef\u5f53\u524d\u6ca1\u6709\u53ef\u8bfb\u53d6\u7684\u526a\u8d34\u677f\u5185\u5bb9\uff0c\u672a\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f\u3002",
+            phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
+            kind: event.data === "clipboard_nochange" ? "success" : "warning",
+            progress: event.data === "clipboard_nochange" ? 100 : null,
+            indeterminate: event.data !== "clipboard_nochange",
+            priority: 76,
+            expiresAt: Date.now() + 3200
+          });
+        }
+        if (
+          event.data.indexOf("clipboard_start,") === 0 ||
+          event.data.indexOf("clipboard_binary,") === 0 ||
+          event.data.indexOf("clipboard,") === 0
+        ) {
+          var taskId = pendingRemoteClipboardPull && pendingRemoteClipboardPull.taskId ? pendingRemoteClipboardPull.taskId : "clipboard-auto-remote";
+          setActivityTask(taskId, {
+            title: pendingRemoteClipboardPull ? "\u6b63\u5728\u63a5\u6536\u8fdc\u7aef\u526a\u8d34\u677f" : "\u68c0\u6d4b\u5230\u8fdc\u7aef\u526a\u8d34\u677f\u53d8\u5316",
+            detail: pendingRemoteClipboardPull
+              ? "\u8fdc\u7aef\u526a\u8d34\u677f\u5df2\u6709\u53d8\u5316\uff0c\u6b63\u5728\u5199\u5165\u672c\u673a\u526a\u8d34\u677f\u3002"
+              : "\u8fdc\u7aef\u526a\u8d34\u677f\u5df2\u81ea\u52a8\u53d8\u5316\uff0c\u6b63\u5728\u6536\u53d6\u5230\u672c\u673a\u3002",
+            phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
+            kind: "info",
+            progress: null,
+            indeterminate: true,
+            priority: pendingRemoteClipboardPull ? 76 : 70,
+            expiresAt: Date.now() + 7000
+          });
         }
       });
       activeDataSockets.push(ws);
@@ -2423,14 +2464,17 @@
       }
       if (!data || data.type !== "clipboardContentUpdate") return;
       setHighLoadState(false, "clipboard image");
-      var incomingText = typeof data.text === "string" ? data.text : "";
-      if (pendingRemoteClipboardPull && incomingText) {
+      var hasIncomingText = typeof data.text === "string";
+      var incomingText = hasIncomingText ? data.text : "";
+      if (pendingRemoteClipboardPull && hasIncomingText) {
+        var pullTaskId = pendingRemoteClipboardPull.taskId || "clipboard-force-remote";
+        var pullSource = pendingRemoteClipboardPull.source || "remote";
         if (pendingRemoteClipboardPull.timerId) {
           window.clearTimeout(pendingRemoteClipboardPull.timerId);
         }
         if (isImageClipboardStatusText(incomingText)) {
-          setActivityTask("clipboard-force-remote", {
-            title: "\u5df2\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f",
+          setActivityTask(pullTaskId, {
+            title: pullSource.indexOf("shortcut") === 0 ? "\u590d\u5236\u5185\u5bb9\u5df2\u6536\u5230\u672c\u673a" : "\u5df2\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f",
             detail: "\u5df2\u5c06 Selkies \u4f1a\u8bdd\u4e2d\u7684\u56fe\u7247\u5199\u5165\u5f53\u524d\u5ba2\u6237\u7aef\u526a\u8d34\u677f\u3002",
             phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
             kind: "success",
@@ -2443,8 +2487,8 @@
         } else {
           writePayloadToClientClipboard({ type: "text", text: incomingText })
             .then(function () {
-              setActivityTask("clipboard-force-remote", {
-                title: "\u5df2\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f",
+              setActivityTask(pullTaskId, {
+                title: pullSource.indexOf("shortcut") === 0 ? "\u590d\u5236\u5185\u5bb9\u5df2\u6536\u5230\u672c\u673a" : "\u5df2\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f",
                 detail: "\u5df2\u7528 Selkies \u4f1a\u8bdd\u7684\u526a\u8d34\u677f\u5185\u5bb9\u66f4\u65b0\u5f53\u524d\u5ba2\u6237\u7aef\u7cfb\u7edf\u526a\u8d34\u677f\u3002",
                 phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
                 kind: "success",
@@ -2455,7 +2499,7 @@
               });
             })
             .catch(function () {
-              setActivityTask("clipboard-force-remote", {
+              setActivityTask(pullTaskId, {
                 title: "\u5199\u5165\u672c\u673a\u526a\u8d34\u677f\u5931\u8d25",
                 detail: "\u6d4f\u89c8\u5668\u62d2\u7edd\u4e86\u5199\u5165\u7cfb\u7edf\u526a\u8d34\u677f\uff0c\u8bf7\u786e\u8ba4 HTTPS \u548c\u6d4f\u89c8\u5668\u6743\u9650\u3002",
                 phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
@@ -2470,6 +2514,19 @@
               pendingRemoteClipboardPull = null;
             });
         }
+      } else if (hasIncomingText) {
+        setActivityTask("clipboard-auto-remote", {
+          title: "\u68c0\u6d4b\u5230\u8fdc\u7aef\u526a\u8d34\u677f\u53d8\u5316",
+          detail: isImageClipboardStatusText(incomingText)
+            ? "\u8fdc\u7aef\u526a\u8d34\u677f\u56fe\u7247\u5df2\u81ea\u52a8\u5199\u5165\u672c\u673a\u526a\u8d34\u677f\u3002"
+            : "\u8fdc\u7aef\u526a\u8d34\u677f\u53d8\u5316\u5df2\u81ea\u52a8\u6536\u53d6\u5230\u672c\u673a\u526a\u8d34\u677f\u3002",
+          phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
+          kind: "success",
+          progress: 100,
+          indeterminate: false,
+          priority: 70,
+          expiresAt: Date.now() + 2600
+        });
       }
       completeActivityTask("clipboard-image", "\u526a\u8d34\u677f\u540c\u6b65\u5b8c\u6210\u3002", "success", 2000);
     });
@@ -2668,62 +2725,265 @@
 
   function requestClipboardSync(reason) {
     var now = Date.now();
-    if (reason === "contextmenu" && now - lastClipboardTriggerAt < 120) return;
+    if (now - lastClipboardTriggerAt < 120) return false;
     lastClipboardTriggerAt = now;
-    sendRawDataCommand("cr");
+    return sendRawDataCommand("cr");
+  }
+
+  function startRemoteClipboardPull(source, title, detail) {
+    var safeSource = String(source || "remote");
+    var taskId = safeSource.indexOf("shortcut") === 0 ? "clipboard-shortcut" : "clipboard-force-remote";
+    if (pendingRemoteClipboardPull && pendingRemoteClipboardPull.timerId) {
+      window.clearTimeout(pendingRemoteClipboardPull.timerId);
+    }
+    pendingRemoteClipboardPull = {
+      source: safeSource,
+      taskId: taskId,
+      startedAt: Date.now(),
+      timerId: window.setTimeout(function () {
+        var timedOutTaskId = pendingRemoteClipboardPull && pendingRemoteClipboardPull.taskId ? pendingRemoteClipboardPull.taskId : taskId;
+        pendingRemoteClipboardPull = null;
+        setActivityTask(timedOutTaskId, {
+          title: "\u6536\u53d6\u8fdc\u7aef\u526a\u8d34\u677f\u8d85\u65f6",
+          detail: "\u672a\u5728\u9884\u671f\u65f6\u95f4\u5185\u83b7\u5f97 Selkies \u4f1a\u8bdd\u7684\u526a\u8d34\u677f\u5185\u5bb9\u3002",
+          phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
+          kind: "warning",
+          progress: null,
+          indeterminate: true,
+          priority: 80,
+          expiresAt: Date.now() + 5200
+        });
+      }, 7000)
+    };
+    setActivityTask(taskId, {
+      title: title || "\u6b63\u5728\u6536\u53d6\u8fdc\u7aef\u526a\u8d34\u677f",
+      detail: detail || "\u6b63\u5728\u68c0\u67e5 Selkies \u4f1a\u8bdd\u7684\u526a\u8d34\u677f\u53d8\u5316\uff0c\u6709\u5dee\u5f02\u65f6\u4f1a\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f\u3002",
+      phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
+      kind: "info",
+      progress: null,
+      indeterminate: true,
+      priority: 76,
+      expiresAt: Date.now() + 7600
+    });
+    return requestClipboardSync(safeSource);
   }
 
   function clearClipboardSyncBurst() {
-    while (clipboardSyncBurstTimerIds.length) {
-      window.clearTimeout(clipboardSyncBurstTimerIds.pop());
+    clipboardShortcutBusy = false;
+  }
+
+  function getClipboardShortcutKey(event) {
+    if (!event || event.repeat || event.isComposing || event.keyCode === 229) return "";
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return "";
+    var key = String(event.key || "").toLowerCase();
+    var code = String(event.code || "");
+    if (key === "c" || code === "KeyC") return "c";
+    if (key === "x" || code === "KeyX") return "x";
+    if (key === "v" || code === "KeyV") return "v";
+    return "";
+  }
+
+  function isLocalClipboardShortcutTarget(target) {
+    if (!target || !target.closest) return false;
+    if (target.closest("#overlayInput,#keyboard-input-assist,#videoCanvas,.video-container")) return false;
+    return isFormLikeElement(target);
+  }
+
+  function canSendRemoteClipboardShortcut() {
+    return !!(window.webrtcInput && typeof window.webrtcInput._sendKeyEvent === "function");
+  }
+
+  function markModifierGestureChorded() {
+    if (modifierGestureState.clientToRemote.down) {
+      modifierGestureState.clientToRemote.chorded = true;
+      clearModifierHold(modifierGestureState.clientToRemote);
+    }
+    if (modifierGestureState.remoteToClient.down) {
+      modifierGestureState.remoteToClient.chorded = true;
+      clearModifierHold(modifierGestureState.remoteToClient);
     }
   }
 
-  function scheduleClipboardSyncBurst(reason, delays) {
-    var sequence = Array.isArray(delays) && delays.length ? delays : [80, 220, 480];
-    for (var i = 0; i < sequence.length; i += 1) {
-      (function (delayMs) {
-        clipboardSyncBurstTimerIds.push(
-          window.setTimeout(function () {
-            requestClipboardSync(reason);
-          }, Math.max(0, delayMs))
-        );
-      })(sequence[i]);
+  function sendRemoteClipboardShortcut(shortcut) {
+    var keysymByShortcut = { c: 99, x: 120, v: 118 };
+    var codeByShortcut = { c: "KeyC", x: "KeyX", v: "KeyV" };
+    var keysym = keysymByShortcut[shortcut];
+    var code = codeByShortcut[shortcut];
+    var input = window.webrtcInput;
+    if (!keysym || !code || !input || typeof input._sendKeyEvent !== "function") return false;
+    input._sendKeyEvent(65507, "ControlLeft", true);
+    input._sendKeyEvent(keysym, code, true);
+    input._sendKeyEvent(keysym, code, false);
+    input._sendKeyEvent(65507, "ControlLeft", false);
+    return true;
+  }
+
+  function clipboardDelay(ms) {
+    return new Promise(function (resolve) {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  function releaseClipboardShortcutLock() {
+    window.setTimeout(function () {
+      clipboardShortcutBusy = false;
+    }, 80);
+  }
+
+  async function sendClientClipboardPayloadToRemote(payload) {
+    if (!payload) return false;
+    if (typeof window.__selkiesSendClipboardPayload === "function") {
+      return !!(await window.__selkiesSendClipboardPayload(payload, { skipDuplicateCheck: true }));
+    }
+    if (window.selkiesSendClipboard && typeof window.selkiesSendClipboard === "function") {
+      if (payload.type === "text") {
+        await window.selkiesSendClipboard(payload.text || "", "text/plain");
+        return true;
+      }
+      if (payload.type === "image" && payload.buffer && payload.mime) {
+        await window.selkiesSendClipboard(payload.buffer, payload.mime);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function handleRemoteCopyShortcut(shortcut) {
+    try {
+      setActivityTask("clipboard-shortcut", {
+        title: shortcut === "x" ? "\u6b63\u5728\u6267\u884c\u8fdc\u7aef\u526a\u5207" : "\u6b63\u5728\u6267\u884c\u8fdc\u7aef\u590d\u5236",
+        detail: "\u5df2\u62e6\u622a\u5feb\u6377\u952e\uff0c\u6b63\u5728\u5148\u8ba9\u8fdc\u7aef\u5e94\u7528\u5199\u5165\u526a\u8d34\u677f\u3002",
+        phase: "\u8fdc\u7aef\u5feb\u6377\u952e",
+        kind: "info",
+        progress: null,
+        indeterminate: true,
+        priority: 76,
+        expiresAt: Date.now() + 3600
+      });
+      sendRemoteClipboardShortcut(shortcut);
+      await clipboardDelay(shortcut === "x" ? 350 : 300);
+      startRemoteClipboardPull(
+        shortcut === "x" ? "shortcut-cut" : "shortcut-copy",
+        "\u6b63\u5728\u6536\u53d6\u8fdc\u7aef\u526a\u8d34\u677f",
+        shortcut === "x"
+          ? "\u8fdc\u7aef\u526a\u5207\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u62c9\u53d6\u65b0\u7684\u8fdc\u7aef\u526a\u8d34\u677f\u5230\u672c\u673a\u3002"
+          : "\u8fdc\u7aef\u590d\u5236\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u62c9\u53d6\u65b0\u7684\u8fdc\u7aef\u526a\u8d34\u677f\u5230\u672c\u673a\u3002"
+      );
+    } finally {
+      releaseClipboardShortcutLock();
+    }
+  }
+
+  async function handleRemotePasteShortcut() {
+    try {
+      setActivityTask("clipboard-shortcut", {
+        title: "\u6b63\u5728\u7c98\u8d34\u5230\u8fdc\u7aef",
+        detail: "\u6b63\u5728\u8bfb\u53d6\u672c\u673a\u526a\u8d34\u677f\uff0c\u51c6\u5907\u5148\u540c\u6b65\u5230\u8fdc\u7aef\u518d\u6267\u884c Ctrl+V\u3002",
+        phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
+        kind: "info",
+        progress: null,
+        indeterminate: true,
+        priority: 76,
+        expiresAt: Date.now() + 5200
+      });
+      var payload = await readClientClipboardPayload();
+      if (payload) {
+        try {
+          var sent = await sendClientClipboardPayloadToRemote(payload);
+          await clipboardDelay(70);
+          if (sent) {
+            setActivityTask("clipboard-shortcut", {
+              title: "\u5df2\u540c\u6b65\u5230\u8fdc\u7aef\uff0c\u6b63\u5728\u7c98\u8d34",
+              detail: "\u672c\u673a\u526a\u8d34\u677f\u5df2\u5199\u5165\u8fdc\u7aef\u4f1a\u8bdd\uff0c\u6b63\u5728\u5411\u8fdc\u7aef\u5e94\u7528\u53d1\u9001 Ctrl+V\u3002",
+              phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
+              kind: "success",
+              progress: 100,
+              indeterminate: false,
+              priority: 76,
+              expiresAt: Date.now() + 2400
+            });
+          } else {
+            setActivityTask("clipboard-shortcut", {
+              title: "\u672a\u5199\u5165\u8fdc\u7aef\u526a\u8d34\u677f",
+              detail: "\u672c\u673a\u526a\u8d34\u677f\u672a\u80fd\u540c\u6b65\u5230\u8fdc\u7aef\uff0c\u5df2\u6539\u4e3a\u76f4\u63a5\u5411\u8fdc\u7aef\u53d1\u9001 Ctrl+V\u3002",
+              phase: "\u964d\u7ea7\u7c98\u8d34",
+              kind: "warning",
+              progress: null,
+              indeterminate: true,
+              priority: 82,
+              expiresAt: Date.now() + 3600
+            });
+          }
+        } catch (_err) {
+          setActivityTask("clipboard-shortcut", {
+            title: "\u8bfb\u53d6\u6216\u5199\u5165\u526a\u8d34\u677f\u5931\u8d25",
+            detail: "\u6d4f\u89c8\u5668\u526a\u8d34\u677f\u6743\u9650\u6216\u8fdc\u7aef\u5199\u5165\u5931\u8d25\uff0c\u5df2\u6539\u4e3a\u76f4\u63a5\u5411\u8fdc\u7aef\u53d1\u9001 Ctrl+V\u3002",
+            phase: "\u964d\u7ea7\u7c98\u8d34",
+            kind: "warning",
+            progress: null,
+            indeterminate: true,
+            priority: 82,
+            expiresAt: Date.now() + 3600
+          });
+        }
+      } else {
+        setActivityTask("clipboard-shortcut", {
+          title: "\u672a\u8bfb\u53d6\u5230\u672c\u673a\u526a\u8d34\u677f",
+          detail: "\u672a\u53d6\u5230\u53ef\u540c\u6b65\u7684\u672c\u673a\u526a\u8d34\u677f\u5185\u5bb9\uff0c\u5df2\u76f4\u63a5\u5411\u8fdc\u7aef\u53d1\u9001 Ctrl+V\u3002",
+          phase: "\u964d\u7ea7\u7c98\u8d34",
+          kind: "warning",
+          progress: null,
+          indeterminate: true,
+          priority: 78,
+          expiresAt: Date.now() + 3000
+        });
+      }
+      sendRemoteClipboardShortcut("v");
+    } finally {
+      releaseClipboardShortcutLock();
     }
   }
 
   function bindClipboardSyncTriggers() {
     document.addEventListener(
       "keydown",
-        function (event) {
-          var bucket = getModifierGestureBucket(event);
-          if (bucket) {
-            if (!event.repeat) {
-              noteUiInteraction();
-              if (!bucket.down && Date.now() - bucket.lastTapAt <= 360) {
-                triggerModifierGesture(bucket);
-              }
-              bucket.down = true;
-              bucket.chorded = false;
+      function (event) {
+        var bucket = getModifierGestureBucket(event);
+        if (bucket) {
+          if (!event.repeat) {
+            noteUiInteraction();
+            if (!bucket.down && Date.now() - bucket.lastTapAt <= 360) {
+              triggerModifierGesture(bucket);
+            }
+            bucket.down = true;
+            bucket.chorded = false;
             clearModifierHold(bucket);
             bucket.holdTimer = window.setTimeout(function () {
               if (bucket.down && !bucket.chorded) {
                 triggerModifierGesture(bucket);
               }
             }, 1000);
-            }
-            var modifierKey = String((event && event.key) || "");
-            if (modifierKey === "Control" || modifierKey === "Meta" || modifierKey === "Alt" || modifierKey === "Option") {
-              return;
-            }
           }
-        var key = String((event && event.key) || "");
-        if (!(event && (event.ctrlKey || event.metaKey) && !event.altKey)) return;
-        var normalizedKey = key.toLowerCase();
-        if (normalizedKey === "c" || normalizedKey === "x" || normalizedKey === "insert") {
-          scheduleClipboardSyncBurst("copy-shortcut", [120, 260, 520, 900, 1400]);
-        } else if (normalizedKey === "v") {
-          scheduleClipboardSyncBurst("paste-shortcut", [80, 220, 480]);
+          var modifierKey = String((event && event.key) || "");
+          if (modifierKey === "Control" || modifierKey === "Meta" || modifierKey === "Alt" || modifierKey === "Option") {
+            return;
+          }
+        }
+        var shortcut = getClipboardShortcutKey(event);
+        if (!shortcut || isLocalClipboardShortcutTarget(event.target)) return;
+        if (!canSendRemoteClipboardShortcut()) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        noteUiInteraction();
+        markModifierGestureChorded();
+        if (clipboardShortcutBusy) return;
+
+        clipboardShortcutBusy = true;
+        if (shortcut === "v") {
+          handleRemotePasteShortcut();
+        } else {
+          handleRemoteCopyShortcut(shortcut);
         }
       },
       true
@@ -2734,39 +2994,6 @@
       function (event) {
         var key = String((event && event.key) || "");
         if (key !== "Control" && key !== "Meta" && key !== "Alt" && key !== "Option") return;
-      },
-      true
-    );
-
-    document.addEventListener(
-      "copy",
-      function () {
-        scheduleClipboardSyncBurst("copy-event", [140, 320, 700, 1200]);
-      },
-      true
-    );
-
-    document.addEventListener(
-      "cut",
-      function () {
-        scheduleClipboardSyncBurst("cut-event", [140, 320, 700, 1200]);
-      },
-      true
-    );
-
-    document.addEventListener(
-      "pointerdown",
-      function (event) {
-        if (!event || event.button !== 2) return;
-        requestClipboardSync("right-button");
-      },
-      true
-    );
-
-    document.addEventListener(
-      "contextmenu",
-      function () {
-        requestClipboardSync("contextmenu");
       },
       true
     );
@@ -3271,13 +3498,6 @@
     }, 320);
 
     sendRawDataCommand("RESET_IO_MODULES");
-    requestClipboardSync("repair");
-    window.setTimeout(function () {
-      requestClipboardSync("repair");
-    }, 120);
-    window.setTimeout(function () {
-      requestClipboardSync("repair");
-    }, 320);
     setActivityTask("repair-ime-clipboard", {
       title: "\u5df2\u6267\u884c\u8f7b\u4fee\u590d",
       detail: "\u5df2\u91cd\u7f6e\u952e\u76d8\u4fee\u9970\u952e\u3001IME \u7126\u70b9\u4e0e\u526a\u8d34\u677f\u5185\u90e8\u72b6\u6001\uff0c\u672a\u91cd\u542f X11 \u6216\u63a8\u6d41\u3002",
@@ -4039,6 +4259,16 @@
   async function forceClipboardClientToRemote() {
     noteUiInteraction();
     resetClientClipboardRuntime();
+    setActivityTask("clipboard-force-client", {
+      title: "\u6b63\u5728\u53d1\u9001\u672c\u673a\u526a\u8d34\u677f",
+      detail: "\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u5ba2\u6237\u7aef\u526a\u8d34\u677f\uff0c\u51c6\u5907\u8986\u76d6 Selkies \u8fdc\u7aef\u4f1a\u8bdd\u3002",
+      phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
+      kind: "info",
+      progress: null,
+      indeterminate: true,
+      priority: 76,
+      expiresAt: Date.now() + 5200
+    });
     var payload = await readClientClipboardPayload();
     if (!payload) {
       setActivityTask("clipboard-force-client", {
@@ -4095,37 +4325,11 @@
   function forceClipboardRemoteToClient() {
     noteUiInteraction();
     resetClientClipboardRuntime();
-    if (pendingRemoteClipboardPull && pendingRemoteClipboardPull.timerId) {
-      window.clearTimeout(pendingRemoteClipboardPull.timerId);
-    }
-    pendingRemoteClipboardPull = {
-      startedAt: Date.now(),
-      timerId: window.setTimeout(function () {
-        pendingRemoteClipboardPull = null;
-        setActivityTask("clipboard-force-remote", {
-          title: "\u62c9\u53d6\u8fdc\u7aef\u526a\u8d34\u677f\u8d85\u65f6",
-          detail: "\u672a\u5728\u9884\u671f\u65f6\u95f4\u5185\u83b7\u5f97 Selkies \u4f1a\u8bdd\u7684\u526a\u8d34\u677f\u5185\u5bb9\u3002",
-          phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
-          kind: "warning",
-          progress: null,
-          indeterminate: true,
-          priority: 80,
-          expiresAt: Date.now() + 3200
-        });
-      }, 2600)
-    };
-    setActivityTask("clipboard-force-remote", {
-      title: "\u6b63\u5728\u62c9\u53d6\u8fdc\u7aef\u526a\u8d34\u677f",
-      detail: "\u5c06\u4ee5 Selkies \u4f1a\u8bdd\u4e2d\u7684\u526a\u8d34\u677f\u5185\u5bb9\u8986\u76d6\u5f53\u524d\u5ba2\u6237\u7aef\u526a\u8d34\u677f\u3002",
-      phase: "\u8fdc\u7aef -> \u5ba2\u6237\u7aef",
-      kind: "info",
-      progress: null,
-      indeterminate: true,
-      priority: 76,
-      expiresAt: Date.now() + 3200
-    });
-    requestClipboardSync("force-remote");
-    scheduleClipboardSyncBurst("force-remote", [120, 320, 720, 1200]);
+    startRemoteClipboardPull(
+      "force-remote",
+      "\u6b63\u5728\u6536\u53d6\u8fdc\u7aef\u526a\u8d34\u677f",
+      "\u5c06\u4ee5 Selkies \u4f1a\u8bdd\u4e2d\u7684\u526a\u8d34\u677f\u5185\u5bb9\u8986\u76d6\u5f53\u524d\u5ba2\u6237\u7aef\u526a\u8d34\u677f\u3002"
+    );
   }
 
   function getModifierGestureBucket(event) {

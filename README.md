@@ -28,6 +28,7 @@
 - **底部快捷 Bar**：提供剪贴板、微信、QQ、分屏等常用入口，并支持折叠。
 - **分屏工具**：支持左右分屏、上下分屏、全部全屏等布局。
 - **图片粘贴增强**：浏览器 `Ctrl + V` 可将图片写入远端剪贴板，并可自动粘贴到聊天输入框。
+- **按需剪贴板同步**：不再监听本机剪贴板；`Ctrl+C` / `Ctrl+X` 会先让远端应用复制/剪切，再收取远端剪贴板，`Ctrl+V` 会先把本机剪贴板写入远端再粘贴。远端剪贴板若由应用自身发生变化，也会自动收剪板，并在底部活动提示中显示进度、成功、无变化或失败状态。
 - **链接本地打开**：微信 / QQ 内点击链接时，浏览器侧显示确认卡片，可用本机浏览器打开并保留历史。
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
 
@@ -35,10 +36,10 @@
 
 ### 使用 Release 镜像包
 
-下载 `v1.17` Release 中的 `wechat-selkies-1.17.tar` 后导入：
+下载 `v1.18` Release 中的 `wechat-selkies-1.18.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.17.tar
+docker load -i wechat-selkies-1.18.tar
 ```
 
 启动：
@@ -53,7 +54,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.17
+  wechat-selkies:1.18
 ```
 
 访问：
@@ -74,7 +75,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.17
+    image: wechat-selkies:1.18
     container_name: wechat-selkies
     init: true
     ports:
@@ -174,13 +175,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.17 .
+docker build -t wechat-selkies:1.18 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.17.tar wechat-selkies:1.17
+docker save -o wechat-selkies-1.18.tar wechat-selkies:1.18
 ```
 
 ## 故障排查
