@@ -71,6 +71,7 @@
   var encoderResetTimerIds = [];
   var sidebarAutoCollapseLockUntil = 0;
   var sidebarKeyboardShortcutBound = false;
+  var clipboardSyncTriggersBound = false;
   var pageAwakeHeartbeatTimer = null;
   var idleCleanupTimer = null;
   var lastIdleCleanupAt = 0;
@@ -111,6 +112,16 @@
     clientToRemote: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null },
     remoteToClient: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null }
   };
+
+  function stopFrontendShortcutEvent(event) {
+    if (!event) return;
+    event.preventDefault();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    } else if (typeof event.stopPropagation === "function") {
+      event.stopPropagation();
+    }
+  }
 
   function authBasePath() {
     var path = String(window.location.pathname || "/");
@@ -1889,14 +1900,12 @@
       if (isFormLikeElement(event.target)) return;
       var now = Date.now();
       if (now - lastToggleAt < 350) {
-        event.preventDefault();
-        event.stopPropagation();
+        stopFrontendShortcutEvent(event);
         return;
       }
       if (!toggleSidebarDrawer()) return;
       lastToggleAt = now;
-      event.preventDefault();
-      event.stopPropagation();
+      stopFrontendShortcutEvent(event);
     }
     window.addEventListener("keydown", handleShortcut, true);
     window.addEventListener("keyup", handleShortcut, true);
@@ -2945,91 +2954,96 @@
   }
 
   function bindClipboardSyncTriggers() {
-    document.addEventListener(
-      "keydown",
-      function (event) {
-        var bucket = getModifierGestureBucket(event);
-        if (bucket) {
-          if (!event.repeat) {
-            noteUiInteraction();
-            if (!bucket.down && Date.now() - bucket.lastTapAt <= 360) {
+    if (clipboardSyncTriggersBound) return;
+    clipboardSyncTriggersBound = true;
+    var seenKeydownEvents = typeof WeakSet === "function" ? new WeakSet() : null;
+    var seenKeyupEvents = typeof WeakSet === "function" ? new WeakSet() : null;
+
+    function isSeenOrMark(set, event, fallbackKey) {
+      if (!event) return true;
+      if (set) {
+        if (set.has(event)) return true;
+        set.add(event);
+        return false;
+      }
+      if (event[fallbackKey]) return true;
+      try {
+        event[fallbackKey] = true;
+      } catch (_err) {}
+      return false;
+    }
+
+    function markActiveModifierGesturesChorded() {
+      if (modifierGestureState.clientToRemote.down) {
+        modifierGestureState.clientToRemote.chorded = true;
+        clearModifierHold(modifierGestureState.clientToRemote);
+      }
+      if (modifierGestureState.remoteToClient.down) {
+        modifierGestureState.remoteToClient.chorded = true;
+        clearModifierHold(modifierGestureState.remoteToClient);
+      }
+    }
+
+    function handleKeydown(event) {
+      if (isSeenOrMark(seenKeydownEvents, event, "__selkiesClipboardKeydownSeen")) return;
+      var bucket = getModifierGestureBucket(event);
+      if (bucket) {
+        if (!event.repeat) {
+          noteUiInteraction();
+          if (!bucket.down && Date.now() - bucket.lastTapAt <= 360) {
+            triggerModifierGesture(bucket);
+          }
+          bucket.down = true;
+          bucket.chorded = false;
+          clearModifierHold(bucket);
+          bucket.holdTimer = window.setTimeout(function () {
+            if (bucket.down && !bucket.chorded) {
               triggerModifierGesture(bucket);
             }
-            bucket.down = true;
-            bucket.chorded = false;
-            clearModifierHold(bucket);
-            bucket.holdTimer = window.setTimeout(function () {
-              if (bucket.down && !bucket.chorded) {
-                triggerModifierGesture(bucket);
-              }
-            }, 1000);
-          }
-          var modifierKey = String((event && event.key) || "");
-          if (modifierKey === "Control" || modifierKey === "Meta" || modifierKey === "Alt" || modifierKey === "Option") {
-            return;
-          }
+          }, 1000);
         }
-        var shortcut = getClipboardShortcutKey(event);
-        if (!shortcut || isLocalClipboardShortcutTarget(event.target)) return;
-        if (!canSendRemoteClipboardShortcut()) return;
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        noteUiInteraction();
-        markModifierGestureChorded();
-        if (clipboardShortcutBusy) return;
-
-        clipboardShortcutBusy = true;
-        if (shortcut === "v") {
-          handleRemotePasteShortcut();
-        } else {
-          handleRemoteCopyShortcut(shortcut);
+        var modifierKey = String((event && event.key) || "");
+        if (modifierKey === "Control" || modifierKey === "Meta" || modifierKey === "Alt" || modifierKey === "Option") {
+          return;
         }
-      },
-      true
-    );
+      } else {
+        markActiveModifierGesturesChorded();
+      }
 
-    document.addEventListener(
-      "keyup",
-      function (event) {
-        var key = String((event && event.key) || "");
-        if (key !== "Control" && key !== "Meta" && key !== "Alt" && key !== "Option") return;
-      },
-      true
-    );
+      var shortcut = getClipboardShortcutKey(event);
+      if (!shortcut || isLocalClipboardShortcutTarget(event.target)) return;
+      if (!canSendRemoteClipboardShortcut()) return;
 
-    document.addEventListener(
-      "keydown",
-      function (event) {
-        var bucket = getModifierGestureBucket(event);
-        if (bucket) return;
-        if (modifierGestureState.clientToRemote.down) {
-          modifierGestureState.clientToRemote.chorded = true;
-          clearModifierHold(modifierGestureState.clientToRemote);
-        }
-        if (modifierGestureState.remoteToClient.down) {
-          modifierGestureState.remoteToClient.chorded = true;
-          clearModifierHold(modifierGestureState.remoteToClient);
-        }
-      },
-      true
-    );
+      stopFrontendShortcutEvent(event);
+      noteUiInteraction();
+      markModifierGestureChorded();
+      if (clipboardShortcutBusy) return;
 
-    document.addEventListener(
-      "keyup",
-      function (event) {
-        var bucket = getModifierGestureBucket(event);
-        if (!bucket) return;
-        clearModifierHold(bucket);
-        var shouldRememberTap = bucket.down && !bucket.chorded && Date.now() - bucket.lastTriggerAt > 120;
-        bucket.down = false;
-        bucket.chorded = false;
-        if (shouldRememberTap) {
-          bucket.lastTapAt = Date.now();
-        }
-      },
-      true
-    );
+      clipboardShortcutBusy = true;
+      if (shortcut === "v") {
+        handleRemotePasteShortcut();
+      } else {
+        handleRemoteCopyShortcut(shortcut);
+      }
+    }
+
+    function handleKeyup(event) {
+      if (isSeenOrMark(seenKeyupEvents, event, "__selkiesClipboardKeyupSeen")) return;
+      var bucket = getModifierGestureBucket(event);
+      if (!bucket) return;
+      clearModifierHold(bucket);
+      var shouldRememberTap = bucket.down && !bucket.chorded && Date.now() - bucket.lastTriggerAt > 120;
+      bucket.down = false;
+      bucket.chorded = false;
+      if (shouldRememberTap) {
+        bucket.lastTapAt = Date.now();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeydown, true);
+    window.addEventListener("keyup", handleKeyup, true);
+    document.addEventListener("keydown", handleKeydown, true);
+    document.addEventListener("keyup", handleKeyup, true);
   }
 
   function hideDisabledGamepadUi() {
@@ -4909,6 +4923,7 @@
   if (enforcePinOnBrowserReload()) {
     return;
   }
+  bindClipboardSyncTriggers();
   bindSidebarKeyboardShortcut();
   if (document.readyState === "loading") {
     installVideoDecoderHealthGuard();
