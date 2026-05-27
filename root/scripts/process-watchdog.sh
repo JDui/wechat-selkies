@@ -89,7 +89,7 @@ while true; do
     fi
 
     if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
-        safe_restart "notification-bridge" "python3 -u /scripts/notification_bridge.py >>\"${NOTIFICATION_BRIDGE_LOG_PATH:-/config/logs/notification-bridge.log}\" 2>&1"
+        safe_restart "notification-bridge" "/scripts/run-notification-bridge.sh"
     fi
 
     if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then

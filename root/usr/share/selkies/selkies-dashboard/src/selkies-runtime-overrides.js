@@ -99,6 +99,7 @@
   var bottomActionDockTimer = null;
   var bottomActionSplitOpen = false;
   var bottomActionDockCollapsed = sanitizeBool(getStoredValue("bottom_action_dock_collapsed"), false);
+  var bottomActionClipboardButtonsEnabled = sanitizeBool(getStoredValue("bottom_action_clipboard_buttons_enabled"), false);
   var bottomActionDockRestoreTimer = null;
   var managedFileTransfers = Object.create(null);
   var fileTransferSockets = typeof WeakMap === "function" ? new WeakMap() : null;
@@ -435,6 +436,16 @@
       config.disablePaintOver ? "1" : "0"
     ].join(",");
     sendRawDataCommand(payload);
+  }
+
+  function isRecentlyInteractive(windowMs) {
+    return Date.now() - dynamicLatencyInteractionAt < (typeof windowMs === "number" ? windowMs : 1800);
+  }
+
+  function isRemoteAudioPlaying() {
+    var bufferSize = Number(window.currentAudioBufferSize || 0);
+    if (Number.isFinite(bufferSize) && bufferSize > 0) return true;
+    return false;
   }
 
   function isTransportBusy() {
@@ -1382,10 +1393,10 @@
     var defaultH264Crf = sanitizeInt(runtime.defaultH264Crf, 30, 5, 50);
     var dynamicLatencyEnabled = sanitizeBool(runtime.dynamicLowLatencyEnabled, true);
     var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 10000);
-    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 36, 8, 120);
+    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 15, 8, 120);
     var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 50);
     var dynamicLatencyScale = sanitizeInt(runtime.dynamicLowLatencyScalePercent, 75, 25, 100);
-    var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 33, 100);
+    var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100);
     var dynamicLatencyDisablePaint = sanitizeBool(runtime.dynamicLowLatencyDisablePaintOver, true);
 
     setStoredDefault("framerate", frameRate);
@@ -1411,6 +1422,7 @@
     setStoredDefault("dynamic_low_latency_h264_crf", dynamicLatencyCrf);
     setStoredDefault("dynamic_low_latency_sample_percent", dynamicLatencySample);
     setStoredDefault("dynamic_low_latency_disable_paint_over", dynamicLatencyDisablePaint);
+    setStoredDefault("bottom_action_clipboard_buttons_enabled", false);
     setStoredValue("ui_show_sidebar", true);
     setStoredValue("ui_show_core_buttons", true);
     setStoredValue("ui_sidebar_show_fullscreen", true);
@@ -2328,9 +2340,9 @@
         detail =
           state.fileName +
           (totalBytes ? " (" + formatBytes(totalBytes) + ")" : "") +
-          (dynamicLatencyApplied
+          (isRecentlyInteractive(1800)
             ? "\uff0c\u68c0\u6d4b\u5230\u4ea4\u4e92\uff0c\u4e0a\u4f20\u6b63\u5728\u4e3a\u64cd\u4f5c\u54cd\u5e94\u8ba9\u51fa\u5e26\u5bbd\u3002"
-            : "\uff0c\u65e0\u4ea4\u4e92\u65f6\u4f1a\u6062\u590d\u66f4\u9ad8\u7684\u4f20\u8f93\u6743\u91cd\u3002");
+            : "\uff0c\u65e0\u4ea4\u4e92\u65f6\u53ef\u80fd\u8fdb\u5165\u4e0d\u6d3b\u8dc3\u9650\u5e27\u3002");
       }
 
       setActivityTask(taskId, {
@@ -2562,10 +2574,7 @@
     }
 
     function getUploadFlushDelayMs() {
-      if (dynamicLatencyApplied) {
-        return 18;
-      }
-      if (Date.now() - dynamicLatencyInteractionAt < 1800) {
+      if (isRecentlyInteractive(1800)) {
         return 10;
       }
       return 2;
@@ -3098,12 +3107,12 @@
     return {
       enabled: sanitizeBool(getStoredValue("dynamic_low_latency_enabled"), sanitizeBool(runtime.dynamicLowLatencyEnabled, true)),
       holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 10000), 300, 10000),
-      fps: sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 36, 8, 120), 8, 120),
+      fps: sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 15, 8, 120), 8, 120),
       crf: sanitizeInt(getStoredValue("dynamic_low_latency_h264_crf"), sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 60), 5, 60),
       samplePercent: sanitizeInt(
         getStoredValue("dynamic_low_latency_sample_percent"),
-        sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 33, 100),
-        33,
+        sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100),
+        10,
         100
       ),
       disablePaintOver: sanitizeBool(
@@ -3272,7 +3281,7 @@
   }
 
   function applyDynamicLatencyEncodingProfile(active, config) {
-    sendDynamicLatencyState(active, active ? "interaction" : "restore");
+    sendDynamicLatencyState(active, active ? "inactive-limit" : "active-restore");
   }
 
   function suppressDynamicLatency(ms) {
@@ -3336,12 +3345,22 @@
     if (lastDynamicLatencyConfigSignature !== getDynamicLatencyConfigSignature(config)) {
       syncDynamicLatencySettingsToBackend();
     }
-    dynamicLatencyUntil = Date.now() + config.holdMs;
-    dynamicLatencyInteractionAt = Date.now();
     if (!dynamicLatencyApplied) {
       captureDynamicLatencyOriginals();
       dynamicLatencyApplied = true;
       applyDynamicLatencyProfile(true, config);
+    }
+  }
+
+  function markDynamicLatencyInteractive(trigger) {
+    var config = getDynamicLatencyConfig();
+    dynamicLatencyInteractionAt = Date.now();
+    dynamicLatencyUntil = Date.now() + config.holdMs;
+    if (lastDynamicLatencyConfigSignature !== getDynamicLatencyConfigSignature(config)) {
+      syncDynamicLatencySettingsToBackend();
+    }
+    if (dynamicLatencyApplied) {
+      restoreDynamicLatency();
     }
   }
 
@@ -3356,15 +3375,15 @@
       '<details class="selkies-link-details">' +
       '<summary class="selkies-link-summary">' +
       '<span class="selkies-link-sidebar-title">\u52a8\u6001\u4f4e\u5ef6\u8fdf</span>' +
-      '<span class="selkies-link-summary-meta">\u4ea4\u4e92\u964d\u5ef6\u8fdf</span>' +
+      '<span class="selkies-link-summary-meta">\u4e0d\u6d3b\u8dc3\u9650\u5e27</span>' +
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-dll-grid">' +
-      '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u52a8\u6001\u52a0\u901f</span><input type="checkbox" data-dll="enabled"></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u52a0\u901f\u4fdd\u6301\u65f6\u957f</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="5000" step="100" data-dll="hold"><div class="selkies-dll-note">\u6ed1\u5757\u8d8a\u9760\u53f3\uff0c\u6bcf\u6b21\u4ea4\u4e92\u89e6\u53d1\u540e\u4f4e\u5ef6\u8fdf\u4f1a\u4fdd\u6301\u66f4\u4e45\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4ea4\u4e92\u91c7\u6837\u5f3a\u5ea6</span><div class="selkies-dll-value" data-dll-value="fps"></div></div><input type="range" min="8" max="60" step="1" data-dll="fps"><div class="selkies-dll-note">\u6ed1\u5757\u8d8a\u9760\u53f3\uff0c\u4ea4\u4e92\u66f4\u5bb9\u6613\u89e6\u53d1\u52a0\u901f\uff0c\u540c\u65f6\u4f4e\u5ef6\u8fdf\u671f\u95f4\u5141\u8bb8\u66f4\u9ad8\u7684\u53d1\u9001\u5e27\u7387\u4e0a\u9650\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u754c\u9762\u964d\u8f7d\u7ea7\u522b</span><div class="selkies-dll-value" data-dll-value="crf"></div></div><input type="range" min="5" max="60" step="1" data-dll="crf"><div class="selkies-dll-note">\u6ed1\u5757\u8d8a\u9760\u53f3\uff0c\u8d8a\u4f1a\u62c9\u9ad8\u8f93\u5165\u4f18\u5148\u7a97\u53e3\uff0c\u5e76\u5728\u4ea4\u4e92\u671f\u95f4\u66f4\u4e3b\u52a8\u5730\u8ba9\u89c6\u9891\u53d1\u9001\u9000\u8ba9\u7ed9\u64cd\u4f5c\u54cd\u5e94\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u91c7\u6837\u538b\u7f29</span><div class="selkies-dll-value" data-dll-value="sample"></div></div><input type="range" min="33" max="100" step="1" data-dll="sample"><div class="selkies-dll-note">\u6ed1\u5757\u8d8a\u9760\u5de6\uff0c\u4ea4\u4e92\u671f\u95f4\u5bf9\u540e\u7aef H264/JPEG \u7f16\u7801\u7684\u538b\u7f29\u8d8a\u5f3a\uff0c\u9ad8\u8d1f\u8f7d\u65f6\u7684\u89c6\u9891\u53d1\u9001\u4e5f\u4f1a\u66f4\u79ef\u6781\u5730\u9000\u8ba9\u3002</div></div>' +
+      '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u4e0d\u6d3b\u8dc3\u9650\u5e27</span><input type="checkbox" data-dll="enabled"></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8fdb\u5165\u4e0d\u6d3b\u8dc3\u5ef6\u8fdf</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="5000" step="100" data-dll="hold"><div class="selkies-dll-note">\u505c\u6b62\u9f20\u6807\u6216\u952e\u76d8\u4ea4\u4e92\u8fbe\u5230\u8fd9\u4e2a\u65f6\u957f\u540e\uff0c\u5f00\u59cb\u9650\u5236\u5f53\u524d\u9875\u9762\u7684\u53d1\u9001\u5e27\u7387\u3002</div></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u5e27\u7387\u4e0a\u9650</span><div class="selkies-dll-value" data-dll-value="fps"></div></div><input type="range" min="8" max="60" step="1" data-dll="fps"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u9650\u5236\u6700\u9ad8\u53d1\u9001\u5e27\u7387\uff1b\u5e26\u5bbd\u4f1a\u6309\u6b64\u5e27\u7387\u4e0e\u5f53\u524d\u8bbe\u7f6e\u5e27\u7387\u7684\u6bd4\u4f8b\u540c\u6b65\u4e0b\u8c03\u3002</div></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u964d\u8f7d\u7ea7\u522b</span><div class="selkies-dll-value" data-dll-value="crf"></div></div><input type="range" min="5" max="60" step="1" data-dll="crf"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u9650\u5e27\u671f\u95f4\u4f7f\u7528\uff1b\u4efb\u4f55\u4ea4\u4e92\u90fd\u4f1a\u7acb\u5373\u6062\u590d\u539f\u59cb\u753b\u9762\u53c2\u6570\u3002</div></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u989d\u5916\u91c7\u6837\u4e0a\u9650</span><div class="selkies-dll-value" data-dll-value="sample"></div></div><input type="range" min="10" max="100" step="1" data-dll="sample"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u8fd8\u4f1a\u53d7\u5e27\u7387\u6bd4\u4f8b\u7ea6\u675f\uff1b\u8fd9\u91cc\u53ea\u8bbe\u7f6e\u989d\u5916\u7684\u7f16\u7801\u91c7\u6837\u4e0a\u9650\u3002</div></div>' +
       '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u7cbe\u7b80\u7279\u6548</span><input type="checkbox" data-dll="paint"></div>' +
       "</div>" +
       "</div>" +
@@ -3590,11 +3609,12 @@
       '<details class="selkies-link-details">' +
       '<summary class="selkies-link-summary">' +
       '<span class="selkies-link-sidebar-title">\u5999\u5999\u5c0f\u5de5\u5177</span>' +
-      '<span class="selkies-link-summary-meta">\u901a\u77e5</span>' +
+      '<span class="selkies-link-summary-meta">\u901a\u77e5/\u526a\u677f</span>' +
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
+      '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
@@ -3624,10 +3644,14 @@
       document.head.appendChild(style);
     }
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
+    var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
     var idleFocusRow = section.querySelector('[data-debug-row="idle-focus-seconds"]');
     var idleFocusSelect = section.querySelector('[data-debug-select="idle-focus-seconds"]');
     if (notificationToggle) {
       notificationToggle.checked = !!notificationPassthroughEnabled;
+    }
+    if (bottomClipboardToggle) {
+      bottomClipboardToggle.checked = !!bottomActionClipboardButtonsEnabled;
     }
     if (idleFocusRow) {
       idleFocusRow.setAttribute("data-hidden", notificationPassthroughEnabled ? "0" : "1");
@@ -3643,6 +3667,23 @@
       });
       section.querySelector("[data-debug-action='wechat-audio-test']").addEventListener("click", function () {
         triggerWechatAudioNotificationTest();
+      });
+      section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]').addEventListener("change", function (event) {
+        bottomActionClipboardButtonsEnabled = !!(event && event.target && event.target.checked);
+        setStoredValue("bottom_action_clipboard_buttons_enabled", bottomActionClipboardButtonsEnabled);
+        syncBottomActionSplitState();
+        updateBottomActionDockVisibility();
+        setActivityTask("bottom-clipboard-buttons-setting", {
+          title: bottomActionClipboardButtonsEnabled ? "\u5df2\u663e\u793a\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae" : "\u5df2\u9690\u85cf\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae",
+          detail: bottomActionClipboardButtonsEnabled
+            ? "\u9001\u526a\u677f\u548c\u6536\u526a\u677f\u5df2\u56de\u5230\u5e95\u90e8\u5feb\u6377\u680f\u3002"
+            : "\u5e95\u90e8\u5feb\u6377\u680f\u4ec5\u4fdd\u7559\u5fae\u4fe1\u3001\u5206\u5c4f\u3001QQ \u548c\u6298\u53e0\u6309\u94ae\u3002",
+          kind: "success",
+          progress: 100,
+          indeterminate: false,
+          priority: 70,
+          expiresAt: Date.now() + 2600
+        });
       });
       section.querySelector('[data-debug-select="idle-focus-seconds"]').addEventListener("change", function (event) {
         var target = event && event.target;
@@ -3755,6 +3796,7 @@
       "#selkies-bottom-action-dock{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:0;height:24px;box-sizing:border-box;overflow:hidden;" +
       "border:1px solid rgba(51,65,85,.92);border-bottom:none;border-radius:10px 10px 0 0;background:rgba(8,15,28,.96);backdrop-filter:blur(16px);" +
       "box-shadow:0 -6px 12px rgba(2,6,23,.12);transform-origin:center bottom;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
+      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(4,minmax(0,1fr))}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock{opacity:0;transform:translateY(10px) scale(.94);filter:blur(1px);pointer-events:none}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-split-popover{opacity:0;pointer-events:none;visibility:hidden}" +
       "#selkies-bottom-dock-collapsed-toggle{position:absolute;left:50%;bottom:0;appearance:none;border:1px solid rgba(71,85,105,.92);border-bottom:none;background:#101826;color:#e2e8f0;border-radius:10px 10px 0 0;min-width:30px;height:24px;box-sizing:border-box;padding:0 8px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 -6px 12px rgba(2,6,23,.12);opacity:0;transform:translateX(-50%) translateY(8px) scale(.92);pointer-events:none;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
@@ -3772,6 +3814,8 @@
       ".selkies-bottom-dock-btn[data-tone='collapse']{background:#101826;border-color:#64748b;color:#cbd5e1;min-width:30px;padding:0 4px}" +
       "#selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:9px}" +
       "#selkies-bottom-action-dock .selkies-bottom-dock-btn:last-child{border-top-right-radius:9px}" +
+      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='client-to-remote'],#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='remote-to-client']{display:none}" +
+      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='wechat-focus']{border-top-left-radius:9px}" +
       ".selkies-bottom-dock-btn[data-active='1']{border-color:#93c5fd;color:#f8fafc}" +
       ".selkies-bottom-dock-btn[data-unread='1']{animation:selkies-unread-pulse .95s ease-in-out infinite}" +
       ".selkies-bottom-split-btn{appearance:none;border:1px solid rgba(71,85,105,.9);background:#101826;color:#e2e8f0;" +
@@ -3781,7 +3825,7 @@
       ".selkies-bottom-split-btn:active{transform:translateY(1px)}" +
       "@keyframes selkies-unread-pulse{0%{box-shadow:0 0 0 0 rgba(248,250,252,.0)}50%{box-shadow:0 0 0 2px rgba(248,250,252,.24),0 0 18px rgba(59,130,246,.24)}100%{box-shadow:0 0 0 0 rgba(248,250,252,.0)}}" +
       "@media (max-width:900px){#selkies-bottom-action-dock{gap:0;padding:0;height:24px}.selkies-bottom-dock-btn{min-width:44px;height:100%;padding:0 5px;font-size:9px}.selkies-bottom-dock-btn[data-tone='split']{min-width:66px}.selkies-bottom-dock-btn[data-tone='collapse']{min-width:28px;padding:0 3px}}" +
-      "@media (max-width:640px){#selkies-bottom-action-dock-shell{width:min(96vw,392px)}#selkies-bottom-action-dock{width:100%;grid-template-columns:repeat(6,minmax(0,1fr))}.selkies-bottom-dock-btn{min-width:0;padding:0 2px}}";
+      "@media (max-width:640px){#selkies-bottom-action-dock-shell{width:min(96vw,392px)}#selkies-bottom-action-dock{width:100%;grid-template-columns:repeat(6,minmax(0,1fr))}#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(4,minmax(0,1fr))}.selkies-bottom-dock-btn{min-width:0;padding:0 2px}}";
     document.head.appendChild(style);
   }
 
@@ -3790,6 +3834,7 @@
     if (!shell) return;
     shell.setAttribute("data-split-open", bottomActionSplitOpen ? "1" : "0");
     shell.setAttribute("data-collapsed", bottomActionDockCollapsed ? "1" : "0");
+    shell.setAttribute("data-clipboard-buttons", bottomActionClipboardButtonsEnabled ? "1" : "0");
     var splitButton = shell.querySelector('[data-dock-action="split-toggle"]');
     if (splitButton) {
       splitButton.setAttribute("data-active", bottomActionSplitOpen ? "1" : "0");
@@ -4049,14 +4094,31 @@
   function bindDynamicLatencyMode() {
     startDynamicLatencyMount();
     syncSidebarToggleLowLatencyState();
+    dynamicLatencyUntil = Date.now() + getDynamicLatencyConfig().holdMs;
     if (!sidebarToggleIndicatorTimer) {
       sidebarToggleIndicatorTimer = window.setInterval(syncSidebarToggleLowLatencyState, 1000);
     }
     if (!dynamicLatencyTimer) {
       dynamicLatencyTimer = window.setInterval(function () {
-        if (!dynamicLatencyApplied) return;
+        var config = getDynamicLatencyConfig();
+        if (!config.enabled) {
+          restoreDynamicLatency();
+          return;
+        }
+        if (Date.now() < dynamicLatencySuppressedUntil) {
+          restoreDynamicLatency();
+          return;
+        }
         if (Date.now() < dynamicLatencyUntil) return;
-        restoreDynamicLatency();
+        if (isRemoteAudioPlaying()) {
+          dynamicLatencyUntil = Date.now() + config.holdMs;
+          if (dynamicLatencyApplied) {
+            restoreDynamicLatency();
+          }
+          return;
+        }
+        if (dynamicLatencyApplied) return;
+        activateDynamicLatency("inactive");
       }, 200);
     }
 
@@ -4083,7 +4145,7 @@
       }
       noteFrontendInteraction();
       noteUiInteraction();
-      activateDynamicLatency(phase);
+      markDynamicLatencyInteractive(phase);
     }
 
     document.addEventListener("pointerdown", function () {
@@ -4866,6 +4928,12 @@
                 });
               }, 1200);
             }
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(data, "audio")) {
+          if (isRemoteAudioPlaying()) {
+            dynamicLatencyUntil = Date.now() + getDynamicLatencyConfig().holdMs;
+            restoreDynamicLatency();
           }
         }
         scheduleBadgeRefresh(0);

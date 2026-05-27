@@ -19,7 +19,7 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   gamepadUiEnabled: false,
   dynamicLowLatencyEnabled: true,
   dynamicLowLatencyHoldMs: 1200,
-  dynamicLowLatencyFps: 32,
+  dynamicLowLatencyFps: 15,
   dynamicLowLatencyH264Crf: 40,
   dynamicLowLatencyScalePercent: 85,
   dynamicLowLatencySamplePercent: 75,

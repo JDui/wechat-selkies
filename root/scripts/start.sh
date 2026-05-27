@@ -56,9 +56,7 @@ start_local_link_bridge() {
 
 start_notification_bridge() {
     if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
-        NOTIFICATION_BRIDGE_LOG_PATH="${NOTIFICATION_BRIDGE_LOG_PATH:-/config/logs/notification-bridge.log}"
-        mkdir -p "$(dirname "$NOTIFICATION_BRIDGE_LOG_PATH")"
-        nohup python3 -u /scripts/notification_bridge.py >>"$NOTIFICATION_BRIDGE_LOG_PATH" 2>&1 &
+        nohup /scripts/run-notification-bridge.sh >/dev/null 2>&1 &
     fi
 }
 

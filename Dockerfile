@@ -113,6 +113,7 @@ ENV WATCHDOG_RESTART_QQ="true"
 ENV WATCHDOG_LOG_PATH="/config/logs/process-watchdog.log"
 ENV NOTIFICATION_BRIDGE_PORT="38081"
 ENV NOTIFICATION_BRIDGE_LOG_PATH="/config/logs/notification-bridge.log"
+ENV NOTIFICATION_BRIDGE_LOG_MAX_BYTES="4194304"
 ENV NOTIFICATION_BRIDGE_RAW_LOG_PATH="/config/logs/notification-bridge-raw.log"
 ENV NOTIFICATION_BRIDGE_MODE_PATH="/config/state/notification-bridge.json"
 ENV NOTIFICATION_BRIDGE_FALLBACK_POLL_MS="1200"
@@ -148,7 +149,7 @@ ENV SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY="false"
 ENV SELKIES_DEFAULT_H264_CRF="30"
 ENV SELKIES_DYNAMIC_LOW_LATENCY="true"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS="1200"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="32"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="15"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF="40"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_SCALE_PERCENT="85"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT="75"
@@ -194,6 +195,8 @@ RUN sed -i 's/\r$//' \
     /defaults/menu.xml \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/run-notification-bridge.sh \
+    /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
     /scripts/notification_bridge.py \
     /scripts/local-link-open-helper.sh \
@@ -217,6 +220,8 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/run-notification-bridge.sh \
+    /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
     /scripts/notification_bridge.py \
     /scripts/local-link-open-helper.sh \
