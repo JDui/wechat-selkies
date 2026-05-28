@@ -42,6 +42,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **Improved Image Copy/Paste**: Browser `Ctrl+V` image paste to remote clipboard with optional auto-paste into chat input.
 - **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
 - **Low-Latency Optimization**: Tuned defaults for interaction latency, plus stream auto-recovery and X11 self-healing.
+- **Inactive Frame Limiter and Adaptive Sleep**: Idle browser sessions can drop to low send FPS without pipeline restarts, while disconnected/non-receiving sessions can stop streaming work on the server.
 - **New QQ Support Enhancements**: Build-time latest Linux QQ URL resolution, hang detection, and auto-restart.
 - **Open Links Locally**: Links triggered inside QQ/WeChat now show a confirmation card first, then open in the local browser and are saved in jump history.
 
@@ -72,8 +73,16 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 
 - The session no longer depends only on fixed encoder settings. It now adjusts transport behavior based on real interaction state.
 - During mouse/keyboard activity, wheel input, dragging, or transfer contention, the pipeline temporarily prioritizes responsiveness over static quality.
-- Once interaction pressure is gone, those changes are rolled back automatically, so the user does not need to manage profiles manually.
+- Once interaction pressure is gone, inactive frame limiting can throttle the browser-facing send rate as low as 1 FPS without restarting the capture or streaming pipeline.
+- Automatic waiting/stall recovery now stays lightweight by default and avoids `STOP_VIDEO` / `START_VIDEO`, page reloads, or X11 stack repair unless the sidebar heavy-repair action is used.
 - Combined with stream recovery, X11 health checks, watchdogs, and IME/clipboard repair paths, the desktop feels more stable over long-running sessions.
+
+### Adaptive Sleep for NAS/Server Idle Time
+
+- Adaptive Sleep is based on whether any browser client is online and actively receiving video, not whether the foreground page is focused.
+- When no client is receiving video for the configured idle window, Selkies audio/video work is stopped to reduce server-side CPU usage.
+- Streaming wakes automatically when a browser client starts receiving video again.
+- This is separate from inactive frame limiting: inactive limiting mainly reduces browser decode load and outgoing bandwidth while the page is still connected; adaptive sleep is the deeper server-side idle mode.
 
 ## Screenshots
 ![WeChat Screenshot](./docs/images/wechat-selkies-1.jpg)
@@ -161,9 +170,12 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - QQ_WATCHDOG_FAIL_THRESHOLD=3
           - QQ_WATCHDOG_X11_PING=true
           - QQ_WATCHDOG_X11_TIMEOUT=2
+          - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
+          - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
           - DRI_NODE=/dev/dri/renderD128 # preferred render node for VAAPI
           - SELKIES_ENABLE_BINARY_CLIPBOARD=true
           - SELKIES_PASTE_IMAGE=true
+          - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
           - SELKIES_DEFAULT_ENCODER=x264enc
           - SELKIES_DEFAULT_FRAMERATE=48
           - SELKIES_DEFAULT_GAMEPAD_ENABLED=false
@@ -172,6 +184,12 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_DEFAULT_H264_STREAMING_MODE=true
           - SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY=false
           - SELKIES_DEFAULT_H264_CRF=30
+          - SELKIES_DYNAMIC_LOW_LATENCY=true
+          - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=1200
+          - SELKIES_DYNAMIC_LOW_LATENCY_FPS=15
+          - SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF=40
+          - SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT=75
+          - SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER=true
           - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
           - SELKIES_STREAM_STALL_THRESHOLD_MS=18000
           - SELKIES_STREAM_STALL_RESTART_LIMIT=2
@@ -242,17 +260,26 @@ Configure the following environment variables in `docker-compose.yml`:
 | `WATCHDOG_RESTART_WECHAT` | `true` | Auto-restart WeChat if process exits |
 | `WATCHDOG_RESTART_QQ` | `true` | Auto-restart QQ if process exits (only when AUTO_START_QQ=true) |
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
+| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | Seconds without an online client receiving video before adaptive sleep stops audio/video streaming |
+| `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | Adaptive sleep monitor polling interval |
 | `QQ_NICE_LEVEL` | `-2` | Nice level for QQ process (-20 to 19) |
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | Enable QQ hang detection (process alive but window unresponsive) |
 | `QQ_WATCHDOG_FAIL_THRESHOLD` | `3` | Restart QQ after this many consecutive healthcheck failures |
 | `QQ_WATCHDOG_X11_PING` | `true` | Use X11 window-title probe for QQ responsiveness checks |
 | `QQ_WATCHDOG_X11_TIMEOUT` | `2` | X11 probe timeout in seconds |
 | `DRI_NODE` | `/dev/dri/renderD128` | VAAPI render node path (GPU encoding is preferred when available) |
+| `SELKIES_DYNAMIC_LOW_LATENCY` | `true` | Enable inactive frame limiting from the browser sidebar |
+| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `1200` | Idle time after the last interaction before inactive limiting can engage |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `15` | Default inactive send-rate cap; can be set from 1 to 120 FPS |
+| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `40` | H.264 CRF used while inactive limiting is active |
+| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `75` | Lower bound for inactive sampling/bitrate scaling |
+| `SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER` | `true` | Disable paint-over quality mode while inactive limiting is active |
 | `SELKIES_ENABLE_BINARY_CLIPBOARD` | `true` | Enable binary clipboard (images, etc.) |
 | `SELKIES_PASTE_IMAGE` | `true` | Enable Ctrl+V image paste in browser |
 | `SELKIES_PASTE_IMAGE_MAX_SIZE` | `20971520` | Max image size in bytes (default 20MB) |
 | `SELKIES_PASTE_IMAGE_AUTO_PASTE` | `true` | Auto-trigger remote Ctrl+V after clipboard write |
-| `SELKIES_DEFAULT_ENCODER` | `x264enc` | Default encoder (stable, low-latency profile) |
+| `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | Available encoder list exposed to Selkies |
+| `SELKIES_DEFAULT_ENCODER` | `x264enc` | Default encoder (`x264enc`, `x264enc-striped`, or `jpeg`; `x264enc` remains the stable VAAPI-preferred default) |
 | `SELKIES_DEFAULT_FRAMERATE` | `48` | Default frame rate |
 | `SELKIES_DEFAULT_GAMEPAD_ENABLED` | `false` | Default touch gamepad toggle |
 | `SELKIES_DEFAULT_BINARY_CLIPBOARD` | `true` | Frontend default for binary clipboard toggle |
@@ -293,13 +320,23 @@ Notes:
 - When a new client successfully connects, existing clients are force-disconnected and redirected back to the PIN login page.
 - This helps avoid multi-client contention that can lead to `Waiting for stream...` and unstable sessions.
 
+#### Miaomiao Toolbox Adaptive Sleep
+
+- The `Miaomiao Toolbox` section includes an `Adaptive Sleep` toggle.
+- When enabled, the container stops Selkies audio/video streaming after no browser client is online and receiving video for the configured idle window.
+- Streaming wakes automatically when a browser client starts receiving video again.
+- Keeping a browser tab open but still receiving video does not enter adaptive sleep; use inactive frame limiting for that case.
+
 #### Encoder Mode Badge and VAAPI Fallback
 
 - The default encoder profile is `x264enc` + `use_cpu=false` (prefer VAAPI).
+- The video settings encoder selector includes `x264enc-striped` as an optional CPU-only striped H.264 mode.
+- The inactive frame limiter can be set as low as 1 FPS and throttles sending without restarting the streaming capture pipeline.
+- Inactive limiting primarily reduces client decode/render work and outbound bandwidth; adaptive sleep is the mode that stops server-side streaming computation when no client is receiving.
 - A `VAAPI`/`CPU` badge is displayed next to the encoder selector in video settings.
 - Experimental injected encoder options that could cause black screen were removed (`vaapih264enc`, `vaapih265enc`, `vaapivp9enc`, `vaav1enc`).
 - The mode badge refreshes on initial load, encoder switches, and each sidebar/video-settings reopen as `CPU` or `VAAPI`.
-- If the page is stuck on `Waiting for stream...` after long idle, the frontend performs one automatic recovery reload after threshold (controlled by the two env vars above).
+- If the page is stuck on `Waiting for stream...` after long idle, the frontend first performs lightweight stream recovery. Heavy X11/stream-pipeline repair is reserved for the sidebar repair action.
 
 #### QQ Version and Performance Notes
 

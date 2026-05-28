@@ -31,15 +31,17 @@
 - **按需剪贴板同步**：不再监听本机剪贴板；`Ctrl+C` / `Ctrl+X` 会先让远端应用复制/剪切，再收取远端剪贴板，`Ctrl+V` 会先把本机剪贴板写入远端再粘贴。远端剪贴板若由应用自身发生变化，也会自动收剪板，并在底部活动提示中显示进度、成功、无变化或失败状态。
 - **链接本地打开**：微信 / QQ 内点击链接时，浏览器侧显示确认卡片，可用本机浏览器打开并保留历史。
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
+- **不活跃限帧**：浏览器长时间无鼠标键盘交互后，可把发送给客户端的帧率降到最低 `1 FPS`，降低客户端解码、渲染和 NAS 出站带宽压力；该模式不重启采集 / 推流管线。
+- **自适应休眠**：当没有浏览器客户端在线接收视频流时，后台停止 Selkies 音视频管线计算，直到客户端重新开始接收流量后自动恢复。
 
 ## 快速开始
 
 ### 使用 Release 镜像包
 
-下载 `v1.18` Release 中的 `wechat-selkies-1.18.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.26.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.18.tar
+docker load -i wechat-selkies-1.26.tar
 ```
 
 启动：
@@ -54,7 +56,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.18
+  wechat-selkies:1.26
 ```
 
 访问：
@@ -75,7 +77,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.18
+    image: wechat-selkies:1.26
     container_name: wechat-selkies
     init: true
     ports:
@@ -94,6 +96,13 @@ services:
       - AUTO_START_QQ=false
       - SELKIES_SESSION_MODE=pin-takeover
       - SELKIES_VIDEO_CORRUPTION_WATCHDOG=true
+      - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
+      - SELKIES_DEFAULT_ENCODER=x264enc
+      - SELKIES_DYNAMIC_LOW_LATENCY=true
+      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=15
+      - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=1200
+      - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
+      - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
     shm_size: "1gb"
     restart: unless-stopped
 ```
@@ -126,11 +135,20 @@ services:
 | `SELKIES_PASTE_IMAGE` | `true` | 启用图片粘贴 |
 | `SELKIES_PASTE_IMAGE_MAX_SIZE` | `20971520` | 图片粘贴大小上限 |
 | `SELKIES_PASTE_IMAGE_AUTO_PASTE` | `true` | 写入远端剪贴板后自动 Ctrl+V |
-| `SELKIES_DEFAULT_ENCODER` | `x264enc` | 默认编码器 |
+| `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | 可选编码器列表 |
+| `SELKIES_DEFAULT_ENCODER` | `x264enc` | 默认编码器；`x264enc` 优先 VAAPI，`x264enc-striped` 为 CPU 分片模式 |
 | `SELKIES_DEFAULT_FRAMERATE` | `48` | 默认帧率 |
 | `SELKIES_DEFAULT_USE_CPU` | `false` | 优先尝试硬件编码，失败时回退 CPU |
 | `SELKIES_DEFAULT_H264_STREAMING_MODE` | `true` | 默认开启 H264 streaming mode |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | 默认 H264 CRF |
+| `SELKIES_DYNAMIC_LOW_LATENCY` | `true` | 启用不活跃限帧 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `1200` | 最后一次交互后多久进入不活跃限帧 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `15` | 不活跃发送帧率上限，可设置为 `1` 到 `120` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `40` | 不活跃限帧期间使用的 H264 CRF |
+| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `75` | 不活跃采样 / 带宽缩放下限 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER` | `true` | 不活跃限帧期间关闭 paint-over 质量模式 |
+| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 没有客户端在线接收视频流多久后进入自适应休眠 |
+| `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 长时间等待视频流时触发恢复 |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | 页面级恢复冷却时间 |
 | `SELKIES_LOCAL_LINK_OPEN` | `true` | 启用链接本地打开确认 |
@@ -157,12 +175,19 @@ services:
 
 视频异常时会按顺序恢复：
 
-1. 清理客户端解码状态并重建视频 / 音频 pipeline。
-2. 触发 Selkies 流恢复事件。
-3. 在连续软恢复失败后，才调用 `/scripts/recover-xstack.sh` 重修复 X11。
+1. 清理客户端解码状态并触发轻量 Selkies 流恢复事件。
+2. 自动恢复不会主动 `STOP_VIDEO` / `START_VIDEO`，也不会刷新页面或调用 `/scripts/recover-xstack.sh`。
+3. 只有手动点击侧边栏里的重修复按钮时，才执行视频 / 音频 pipeline 与 X11 的重修复。
 4. 所有恢复动作都有冷却时间，避免循环重启影响微信 / QQ 窗口。
 
 页面中仍保留手动按钮“重修复推流与 X11”。
+
+## 不活跃限帧与自适应休眠
+
+- 不活跃限帧用于“网页还开着但暂时不操作”的场景。它按时间间隔限制发送给浏览器的帧率，最低可到 `1 FPS`，主要降低浏览器解码 / 渲染负载和 NAS 出站带宽。
+- 不活跃限帧不会重启采集或推流管线，因此 NAS 端 CPU 会下降一些，但不一定按帧率等比例下降。
+- 自适应休眠用于“没有客户端在线接收视频流”的场景。后台会停止音视频管线计算，把 NAS 端占用降到更低；客户端重新开始接收流量后自动唤醒。
+- 自适应休眠不再按前端页面是否失焦、隐藏或熄屏判断，而是按是否存在在线且正在接收视频的客户端判断。
 
 ## 侧边栏和快捷键
 
@@ -175,13 +200,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.18 .
+docker build -t wechat-selkies:1.26 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.18.tar wechat-selkies:1.18
+docker save -o wechat-selkies-1.26.tar wechat-selkies:1.26
 ```
 
 ## 故障排查

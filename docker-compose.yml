@@ -49,6 +49,8 @@ services:
       - SELKIES_SESSION_STATE_PATH=/run/selkies-active-session.json
       - SELKIES_SESSION_AUTH_PORT=38082
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
+      - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
+      - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
       - QQ_NICE_LEVEL=-2
       - QQ_WATCHDOG_HANG_DETECT=true
       - QQ_WATCHDOG_FAIL_THRESHOLD=3
@@ -57,6 +59,7 @@ services:
       - DRI_NODE=/dev/dri/renderD128
       - SELKIES_ENABLE_BINARY_CLIPBOARD=true
       - SELKIES_PASTE_IMAGE=true
+      - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
       - SELKIES_DEFAULT_ENCODER=x264enc
       - SELKIES_DEFAULT_FRAMERATE=48
       - SELKIES_DEFAULT_GAMEPAD_ENABLED=false

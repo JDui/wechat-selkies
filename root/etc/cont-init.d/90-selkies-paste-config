@@ -103,7 +103,7 @@ if ! [[ "$default_dynamic_low_latency_hold_ms" =~ ^[0-9]+$ ]] || [ "$default_dyn
 fi
 
 default_dynamic_low_latency_fps="${DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW}"
-if ! [[ "$default_dynamic_low_latency_fps" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_fps" -lt 8 ] || [ "$default_dynamic_low_latency_fps" -gt 120 ]; then
+if ! [[ "$default_dynamic_low_latency_fps" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_fps" -lt 1 ] || [ "$default_dynamic_low_latency_fps" -gt 120 ]; then
   default_dynamic_low_latency_fps="15"
 fi
 

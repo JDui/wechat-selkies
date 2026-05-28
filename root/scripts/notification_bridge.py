@@ -146,6 +146,17 @@ def sanitize_idle_focus_seconds(value):
     return seconds
 
 
+def sanitize_bool(value, fallback=False):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return bool(fallback)
+
+
 def json_safe(value):
     if value is None:
         return None
@@ -713,7 +724,11 @@ def monitor_wechat_audio_events():
 
 
 def default_mode_state():
-    return {"mode": "internal", "idle_focus_seconds": IDLE_DEFOCUS_SECONDS}
+    return {
+        "mode": "internal",
+        "idle_focus_seconds": IDLE_DEFOCUS_SECONDS,
+        "adaptive_sleep_enabled": False,
+    }
 
 
 def _read_mode_state_unlocked():
@@ -726,6 +741,10 @@ def _read_mode_state_unlocked():
         return state
     state["mode"] = sanitize_mode(payload.get("mode", state["mode"]))
     state["idle_focus_seconds"] = sanitize_idle_focus_seconds(payload.get("idle_focus_seconds", state["idle_focus_seconds"]))
+    state["adaptive_sleep_enabled"] = sanitize_bool(
+        payload.get("adaptive_sleep_enabled", state["adaptive_sleep_enabled"]),
+        state["adaptive_sleep_enabled"],
+    )
     return state
 
 
@@ -734,13 +753,15 @@ def read_mode_state():
         return dict(_read_mode_state_unlocked())
 
 
-def write_mode_state(mode=None, idle_focus_seconds=None):
+def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=None):
     with MODE_LOCK:
         state = _read_mode_state_unlocked()
         if mode is not None:
             state["mode"] = sanitize_mode(mode)
         if idle_focus_seconds is not None:
             state["idle_focus_seconds"] = sanitize_idle_focus_seconds(idle_focus_seconds)
+        if adaptive_sleep_enabled is not None:
+            state["adaptive_sleep_enabled"] = sanitize_bool(adaptive_sleep_enabled, state["adaptive_sleep_enabled"])
         MODE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = MODE_STATE_PATH.with_suffix(MODE_STATE_PATH.suffix + ".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
@@ -778,6 +799,7 @@ def current_state_payload():
         "ok": True,
         "mode": state["mode"],
         "idle_focus_seconds": int(state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0),
+        "adaptive_sleep_enabled": bool(state.get("adaptive_sleep_enabled", False)),
     }
 
 
@@ -893,11 +915,14 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             apply_notification_mode(updated_state["mode"])
         if "idle_focus_seconds" in payload:
             updated_state = write_mode_state(idle_focus_seconds=payload.get("idle_focus_seconds"))
+        if "adaptive_sleep_enabled" in payload:
+            updated_state = write_mode_state(adaptive_sleep_enabled=payload.get("adaptive_sleep_enabled"))
 
         response = current_state_payload()
         if updated_state is not None:
             response["mode"] = updated_state["mode"]
             response["idle_focus_seconds"] = int(updated_state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0)
+            response["adaptive_sleep_enabled"] = bool(updated_state.get("adaptive_sleep_enabled", False))
         self._send_json(200, response)
 
 

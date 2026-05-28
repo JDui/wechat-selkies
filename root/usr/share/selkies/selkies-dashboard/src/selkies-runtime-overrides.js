@@ -94,6 +94,7 @@
   var qqUnread = false;
   var wechatUnread = false;
   var notificationPassthroughEnabled = sanitizeBool(getStoredValue("notification_passthrough_enabled"), false);
+  var adaptiveSleepEnabled = sanitizeBool(getStoredValue("adaptive_sleep_enabled"), false);
   var qqIdleBlurSeconds = sanitizeInt(getStoredValue("qq_idle_blur_seconds"), 600, 0, 1800);
   var lastNotificationActivityReportAt = 0;
   var bottomActionDockTimer = null;
@@ -413,8 +414,6 @@
   }
 
   function isClientPageAwake() {
-    if (document.hidden) return false;
-    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     if (!hasOpenDataSocket()) return false;
     return true;
   }
@@ -956,6 +955,8 @@
     var mode = String(payload.mode || "internal").toLowerCase();
     notificationPassthroughEnabled = mode === "passthrough";
     setStoredValue("notification_passthrough_enabled", notificationPassthroughEnabled);
+    adaptiveSleepEnabled = sanitizeBool(payload.adaptive_sleep_enabled, adaptiveSleepEnabled);
+    setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
     qqIdleBlurSeconds = sanitizeInt(payload.idle_focus_seconds, qqIdleBlurSeconds, 0, 1800);
     if ([0, 60, 300, 600, 1800].indexOf(qqIdleBlurSeconds) < 0) {
       qqIdleBlurSeconds = 600;
@@ -1393,7 +1394,7 @@
     var defaultH264Crf = sanitizeInt(runtime.defaultH264Crf, 30, 5, 50);
     var dynamicLatencyEnabled = sanitizeBool(runtime.dynamicLowLatencyEnabled, true);
     var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 10000);
-    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 15, 8, 120);
+    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120);
     var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 50);
     var dynamicLatencyScale = sanitizeInt(runtime.dynamicLowLatencyScalePercent, 75, 25, 100);
     var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100);
@@ -1626,6 +1627,29 @@
     return candidate;
   }
 
+  function ensureEncoderOptions(select) {
+    if (!select) return;
+    var values = Array.prototype.slice.call(select.options || []).map(function (opt) {
+      return String(opt.value || "").toLowerCase();
+    });
+    if (values.indexOf("x264enc-striped") < 0) {
+      var option = document.createElement("option");
+      option.value = "x264enc-striped";
+      option.textContent = "x264enc-striped";
+      var insertAfter = Array.prototype.slice.call(select.options || []).find(function (opt) {
+        return String(opt.value || "").toLowerCase() === "x264enc";
+      });
+      if (insertAfter && insertAfter.nextSibling) {
+        select.insertBefore(option, insertAfter.nextSibling);
+      } else {
+        select.appendChild(option);
+      }
+    }
+    if (String(getStoredValue("encoder") || "").toLowerCase() === "x264enc-striped") {
+      select.value = "x264enc-striped";
+    }
+  }
+
   function ensureEncoderBadge(select) {
     if (!select || !select.parentElement) return null;
     var badge = document.getElementById("selkies-encoder-mode-badge");
@@ -1659,6 +1683,7 @@
   function updateEncoderBadge() {
     var select = findEncoderSelect();
     if (!select) return;
+    ensureEncoderOptions(select);
     var badge = ensureEncoderBadge(select);
     if (!badge) return;
 
@@ -1981,6 +2006,7 @@
     if (!hasVisibleVideoStream()) return false;
     if (!lastVideoPipelineActive) return false;
     if (!lastFrameProgressAt) return false;
+    if (dynamicLatencyApplied) return false;
     if (isTransportBusy()) return false;
     if (streamRecoveryInFlight) return false;
     return Date.now() - lastFrameProgressAt >= STREAM_STALL_THRESHOLD_MS;
@@ -2011,8 +2037,8 @@
     if (streamRecoveryStage <= Math.max(1, VIDEO_SOFT_RECOVER_LIMIT)) {
       var detail =
         streamRecoveryStage === 1
-          ? "\u68c0\u6d4b\u5230\u89c6\u9891\u5e27\u957f\u65f6\u95f4\u672a\u66f4\u65b0\uff0c\u5148\u91cd\u5efa\u7f16\u7801\u5668\u548c\u89c6\u9891\u6d41\u3002"
-          : "\u89c6\u9891\u4ecd\u672a\u6062\u590d\uff0c\u6b63\u5728\u8fdb\u4e00\u6b65\u91cd\u5efa\u63a8\u6d41\u4e0e\u97f3\u9891\u7ba1\u7ebf\u3002";
+          ? "\u68c0\u6d4b\u5230\u89c6\u9891\u5e27\u957f\u65f6\u95f4\u672a\u66f4\u65b0\uff0c\u5148\u6267\u884c\u8f7b\u91cf\u6062\u590d\u3002"
+          : "\u89c6\u9891\u4ecd\u672a\u6062\u590d\uff0c\u7ee7\u7eed\u6267\u884c\u8f7b\u91cf\u6062\u590d\uff0c\u4e0d\u91cd\u542f\u5b8c\u6574\u63a8\u6d41\u7ba1\u7ebf\u3002";
       setActivityTask("stream-reconfig", {
         title: "\u6b63\u5728\u81ea\u52a8\u6062\u590d\u63a8\u6d41",
         detail: detail,
@@ -2023,27 +2049,17 @@
         priority: 96,
         startedAt: now
       });
-      runEncoderResetSequence();
+      sendRawDataCommand("RESET_IO_MODULES");
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-      sendRawDataCommand("STOP_VIDEO");
-      if (streamRecoveryStage > 1) {
-        sendRawDataCommand("STOP_AUDIO");
-      }
       window.setTimeout(function () {
-        sendRawDataCommand("START_VIDEO");
-        if (streamRecoveryStage > 1) {
-          window.setTimeout(function () {
-            sendRawDataCommand("START_AUDIO");
-          }, 180);
-        }
         streamRecoveryInFlight = false;
-      }, 220);
+      }, 900);
       return;
     }
     setActivityTask("stream-reconfig", {
-      title: "\u6b63\u5728\u91cd\u4fee\u590d X11 \u4e0e\u63a8\u6d41",
-      detail: "\u8fde\u7eed\u8f6f\u6062\u590d\u540e\u4ecd\u65e0\u65b0\u753b\u9762\uff0c\u6b63\u5728\u6267\u884c\u91cd\u4fee\u590d\u8def\u5f84\u3002",
-      phase: "\u91cd\u4fee\u590d",
+      title: "\u63a8\u6d41\u8f7b\u91cf\u6062\u590d\u672a\u7a33\u5b9a",
+      detail: "\u81ea\u52a8\u6062\u590d\u4ec5\u6267\u884c\u8f7b\u91cf\u91cd\u5efa\uff1b\u5982\u679c\u753b\u9762\u4ecd\u65e0\u6cd5\u6062\u590d\uff0c\u8bf7\u5728\u4fa7\u8fb9\u680f\u624b\u52a8\u70b9\u51fb\u91cd\u4fee\u590d\u3002",
+      phase: "\u7b49\u5f85\u624b\u52a8\u91cd\u4fee\u590d",
       kind: "warning",
       progress: null,
       indeterminate: true,
@@ -2051,9 +2067,9 @@
       startedAt: now
     });
     markRecoverTimestamp(now);
-    sendRawDataCommand("cmd,/scripts/recover-xstack.sh");
+    sendRawDataCommand("RESET_IO_MODULES");
+    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
     window.setTimeout(function () {
-      restartStreamingPipelines("\u8fde\u7eed\u8f6f\u6062\u590d\u672a\u6062\u590d\u753b\u9762\uff0c\u5df2\u5207\u6362\u5230 X11 \u91cd\u4fee\u590d\u3002");
       streamRecoveryInFlight = false;
     }, 1200);
   }
@@ -3107,7 +3123,7 @@
     return {
       enabled: sanitizeBool(getStoredValue("dynamic_low_latency_enabled"), sanitizeBool(runtime.dynamicLowLatencyEnabled, true)),
       holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 10000), 300, 10000),
-      fps: sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 15, 8, 120), 8, 120),
+      fps: sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120), 1, 120),
       crf: sanitizeInt(getStoredValue("dynamic_low_latency_h264_crf"), sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 60), 5, 60),
       samplePercent: sanitizeInt(
         getStoredValue("dynamic_low_latency_sample_percent"),
@@ -3381,7 +3397,7 @@
       '<div class="selkies-dll-grid">' +
       '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u4e0d\u6d3b\u8dc3\u9650\u5e27</span><input type="checkbox" data-dll="enabled"></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8fdb\u5165\u4e0d\u6d3b\u8dc3\u5ef6\u8fdf</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="5000" step="100" data-dll="hold"><div class="selkies-dll-note">\u505c\u6b62\u9f20\u6807\u6216\u952e\u76d8\u4ea4\u4e92\u8fbe\u5230\u8fd9\u4e2a\u65f6\u957f\u540e\uff0c\u5f00\u59cb\u9650\u5236\u5f53\u524d\u9875\u9762\u7684\u53d1\u9001\u5e27\u7387\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u5e27\u7387\u4e0a\u9650</span><div class="selkies-dll-value" data-dll-value="fps"></div></div><input type="range" min="8" max="60" step="1" data-dll="fps"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u9650\u5236\u6700\u9ad8\u53d1\u9001\u5e27\u7387\uff1b\u5e26\u5bbd\u4f1a\u6309\u6b64\u5e27\u7387\u4e0e\u5f53\u524d\u8bbe\u7f6e\u5e27\u7387\u7684\u6bd4\u4f8b\u540c\u6b65\u4e0b\u8c03\u3002</div></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u5e27\u7387\u4e0a\u9650</span><div class="selkies-dll-value" data-dll-value="fps"></div></div><input type="range" min="1" max="60" step="1" data-dll="fps"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u9650\u5236\u6700\u9ad8\u53d1\u9001\u5e27\u7387\uff1b\u5e26\u5bbd\u4f1a\u6309\u6b64\u5e27\u7387\u4e0e\u5f53\u524d\u8bbe\u7f6e\u5e27\u7387\u7684\u6bd4\u4f8b\u540c\u6b65\u4e0b\u8c03\u3002</div></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u964d\u8f7d\u7ea7\u522b</span><div class="selkies-dll-value" data-dll-value="crf"></div></div><input type="range" min="5" max="60" step="1" data-dll="crf"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u9650\u5e27\u671f\u95f4\u4f7f\u7528\uff1b\u4efb\u4f55\u4ea4\u4e92\u90fd\u4f1a\u7acb\u5373\u6062\u590d\u539f\u59cb\u753b\u9762\u53c2\u6570\u3002</div></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u964d\u91c7\u6837\u4e0b\u9650</span><div class="selkies-dll-value" data-dll-value="sample"></div></div><input type="range" min="10" max="100" step="1" data-dll="sample"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u4f1a\u6309\u9650\u5e27\u6bd4\u4f8b\u964d\u4f4e\u5e26\u5bbd\uff0c\u4f46\u4e0d\u4f1a\u628a\u7f16\u7801\u91c7\u6837\u538b\u5230\u4f4e\u4e8e\u8fd9\u4e2a\u767e\u5206\u6bd4\u3002</div></div>' +
       '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u7cbe\u7b80\u7279\u6548</span><input type="checkbox" data-dll="paint"></div>' +
@@ -3614,6 +3630,7 @@
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
+      '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
@@ -3644,11 +3661,15 @@
       document.head.appendChild(style);
     }
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
+    var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
     var idleFocusRow = section.querySelector('[data-debug-row="idle-focus-seconds"]');
     var idleFocusSelect = section.querySelector('[data-debug-select="idle-focus-seconds"]');
     if (notificationToggle) {
       notificationToggle.checked = !!notificationPassthroughEnabled;
+    }
+    if (adaptiveSleepToggle) {
+      adaptiveSleepToggle.checked = !!adaptiveSleepEnabled;
     }
     if (bottomClipboardToggle) {
       bottomClipboardToggle.checked = !!bottomActionClipboardButtonsEnabled;
@@ -3684,6 +3705,41 @@
           priority: 70,
           expiresAt: Date.now() + 2600
         });
+      });
+      section.querySelector('[data-debug-toggle="adaptive-sleep"]').addEventListener("change", function (event) {
+        var nextValue = !!(event && event.target && event.target.checked);
+        var target = event.target;
+        adaptiveSleepEnabled = nextValue;
+        setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
+        updateNotificationBridgeState({ adaptive_sleep_enabled: nextValue })
+          .then(function () {
+            setActivityTask("adaptive-sleep-setting", {
+              title: nextValue ? "\u5df2\u5f00\u542f\u81ea\u9002\u5e94\u4f11\u7720" : "\u5df2\u5173\u95ed\u81ea\u9002\u5e94\u4f11\u7720",
+              detail: nextValue
+                ? "\u6ca1\u6709\u6fc0\u6d3b\u4f7f\u7528\u7684\u5ba2\u6237\u7aef\u65f6\uff0c\u5bb9\u5668\u4f1a\u81ea\u52a8\u505c\u6b62\u97f3\u89c6\u9891\u63a8\u6d41\uff1b\u5ba2\u6237\u7aef\u56de\u5230\u524d\u53f0\u540e\u81ea\u52a8\u6062\u590d\u3002"
+                : "\u97f3\u89c6\u9891\u63a8\u6d41\u4e0d\u518d\u6839\u636e\u5ba2\u6237\u7aef\u6d3b\u8dc3\u72b6\u6001\u81ea\u52a8\u4f11\u7720\u3002",
+              kind: "success",
+              progress: 100,
+              indeterminate: false,
+              priority: 72,
+              expiresAt: Date.now() + 3600
+            });
+            renderDebugToolsSection();
+          })
+          .catch(function () {
+            adaptiveSleepEnabled = !nextValue;
+            setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
+            target.checked = adaptiveSleepEnabled;
+            setActivityTask("adaptive-sleep-setting", {
+              title: "\u81ea\u9002\u5e94\u4f11\u7720\u8bbe\u7f6e\u5931\u8d25",
+              detail: "\u672a\u80fd\u66f4\u65b0\u540e\u7aef\u4f11\u7720\u72b6\u6001\uff0c\u8bbe\u7f6e\u5df2\u56de\u9000\u3002",
+              kind: "error",
+              progress: null,
+              indeterminate: true,
+              priority: 82,
+              expiresAt: Date.now() + 3600
+            });
+          });
       });
       section.querySelector('[data-debug-select="idle-focus-seconds"]').addEventListener("change", function (event) {
         var target = event && event.target;
