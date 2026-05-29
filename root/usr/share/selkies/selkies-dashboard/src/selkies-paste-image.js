@@ -10,6 +10,11 @@
     return;
   }
 
+  const staleToastContainer = document.getElementById("selkies-paste-toast-container");
+  if (staleToastContainer) {
+    staleToastContainer.remove();
+  }
+
   const maxBytes = Number(config.maxBytes) > 0 ? Number(config.maxBytes) : 20971520;
   const autoPaste = config.autoPaste !== false;
   let binaryClipboardEnabled = null;
@@ -25,34 +30,25 @@
     return !!target.closest && !!target.closest("[contenteditable='true']");
   }
 
-  function ensureToastContainer() {
-    let container = document.getElementById("selkies-paste-toast-container");
-    if (container) return container;
-
-    const style = document.createElement("style");
-    style.textContent =
-      "#selkies-paste-toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;}" +
-      ".selkies-paste-toast{background:#1f2937;color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.2);max-width:320px;}" +
-      ".selkies-paste-toast.success{background:#0f766e;}" +
-      ".selkies-paste-toast.warn{background:#92400e;}" +
-      ".selkies-paste-toast.error{background:#b91c1c;}";
-    document.head.appendChild(style);
-
-    container = document.createElement("div");
-    container.id = "selkies-paste-toast-container";
-    document.body.appendChild(container);
-    return container;
-  }
-
   function showToast(message, level) {
-    const container = ensureToastContainer();
-    const toast = document.createElement("div");
-    toast.className = "selkies-paste-toast" + (level ? " " + level : "");
-    toast.textContent = message;
-    container.appendChild(toast);
-    setTimeout(() => {
-      toast.remove();
-    }, 4000);
+    const safeLevel = String(level || "info");
+    const safeMessage = String(message || "");
+    if (safeLevel === "error") {
+      console.error("[selkies-paste-image] " + safeMessage);
+    } else if (safeLevel === "warn") {
+      console.warn("[selkies-paste-image] " + safeMessage);
+    } else {
+      console.info("[selkies-paste-image] " + safeMessage);
+    }
+    if (safeLevel === "success" || !safeMessage) return;
+    window.postMessage(
+      {
+        type: "clipboardTransferState",
+        status: "error",
+        detail: safeMessage
+      },
+      window.location.origin
+    );
   }
 
   function emitClipboardTransferState(status, detail) {

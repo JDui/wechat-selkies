@@ -41,6 +41,14 @@ escape_nginx_double_quoted() {
   printf '%s' "$1" | sed -e 's/[\\"]/\\&/g' -e 's/\$/\\$/g'
 }
 
+prepare_config_logs() {
+  local log_dir="/config/logs"
+  install -d -o abc -g abc -m 775 "$log_dir"
+  find "$log_dir" -maxdepth 1 -type f -name "*.log" -exec chown abc:abc {} + -exec chmod u+rw,g+rw {} + 2>/dev/null || true
+}
+
+prepare_config_logs
+
 SFOLDER="$(normalize_subfolder "$SFOLDER")"
 PW_PREFIX="$SFOLDER"
 PW_COOKIE_PATH="$SFOLDER"
@@ -100,7 +108,7 @@ start_session_auth_bridge() {
     return
   fi
   SESSION_AUTH_LOG_PATH="${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}"
-  mkdir -p "$(dirname "$SESSION_AUTH_LOG_PATH")"
+  install -d -o abc -g abc -m 775 "$(dirname "$SESSION_AUTH_LOG_PATH")"
   export SELKIES_SESSION_COOKIE_PATH="$PW_COOKIE_PATH"
   nohup python3 -u /scripts/session_auth_bridge.py >>"$SESSION_AUTH_LOG_PATH" 2>&1 &
 }

@@ -7,6 +7,17 @@ is_true() {
     esac
 }
 
+ensure_log_dir() {
+    local path="$1"
+    local dir
+    dir="$(dirname "$path")"
+    mkdir -p "$dir"
+    if [ ! -w "$dir" ]; then
+        echo "[start] warning: log directory is not writable: $dir" >&2
+        return 1
+    fi
+}
+
 start_wechat() {
     if [ -x /usr/bin/wechat ]; then
         nohup /usr/bin/wechat >/dev/null 2>&1 &
@@ -42,15 +53,21 @@ start_notification_daemon() {
         return
     fi
     DUNST_LOG_PATH="${DUNST_LOG_PATH:-/config/logs/dunst.log}"
-    mkdir -p "$(dirname "$DUNST_LOG_PATH")"
-    nohup dunst -config /config/.config/dunst/dunstrc >>"$DUNST_LOG_PATH" 2>&1 &
+    if ensure_log_dir "$DUNST_LOG_PATH"; then
+        nohup dunst -config /config/.config/dunst/dunstrc >>"$DUNST_LOG_PATH" 2>&1 &
+    else
+        nohup dunst -config /config/.config/dunst/dunstrc >/tmp/dunst.log 2>&1 &
+    fi
 }
 
 start_local_link_bridge() {
     if ! pgrep -f "/scripts/local_link_bridge.py" >/dev/null 2>&1; then
         LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
-        mkdir -p "$(dirname "$LOCAL_LINK_BRIDGE_LOG_PATH")"
-        nohup python3 -u /scripts/local_link_bridge.py >>"$LOCAL_LINK_BRIDGE_LOG_PATH" 2>&1 &
+        if ensure_log_dir "$LOCAL_LINK_BRIDGE_LOG_PATH"; then
+            nohup python3 -u /scripts/local_link_bridge.py >>"$LOCAL_LINK_BRIDGE_LOG_PATH" 2>&1 &
+        else
+            nohup python3 -u /scripts/local_link_bridge.py >/tmp/local-link-bridge.log 2>&1 &
+        fi
     fi
 }
 
@@ -63,16 +80,19 @@ start_notification_bridge() {
 start_session_auth_bridge() {
     if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
         SELKIES_SESSION_AUTH_LOG_PATH="${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}"
-        mkdir -p "$(dirname "$SELKIES_SESSION_AUTH_LOG_PATH")"
-        nohup python3 -u /scripts/session_auth_bridge.py >>"$SELKIES_SESSION_AUTH_LOG_PATH" 2>&1 &
+        if ensure_log_dir "$SELKIES_SESSION_AUTH_LOG_PATH"; then
+            nohup python3 -u /scripts/session_auth_bridge.py >>"$SELKIES_SESSION_AUTH_LOG_PATH" 2>&1 &
+        else
+            nohup python3 -u /scripts/session_auth_bridge.py >/tmp/session-auth-bridge.log 2>&1 &
+        fi
     fi
 }
 
 reset_local_link_logs() {
     LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
     SELKIES_LOCAL_LINK_LOG_PATH="${SELKIES_LOCAL_LINK_LOG_PATH:-/config/logs/local-link-open.log}"
-    mkdir -p "$(dirname "$LOCAL_LINK_BRIDGE_LOG_PATH")"
-    mkdir -p "$(dirname "$SELKIES_LOCAL_LINK_LOG_PATH")"
+    ensure_log_dir "$LOCAL_LINK_BRIDGE_LOG_PATH" || return 0
+    ensure_log_dir "$SELKIES_LOCAL_LINK_LOG_PATH" || return 0
     : >"$LOCAL_LINK_BRIDGE_LOG_PATH"
     : >"$SELKIES_LOCAL_LINK_LOG_PATH"
 }
@@ -208,8 +228,11 @@ fi
 # launch process watchdog for long-running stability
 if is_true "${PROCESS_WATCHDOG:-true}"; then
     WATCHDOG_LOG_PATH="${WATCHDOG_LOG_PATH:-/config/logs/process-watchdog.log}"
-    mkdir -p "$(dirname "$WATCHDOG_LOG_PATH")"
-    nohup /scripts/process-watchdog.sh >>"$WATCHDOG_LOG_PATH" 2>&1 &
+    if ensure_log_dir "$WATCHDOG_LOG_PATH"; then
+        nohup /scripts/process-watchdog.sh >>"$WATCHDOG_LOG_PATH" 2>&1 &
+    else
+        nohup /scripts/process-watchdog.sh >/tmp/process-watchdog.log 2>&1 &
+    fi
 fi
 
 # start split FAB process for quick left/right tiling when there are >=2 windows

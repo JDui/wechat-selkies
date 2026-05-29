@@ -119,6 +119,7 @@ MODE_LOCK = threading.Lock()
 RAW_LOG_LOCK = threading.Lock()
 FRONTEND_ACTIVITY_LOCK = threading.Lock()
 LAST_FRONTEND_INTERACTION_AT = 0.0
+RAW_LOG_DISABLED = False
 
 
 def normalize_text(value):
@@ -804,14 +805,20 @@ def current_state_payload():
 
 
 def append_raw_log(payload):
+    global RAW_LOG_DISABLED
+    if RAW_LOG_DISABLED:
+        return
     line = json.dumps(payload, ensure_ascii=False) + "\n"
     with RAW_LOG_LOCK:
+        if RAW_LOG_DISABLED:
+            return
         try:
             RAW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             with RAW_LOG_PATH.open("a", encoding="utf-8") as handle:
                 handle.write(line)
         except Exception as exc:
-            print(f"[notification-bridge] raw log write failed: {exc}", flush=True)
+            RAW_LOG_DISABLED = True
+            print(f"[notification-bridge] raw log disabled: {exc}", flush=True)
 
 
 class NotificationBridgeHandler(BaseHTTPRequestHandler):

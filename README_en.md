@@ -42,7 +42,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **Improved Image Copy/Paste**: Browser `Ctrl+V` image paste to remote clipboard with optional auto-paste into chat input.
 - **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
 - **Low-Latency Optimization**: Tuned defaults for interaction latency, plus stream auto-recovery and X11 self-healing.
-- **Inactive Frame Limiter and Adaptive Sleep**: Idle browser sessions can drop to low send FPS without pipeline restarts, while disconnected/non-receiving sessions can stop streaming work on the server.
+- **Inactive Frame Limiter and Adaptive Sleep**: Idle browser sessions can drop to low send FPS; H.264 restarts capture on inactive/active transitions to preserve frame order, while disconnected/non-receiving sessions can stop streaming work on the server.
 - **New QQ Support Enhancements**: Build-time latest Linux QQ URL resolution, hang detection, and auto-restart.
 - **Open Links Locally**: Links triggered inside QQ/WeChat now show a confirmation card first, then open in the local browser and are saved in jump history.
 
@@ -73,7 +73,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 
 - The session no longer depends only on fixed encoder settings. It now adjusts transport behavior based on real interaction state.
 - During mouse/keyboard activity, wheel input, dragging, or transfer contention, the pipeline temporarily prioritizes responsiveness over static quality.
-- Once interaction pressure is gone, inactive frame limiting can throttle the browser-facing send rate as low as 1 FPS without restarting the capture or streaming pipeline.
+- Once interaction pressure is gone, inactive frame limiting can throttle the browser-facing send rate as low as 1 FPS. JPEG can be throttled at send time, while H.264 restarts capture on inactive/active transitions so dependent frames are not dropped.
 - Automatic waiting/stall recovery now stays lightweight by default and avoids `STOP_VIDEO` / `START_VIDEO`, page reloads, or X11 stack repair unless the sidebar heavy-repair action is used.
 - Combined with stream recovery, X11 health checks, watchdogs, and IME/clipboard repair paths, the desktop feels more stable over long-running sessions.
 
@@ -331,7 +331,7 @@ Notes:
 
 - The default encoder profile is `x264enc` + `use_cpu=false` (prefer VAAPI).
 - The video settings encoder selector includes `x264enc-striped` as an optional CPU-only striped H.264 mode.
-- The inactive frame limiter can be set as low as 1 FPS and throttles sending without restarting the streaming capture pipeline.
+- The inactive frame limiter can be set as low as 1 FPS. JPEG throttles sending directly; H.264 applies the inactive profile by restarting capture and preserving encoded frame order.
 - Inactive limiting primarily reduces client decode/render work and outbound bandwidth; adaptive sleep is the mode that stops server-side streaming computation when no client is receiving.
 - A `VAAPI`/`CPU` badge is displayed next to the encoder selector in video settings.
 - Experimental injected encoder options that could cause black screen were removed (`vaapih264enc`, `vaapih265enc`, `vaapivp9enc`, `vaav1enc`).

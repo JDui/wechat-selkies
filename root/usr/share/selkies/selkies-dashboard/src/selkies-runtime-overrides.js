@@ -18,6 +18,7 @@
   var STREAM_STALL_THRESHOLD_MS = sanitizeInt(runtime.streamStallThresholdMs, 12000, 4000, 120000);
   var STREAM_STALL_RESTART_LIMIT = sanitizeInt(runtime.streamStallRestartLimit, 2, 1, 5);
   var STREAM_RECOVER_COOLDOWN_MS = sanitizeInt(runtime.streamRecoverCooldownMs, 120000, 30000, 600000);
+  var STREAM_RECOVERY_NOTICE_MAX_MS = sanitizeInt(runtime.streamRecoveryNoticeMaxMs, 22000, 8000, 120000);
   var VIDEO_CORRUPTION_WATCHDOG = sanitizeBool(runtime.videoCorruptionWatchdog, true);
   var VIDEO_SOFT_RECOVER_LIMIT = sanitizeInt(runtime.videoSoftRecoverLimit, 2, 1, 5);
   var VIDEO_RECOVER_COOLDOWN_MS = sanitizeInt(runtime.videoRecoverCooldownMs, 120000, 30000, 600000);
@@ -62,6 +63,7 @@
   var lastFrameProgressAt = 0;
   var streamRecoveryStage = 0;
   var streamRecoveryInFlight = false;
+  var streamRecoveryNoticeTimer = null;
   var frameTrackerBindTimer = null;
   var highLoadReleaseTimer = null;
   var streamRestartVerifyTimer = null;
@@ -1161,6 +1163,7 @@
       restoreDynamicLatency();
     }
     clearEncoderResetTimers();
+    clearStreamRecoveryNoticeTimer();
     suppressDynamicLatency(6000);
     sendDynamicLatencyState(false, "repair-reset");
     streamRecoveryInFlight = false;
@@ -1228,6 +1231,7 @@
     if (dynamicLatencyApplied) {
       restoreDynamicLatency();
     }
+    clearStreamRecoveryNoticeTimer();
     streamRecoveryInFlight = false;
     streamRecoveryStage = 0;
     waitingSinceMs = 0;
@@ -1431,6 +1435,10 @@
     var currentEncoder = getStoredValue("encoder");
     if (currentEncoder === null || !STABLE_ENCODERS.has(String(currentEncoder).toLowerCase())) {
       setStoredValue("encoder", preferredEncoder());
+    }
+    var currentRtcEncoder = getStoredValue("encoder_rtc");
+    if (currentRtcEncoder === null || !STABLE_ENCODERS.has(String(currentRtcEncoder).toLowerCase())) {
+      setStoredValue("encoder_rtc", preferredEncoder());
     }
   }
 
@@ -1970,10 +1978,48 @@
     lastFrameProgressAt = Date.now();
     waitingSinceMs = 0;
     if (streamRecoveryInFlight || streamRecoveryStage > 0) {
+      finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
+    }
+  }
+
+  function clearStreamRecoveryNoticeTimer() {
+    if (!streamRecoveryNoticeTimer) return;
+    window.clearTimeout(streamRecoveryNoticeTimer);
+    streamRecoveryNoticeTimer = null;
+  }
+
+  function finishStreamRecoveryActivity(detail, kind, ttlMs) {
+    clearStreamRecoveryNoticeTimer();
+    streamRecoveryInFlight = false;
+    streamRecoveryStage = 0;
+    waitingSinceMs = 0;
+    completeActivityTask("stream-reconfig", detail, kind, ttlMs);
+  }
+
+  function scheduleStreamRecoveryNoticeTimeout() {
+    clearStreamRecoveryNoticeTimer();
+    streamRecoveryNoticeTimer = window.setTimeout(function () {
+      streamRecoveryNoticeTimer = null;
+      if (!activityTasks["stream-reconfig"]) {
+        streamRecoveryInFlight = false;
+        streamRecoveryStage = 0;
+        waitingSinceMs = 0;
+        return;
+      }
+      if (!isStreamLikelyStalled()) {
+        finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
+        return;
+      }
       streamRecoveryInFlight = false;
       streamRecoveryStage = 0;
-      completeActivityTask("stream-reconfig", "\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
-    }
+      waitingSinceMs = 0;
+      completeActivityTask(
+        "stream-reconfig",
+        "\u81ea\u52a8\u6062\u590d\u547d\u4ee4\u5df2\u53d1\u9001\uff1b\u5982\u679c\u753b\u9762\u4ecd\u5f02\u5e38\uff0c\u8bf7\u5728\u4fa7\u8fb9\u680f\u70b9\u51fb\u91cd\u4fee\u590d\u3002",
+        "warning",
+        3200
+      );
+    }, STREAM_RECOVERY_NOTICE_MAX_MS);
   }
 
   function hasVisibleVideoStream() {
@@ -2047,8 +2093,10 @@
         progress: null,
         indeterminate: true,
         priority: 96,
-        startedAt: now
+        startedAt: now,
+        expiresAt: now + STREAM_RECOVERY_NOTICE_MAX_MS + 4000
       });
+      scheduleStreamRecoveryNoticeTimeout();
       sendRawDataCommand("RESET_IO_MODULES");
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
       window.setTimeout(function () {
@@ -2064,8 +2112,10 @@
       progress: null,
       indeterminate: true,
       priority: 97,
-      startedAt: now
+      startedAt: now,
+      expiresAt: now + STREAM_RECOVERY_NOTICE_MAX_MS + 4000
     });
+    scheduleStreamRecoveryNoticeTimeout();
     markRecoverTimestamp(now);
     sendRawDataCommand("RESET_IO_MODULES");
     sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
@@ -2088,6 +2138,9 @@
       }
       if (!isStreamLikelyStalled()) {
         waitingSinceMs = 0;
+        if (streamRecoveryStage > 0 && !streamRecoveryInFlight) {
+          finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
+        }
         return;
       }
       if (waitingSinceMs === 0) {
@@ -4961,6 +5014,7 @@
             suppressDynamicLatency(4000);
             waitingSinceMs = 0;
             noteFrameProgress();
+            clearStreamRecoveryNoticeTimer();
             scheduleKeyboardAssistFocus(120);
             completeActivityTask("stream-reconfig", "\u89c6\u9891\u7ba1\u7ebf\u5df2\u6062\u590d\u3002", "success", 1800);
           } else {

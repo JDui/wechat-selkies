@@ -31,17 +31,17 @@
 - **按需剪贴板同步**：不再监听本机剪贴板；`Ctrl+C` / `Ctrl+X` 会先让远端应用复制/剪切，再收取远端剪贴板，`Ctrl+V` 会先把本机剪贴板写入远端再粘贴。远端剪贴板若由应用自身发生变化，也会自动收剪板，并在底部活动提示中显示进度、成功、无变化或失败状态。
 - **链接本地打开**：微信 / QQ 内点击链接时，浏览器侧显示确认卡片，可用本机浏览器打开并保留历史。
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
-- **不活跃限帧**：浏览器长时间无鼠标键盘交互后，可把发送给客户端的帧率降到最低 `1 FPS`，降低客户端解码、渲染和 NAS 出站带宽压力；该模式不重启采集 / 推流管线。
+- **不活跃限帧**：浏览器长时间无鼠标键盘交互后，可把发送给客户端的帧率降到最低 `1 FPS`，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **自适应休眠**：当没有浏览器客户端在线接收视频流时，后台停止 Selkies 音视频管线计算，直到客户端重新开始接收流量后自动恢复。
 
 ## 快速开始
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.26.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.29.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.26.tar
+docker load -i wechat-selkies-1.29.tar
 ```
 
 启动：
@@ -56,7 +56,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.26
+  wechat-selkies:1.29
 ```
 
 访问：
@@ -77,7 +77,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.26
+    image: wechat-selkies:1.29
     container_name: wechat-selkies
     init: true
     ports:
@@ -185,7 +185,7 @@ services:
 ## 不活跃限帧与自适应休眠
 
 - 不活跃限帧用于“网页还开着但暂时不操作”的场景。它按时间间隔限制发送给浏览器的帧率，最低可到 `1 FPS`，主要降低浏览器解码 / 渲染负载和 NAS 出站带宽。
-- 不活跃限帧不会重启采集或推流管线，因此 NAS 端 CPU 会下降一些，但不一定按帧率等比例下降。
+- 不活跃限帧对 JPEG 使用发送端节流；对 H.264 会在进入 / 退出不活跃时重启采集应用低帧率配置，避免丢弃依赖帧导致坏块或解码器回退。
 - 自适应休眠用于“没有客户端在线接收视频流”的场景。后台会停止音视频管线计算，把 NAS 端占用降到更低；客户端重新开始接收流量后自动唤醒。
 - 自适应休眠不再按前端页面是否失焦、隐藏或熄屏判断，而是按是否存在在线且正在接收视频的客户端判断。
 
@@ -200,13 +200,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.26 .
+docker build -t wechat-selkies:1.29 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.26.tar wechat-selkies:1.26
+docker save -o wechat-selkies-1.29.tar wechat-selkies:1.29
 ```
 
 ## 故障排查
