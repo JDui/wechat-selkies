@@ -41,8 +41,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **Simplified PIN Login**: Password-only PIN page, no username field.
 - **Improved Image Copy/Paste**: Browser `Ctrl+V` image paste to remote clipboard with optional auto-paste into chat input.
 - **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
-- **Low-Latency Optimization**: Tuned defaults for interaction latency, plus stream auto-recovery and X11 self-healing.
-- **Inactive Frame Limiter and Adaptive Sleep**: Idle browser sessions can drop to low send FPS; H.264 restarts capture on inactive/active transitions to preserve frame order, while disconnected/non-receiving sessions can stop streaming work on the server.
+- **Dynamic Throttle and Adaptive Sleep**: Idle browser sessions can switch to low bandwidth, low framerate, or low occupancy modes, while disconnected/non-receiving sessions can stop streaming work on the server.
 - **New QQ Support Enhancements**: Build-time latest Linux QQ URL resolution, hang detection, and auto-restart.
 - **Open Links Locally**: Links triggered inside QQ/WeChat now show a confirmation card first, then open in the local browser and are saved in jump history.
 
@@ -69,11 +68,11 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - The `Miaomiao Toolbox` sidebar section exposes the passthrough toggle, browser notification tests, and QQ idle defocus timing.
 - The result is much closer to a native local-app reminder flow while still preserving the original in-container notification path.
 
-### Adaptive Dynamic Low-Latency Mode
+### Dynamic Throttle
 
 - The session no longer depends only on fixed encoder settings. It now adjusts transport behavior based on real interaction state.
 - During mouse/keyboard activity, wheel input, dragging, or transfer contention, the pipeline temporarily prioritizes responsiveness over static quality.
-- Once interaction pressure is gone, inactive frame limiting can throttle the browser-facing send rate as low as 1 FPS. JPEG can be throttled at send time, while H.264 restarts capture on inactive/active transitions so dependent frames are not dropped.
+- Once interaction pressure is gone, Dynamic Throttle can use low bandwidth, low framerate, or both together as low occupancy. JPEG can be throttled at send time, while H.264 restarts capture on idle/active transitions so dependent frames are not dropped.
 - Automatic waiting/stall recovery now stays lightweight by default and avoids `STOP_VIDEO` / `START_VIDEO`, page reloads, or X11 stack repair unless the sidebar heavy-repair action is used.
 - Combined with stream recovery, X11 health checks, watchdogs, and IME/clipboard repair paths, the desktop feels more stable over long-running sessions.
 
@@ -82,7 +81,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - Adaptive Sleep is based on whether any browser client is online and actively receiving video, not whether the foreground page is focused.
 - When no client is receiving video for the configured idle window, Selkies audio/video work is stopped to reduce server-side CPU usage.
 - Streaming wakes automatically when a browser client starts receiving video again.
-- This is separate from inactive frame limiting: inactive limiting mainly reduces browser decode load and outgoing bandwidth while the page is still connected; adaptive sleep is the deeper server-side idle mode.
+- This is separate from Dynamic Throttle: throttling mainly reduces browser decode load and outgoing bandwidth while the page is still connected; adaptive sleep is the deeper server-side idle mode.
 
 ## Screenshots
 ![WeChat Screenshot](./docs/images/wechat-selkies-1.jpg)
@@ -184,12 +183,12 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_DEFAULT_H264_STREAMING_MODE=true
           - SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY=false
           - SELKIES_DEFAULT_H264_CRF=30
-          - SELKIES_DYNAMIC_LOW_LATENCY=true
+          - SELKIES_DYNAMIC_THROTTLE=true
+          - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
           - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=1200
           - SELKIES_DYNAMIC_LOW_LATENCY_FPS=15
           - SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF=40
           - SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT=75
-          - SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER=true
           - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
           - SELKIES_STREAM_STALL_THRESHOLD_MS=18000
           - SELKIES_STREAM_STALL_RESTART_LIMIT=2
@@ -268,12 +267,12 @@ Configure the following environment variables in `docker-compose.yml`:
 | `QQ_WATCHDOG_X11_PING` | `true` | Use X11 window-title probe for QQ responsiveness checks |
 | `QQ_WATCHDOG_X11_TIMEOUT` | `2` | X11 probe timeout in seconds |
 | `DRI_NODE` | `/dev/dri/renderD128` | VAAPI render node path (GPU encoding is preferred when available) |
-| `SELKIES_DYNAMIC_LOW_LATENCY` | `true` | Enable inactive frame limiting from the browser sidebar |
-| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `1200` | Idle time after the last interaction before inactive limiting can engage |
-| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `15` | Default inactive send-rate cap; can be set from 1 to 120 FPS |
-| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `40` | H.264 CRF used while inactive limiting is active |
-| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `75` | Lower bound for inactive sampling/bitrate scaling |
-| `SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER` | `true` | Disable paint-over quality mode while inactive limiting is active |
+| `SELKIES_DYNAMIC_THROTTLE` | `true` | Enable Dynamic Throttle from the browser sidebar (`SELKIES_DYNAMIC_LOW_LATENCY` remains a legacy alias) |
+| `SELKIES_DYNAMIC_THROTTLE_MODE` | `idle-low-occupancy` | Idle mode: `idle-low-bandwidth`, `idle-low-framerate`, or `idle-low-occupancy` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `1200` | Idle time after the last interaction before throttling can engage; max `30000` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `15` | Default idle send-rate cap for low-framerate modes; can be set from 1 to 120 FPS |
+| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `40` | Legacy/default quality side of the combined idle throttle strength |
+| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `75` | Legacy/default sampling side of the combined idle throttle strength |
 | `SELKIES_ENABLE_BINARY_CLIPBOARD` | `true` | Enable binary clipboard (images, etc.) |
 | `SELKIES_PASTE_IMAGE` | `true` | Enable Ctrl+V image paste in browser |
 | `SELKIES_PASTE_IMAGE_MAX_SIZE` | `20971520` | Max image size in bytes (default 20MB) |
@@ -325,14 +324,14 @@ Notes:
 - The `Miaomiao Toolbox` section includes an `Adaptive Sleep` toggle.
 - When enabled, the container stops Selkies audio/video streaming after no browser client is online and receiving video for the configured idle window.
 - Streaming wakes automatically when a browser client starts receiving video again.
-- Keeping a browser tab open but still receiving video does not enter adaptive sleep; use inactive frame limiting for that case.
+- Keeping a browser tab open but still receiving video does not enter adaptive sleep; use Dynamic Throttle for that case.
 
 #### Encoder Mode Badge and VAAPI Fallback
 
 - The default encoder profile is `x264enc` + `use_cpu=false` (prefer VAAPI).
 - The video settings encoder selector includes `x264enc-striped` as an optional CPU-only striped H.264 mode.
-- The inactive frame limiter can be set as low as 1 FPS. JPEG throttles sending directly; H.264 applies the inactive profile by restarting capture and preserving encoded frame order.
-- Inactive limiting primarily reduces client decode/render work and outbound bandwidth; adaptive sleep is the mode that stops server-side streaming computation when no client is receiving.
+- Dynamic Throttle can use low bandwidth, low framerate, or both together as low occupancy. JPEG throttles sending directly; H.264 applies the idle profile by restarting capture and preserving encoded frame order.
+- Dynamic Throttle primarily reduces client decode/render work and outbound bandwidth; adaptive sleep is the mode that stops server-side streaming computation when no client is receiving.
 - A `VAAPI`/`CPU` badge is displayed next to the encoder selector in video settings.
 - Experimental injected encoder options that could cause black screen were removed (`vaapih264enc`, `vaapih265enc`, `vaapivp9enc`, `vaav1enc`).
 - The mode badge refreshes on initial load, encoder switches, and each sidebar/video-settings reopen as `CPU` or `VAAPI`.

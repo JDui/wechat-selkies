@@ -1,0 +1,23 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+AUDIO_USER="${AUDIO_SERVICE_USER:-abc}"
+audio_uid="$(id -u "$AUDIO_USER" 2>/dev/null || echo "${PUID:-1000}")"
+audio_gid="$(id -g "$AUDIO_USER" 2>/dev/null || echo "${PGID:-100}")"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$audio_uid}"
+
+mkdir -p "$runtime_dir" /config/.config/pulse
+chown -R "$audio_uid:$audio_gid" "$runtime_dir" /config/.config/pulse 2>/dev/null || true
+chmod 700 "$runtime_dir" /config/.config/pulse 2>/dev/null || true
+
+export HOME="${HOME:-/config}"
+export XDG_RUNTIME_DIR="$runtime_dir"
+export PULSE_RUNTIME_PATH="$runtime_dir/pulse"
+export PULSE_SERVER="unix:$runtime_dir/pulse/native"
+
+exec s6-setuidgid "$AUDIO_USER" \
+  env -u PULSE_SERVER /usr/bin/pulseaudio \
+    --log-level=0 \
+    --log-target=stderr \
+    --daemonize=no \
+    --exit-idle-time=-1 > /dev/null 2>&1

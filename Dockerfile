@@ -13,10 +13,15 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 # Build arguments for multi-arch support
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
+ARG UBUNTU_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu/"
 RUN echo "Building WeChat-Selkies on $BUILDPLATFORM, targeting $TARGETPLATFORM"
 
 # set environment variables
-RUN apt-get update && \
+RUN if [ -n "$UBUNTU_APT_MIRROR" ]; then \
+      sed -i "s|http://archive.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR%/}/|g; s|http://security.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR%/}/|g" /etc/apt/sources.list; \
+    fi
+
+RUN apt-get update -o Acquire::Retries=5 && \
     apt-get install -y fonts-noto-cjk libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
     libxcb-render-util0 libxcb-xkb1 libxkbcommon-x11-0 \
     shared-mime-info desktop-file-utils libxcb1 libxcb-icccm4 libxcb-image0 \
@@ -27,9 +32,10 @@ RUN apt-get update && \
     libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 \
     libxcomposite1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 \
     libxss1 libxtst6 libatomic1 libxcomposite1 libxrender1 libxrandr2 libxkbcommon-x11-0 \
-    libfontconfig1 libdbus-1-3 libnss3 libx11-xcb1 python3-tk stalonetray xprintidle xdotool
+    libfontconfig1 libdbus-1-3 libnss3 libx11-xcb1 python3-tk stalonetray xprintidle xdotool \
+    pulseaudio pulseaudio-utils alsa-utils
 
-RUN pip install --no-cache-dir python-xlib
+RUN pip install --no-cache-dir python-xlib pulsectl
 
 # Install WeChat based on target architecture (resolve latest URL/version from official Linux WeChat page)
 RUN case "$TARGETPLATFORM" in \
@@ -113,7 +119,7 @@ ENV WATCHDOG_RESTART_QQ="true"
 ENV WATCHDOG_LOG_PATH="/config/logs/process-watchdog.log"
 ENV NOTIFICATION_BRIDGE_PORT="38081"
 ENV NOTIFICATION_BRIDGE_LOG_PATH="/config/logs/notification-bridge.log"
-ENV NOTIFICATION_BRIDGE_LOG_MAX_BYTES="4194304"
+ENV NOTIFICATION_BRIDGE_LOG_MAX_BYTES="2097152"
 ENV NOTIFICATION_BRIDGE_RAW_LOG_PATH="/config/logs/notification-bridge-raw.log"
 ENV NOTIFICATION_BRIDGE_MODE_PATH="/config/state/notification-bridge.json"
 ENV NOTIFICATION_BRIDGE_FALLBACK_POLL_MS="1200"
@@ -150,13 +156,12 @@ ENV SELKIES_DEFAULT_USE_CPU="false"
 ENV SELKIES_DEFAULT_H264_STREAMING_MODE="true"
 ENV SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY="false"
 ENV SELKIES_DEFAULT_H264_CRF="30"
-ENV SELKIES_DYNAMIC_LOW_LATENCY="true"
+ENV SELKIES_DYNAMIC_THROTTLE="true"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS="1200"
+ENV SELKIES_DYNAMIC_THROTTLE_MODE="idle-low-occupancy"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="15"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF="40"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_SCALE_PERCENT="85"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT="75"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER="true"
 ENV SELKIES_STREAM_WAIT_THRESHOLD_MS="35000"
 ENV SELKIES_STREAM_STALL_THRESHOLD_MS="18000"
 ENV SELKIES_STREAM_STALL_RESTART_LIMIT="2"
@@ -197,7 +202,9 @@ RUN sed -i 's/\r$//' \
     /defaults/dunstrc \
     /defaults/menu.xml \
     /scripts/start.sh \
+    /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run \
     /scripts/process-watchdog.sh \
+    /scripts/ensure-audio-service.sh \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
@@ -221,8 +228,10 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
+    /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run \
     /scripts/start.sh \
     /scripts/process-watchdog.sh \
+    /scripts/ensure-audio-service.sh \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \

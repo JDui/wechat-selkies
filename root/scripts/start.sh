@@ -77,6 +77,27 @@ start_notification_bridge() {
     fi
 }
 
+configure_audio_environment() {
+    local audio_user uid runtime_dir
+    audio_user="${AUDIO_SERVICE_USER:-abc}"
+    uid="$(id -u "$audio_user" 2>/dev/null || echo "${PUID:-1000}")"
+    runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+    export XDG_RUNTIME_DIR="$runtime_dir"
+    export PULSE_RUNTIME_PATH="$runtime_dir/pulse"
+    export PULSE_SERVER="unix:$runtime_dir/pulse/native"
+    mkdir -p "$runtime_dir" /config/.config/pulse 2>/dev/null || true
+    chmod 700 "$runtime_dir" 2>/dev/null || true
+}
+
+start_audio_service() {
+    AUDIO_SERVICE_LOG_PATH="${AUDIO_SERVICE_LOG_PATH:-/config/logs/audio-service.log}"
+    if ensure_log_dir "$AUDIO_SERVICE_LOG_PATH"; then
+        /scripts/ensure-audio-service.sh >>"$AUDIO_SERVICE_LOG_PATH" 2>&1 || true
+    else
+        /scripts/ensure-audio-service.sh >/tmp/audio-service.log 2>&1 || true
+    fi
+}
+
 start_session_auth_bridge() {
     if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
         SELKIES_SESSION_AUTH_LOG_PATH="${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}"
@@ -203,7 +224,10 @@ fi
 
 patch_openbox_right_click_menu
 
+chmod 1777 /tmp 2>/dev/null || true
+configure_audio_environment
 start_tray
+start_audio_service
 start_notification_daemon
 start_session_auth_bridge
 start_notification_bridge

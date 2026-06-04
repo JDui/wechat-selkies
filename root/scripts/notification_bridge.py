@@ -646,6 +646,8 @@ def monitor_wechat_audio_events():
 
     candidates = {}
     recent_emit_by_signature = {}
+    last_error_text = None
+    last_error_logged_at = 0.0
 
     def cleanup_recent(now_ts):
         expired = [
@@ -714,7 +716,12 @@ def monitor_wechat_audio_events():
                         candidate["props"] = props
                     candidate["peak"] = max(candidate.get("peak", 0.0), sample_sink_input_peak(pulse, sink_input))
         except Exception as exc:
-            print(f"[notification-bridge] wechat audio monitor error: {exc}", flush=True)
+            now_ts = time.time()
+            error_text = str(exc)
+            if error_text != last_error_text or now_ts - last_error_logged_at >= 30.0:
+                print(f"[notification-bridge] wechat audio monitor error: {exc}", flush=True)
+                last_error_text = error_text
+                last_error_logged_at = now_ts
         finally:
             if pulse is not None:
                 try:

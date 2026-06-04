@@ -434,7 +434,8 @@
       String(config.fps),
       String(config.crf),
       String(config.samplePercent),
-      config.disablePaintOver ? "1" : "0"
+      config.disablePaintOver ? "1" : "0",
+      config.mode
     ].join(",");
     sendRawDataCommand(payload);
   }
@@ -1397,12 +1398,12 @@
     var defaultPaintOver = sanitizeBool(runtime.defaultUsePaintOverQuality, false);
     var defaultH264Crf = sanitizeInt(runtime.defaultH264Crf, 30, 5, 50);
     var dynamicLatencyEnabled = sanitizeBool(runtime.dynamicLowLatencyEnabled, true);
-    var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 10000);
+    var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 30000);
+    var dynamicThrottleMode = sanitizeThrottleMode(runtime.dynamicThrottleMode || runtime.dynamicLowLatencyMode);
     var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120);
     var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 50);
-    var dynamicLatencyScale = sanitizeInt(runtime.dynamicLowLatencyScalePercent, 75, 25, 100);
     var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100);
-    var dynamicLatencyDisablePaint = sanitizeBool(runtime.dynamicLowLatencyDisablePaintOver, true);
+    var dynamicThrottleStrength = deriveThrottleStrength(dynamicLatencyCrf, dynamicLatencySample);
 
     setStoredDefault("framerate", frameRate);
     if (GAMEPAD_UI_ENABLED) {
@@ -1423,10 +1424,12 @@
     setStoredDefault("h264_crf", defaultH264Crf);
     setStoredDefault("dynamic_low_latency_enabled", dynamicLatencyEnabled);
     setStoredDefault("dynamic_low_latency_hold_ms", dynamicLatencyHoldMs);
+    setStoredDefault("dynamic_throttle_mode", dynamicThrottleMode);
     setStoredDefault("dynamic_low_latency_fps", dynamicLatencyFps);
     setStoredDefault("dynamic_low_latency_h264_crf", dynamicLatencyCrf);
     setStoredDefault("dynamic_low_latency_sample_percent", dynamicLatencySample);
-    setStoredDefault("dynamic_low_latency_disable_paint_over", dynamicLatencyDisablePaint);
+    setStoredDefault("dynamic_throttle_strength", dynamicThrottleStrength);
+    setStoredDefault("dynamic_low_latency_disable_paint_over", dynamicThrottleMode === "idle-low-occupancy");
     setStoredDefault("bottom_action_clipboard_buttons_enabled", false);
     setStoredValue("ui_show_sidebar", true);
     setStoredValue("ui_show_core_buttons", true);
@@ -1993,7 +1996,9 @@
     streamRecoveryInFlight = false;
     streamRecoveryStage = 0;
     waitingSinceMs = 0;
-    completeActivityTask("stream-reconfig", detail, kind, ttlMs);
+    if (activityTasks["stream-reconfig"]) {
+      completeActivityTask("stream-reconfig", detail, kind, ttlMs);
+    }
   }
 
   function scheduleStreamRecoveryNoticeTimeout() {
@@ -2081,22 +2086,6 @@
     streamRecoveryInFlight = true;
     streamRecoveryStage += 1;
     if (streamRecoveryStage <= Math.max(1, VIDEO_SOFT_RECOVER_LIMIT)) {
-      var detail =
-        streamRecoveryStage === 1
-          ? "\u68c0\u6d4b\u5230\u89c6\u9891\u5e27\u957f\u65f6\u95f4\u672a\u66f4\u65b0\uff0c\u5148\u6267\u884c\u8f7b\u91cf\u6062\u590d\u3002"
-          : "\u89c6\u9891\u4ecd\u672a\u6062\u590d\uff0c\u7ee7\u7eed\u6267\u884c\u8f7b\u91cf\u6062\u590d\uff0c\u4e0d\u91cd\u542f\u5b8c\u6574\u63a8\u6d41\u7ba1\u7ebf\u3002";
-      setActivityTask("stream-reconfig", {
-        title: "\u6b63\u5728\u81ea\u52a8\u6062\u590d\u63a8\u6d41",
-        detail: detail,
-        phase: streamRecoveryStage === 1 ? "\u8f6f\u6062\u590d" : "\u52a0\u5f3a\u8f6f\u6062\u590d",
-        kind: "warning",
-        progress: null,
-        indeterminate: true,
-        priority: 96,
-        startedAt: now,
-        expiresAt: now + STREAM_RECOVERY_NOTICE_MAX_MS + 4000
-      });
-      scheduleStreamRecoveryNoticeTimeout();
       sendRawDataCommand("RESET_IO_MODULES");
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
       window.setTimeout(function () {
@@ -3172,22 +3161,54 @@
     window.setInterval(hideDisabledGamepadUi, 8000);
   }
 
+  function sanitizeThrottleMode(value) {
+    var safe = String(value || "idle-low-occupancy").trim();
+    if (safe === "idle-low-bandwidth" || safe === "bandwidth" || safe === "low-bandwidth") return "idle-low-bandwidth";
+    if (safe === "idle-low-framerate" || safe === "framerate" || safe === "low-framerate") return "idle-low-framerate";
+    return "idle-low-occupancy";
+  }
+
+  function deriveThrottleStrength(crf, samplePercent) {
+    var sampleScore = Math.round((100 - sanitizeInt(samplePercent, 75, 10, 100)) / 0.9);
+    var crfScore = Math.round((sanitizeInt(crf, 40, 5, 60) - 30) / 0.3);
+    return Math.max(0, Math.min(100, Math.max(sampleScore, crfScore)));
+  }
+
+  function strengthToCrf(strength) {
+    return Math.max(5, Math.min(60, Math.round(30 + sanitizeInt(strength, 35, 0, 100) * 0.3)));
+  }
+
+  function strengthToSamplePercent(strength) {
+    return Math.max(10, Math.min(100, Math.round(100 - sanitizeInt(strength, 35, 0, 100) * 0.9)));
+  }
+
+  function modeUsesBandwidth(mode) {
+    return mode === "idle-low-bandwidth" || mode === "idle-low-occupancy";
+  }
+
+  function modeUsesFramerate(mode) {
+    return mode === "idle-low-framerate" || mode === "idle-low-occupancy";
+  }
+
   function getDynamicLatencyConfig() {
+    var mode = sanitizeThrottleMode(getStoredValue("dynamic_throttle_mode") || runtime.dynamicThrottleMode || runtime.dynamicLowLatencyMode);
+    var fallbackStrength = deriveThrottleStrength(
+      sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 60),
+      sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100)
+    );
+    var strength = sanitizeInt(getStoredValue("dynamic_throttle_strength"), fallbackStrength, 0, 100);
+    var fps = sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120), 1, 120);
+    var crf = modeUsesBandwidth(mode) ? strengthToCrf(strength) : sanitizeInt(getStoredValue("h264_crf"), sanitizeInt(runtime.defaultH264Crf, 30, 5, 50), 5, 60);
+    var samplePercent = modeUsesBandwidth(mode) ? strengthToSamplePercent(strength) : 100;
     return {
       enabled: sanitizeBool(getStoredValue("dynamic_low_latency_enabled"), sanitizeBool(runtime.dynamicLowLatencyEnabled, true)),
-      holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 10000), 300, 10000),
-      fps: sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120), 1, 120),
-      crf: sanitizeInt(getStoredValue("dynamic_low_latency_h264_crf"), sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 60), 5, 60),
-      samplePercent: sanitizeInt(
-        getStoredValue("dynamic_low_latency_sample_percent"),
-        sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100),
-        10,
-        100
-      ),
-      disablePaintOver: sanitizeBool(
-        getStoredValue("dynamic_low_latency_disable_paint_over"),
-        sanitizeBool(runtime.dynamicLowLatencyDisablePaintOver, true)
-      )
+      mode: mode,
+      holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 30000), 300, 30000),
+      fps: modeUsesFramerate(mode) ? fps : sanitizeInt(getStoredValue("framerate"), sanitizeInt(runtime.defaultFramerate, 48, 1, 240), 1, 240),
+      strength: strength,
+      crf: crf,
+      samplePercent: samplePercent,
+      disablePaintOver: mode === "idle-low-occupancy"
     };
   }
 
@@ -3198,6 +3219,7 @@
       settings: {
         displayId: "primary",
         dynamic_low_latency_enabled: config.enabled,
+        dynamic_throttle_mode: config.mode,
         dynamic_low_latency_fps: config.fps,
         dynamic_low_latency_h264_crf: config.crf,
         dynamic_low_latency_sample_percent: config.samplePercent,
@@ -3334,9 +3356,11 @@
     var safe = config || getDynamicLatencyConfig();
     return [
       safe.enabled ? "1" : "0",
+      safe.mode,
       String(safe.fps),
       String(safe.crf),
       String(safe.samplePercent),
+      String(safe.strength),
       safe.disablePaintOver ? "1" : "0"
     ].join("|");
   }
@@ -3394,7 +3418,7 @@
     var motionInterval = Math.max(16, Math.round(1000 / Math.max(8, config.fps || 36)));
     document.body.setAttribute("data-selkies-low-latency-motion-ms", String(motionInterval));
     document.body.setAttribute("data-selkies-low-latency-level", String(config.crf || 34));
-    document.body.setAttribute("data-selkies-low-latency-effects", config.disablePaintOver ? "minimal" : "normal");
+    document.body.setAttribute("data-selkies-throttle-mode", config.mode);
   }
 
   function restoreDynamicLatency() {
@@ -3443,17 +3467,16 @@
     section.innerHTML =
       '<details class="selkies-link-details">' +
       '<summary class="selkies-link-summary">' +
-      '<span class="selkies-link-sidebar-title">\u52a8\u6001\u4f4e\u5ef6\u8fdf</span>' +
-      '<span class="selkies-link-summary-meta">\u4e0d\u6d3b\u8dc3\u9650\u5e27</span>' +
+      '<span class="selkies-link-sidebar-title">\u52a8\u6001\u8282\u6d41</span>' +
+      '<span class="selkies-link-summary-meta">\u95f2\u7f6e\u964d\u8f7d</span>' +
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-dll-grid">' +
-      '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u4e0d\u6d3b\u8dc3\u9650\u5e27</span><input type="checkbox" data-dll="enabled"></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8fdb\u5165\u4e0d\u6d3b\u8dc3\u5ef6\u8fdf</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="5000" step="100" data-dll="hold"><div class="selkies-dll-note">\u505c\u6b62\u9f20\u6807\u6216\u952e\u76d8\u4ea4\u4e92\u8fbe\u5230\u8fd9\u4e2a\u65f6\u957f\u540e\uff0c\u5f00\u59cb\u9650\u5236\u5f53\u524d\u9875\u9762\u7684\u53d1\u9001\u5e27\u7387\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u5e27\u7387\u4e0a\u9650</span><div class="selkies-dll-value" data-dll-value="fps"></div></div><input type="range" min="1" max="60" step="1" data-dll="fps"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u9650\u5236\u6700\u9ad8\u53d1\u9001\u5e27\u7387\uff1b\u5e26\u5bbd\u4f1a\u6309\u6b64\u5e27\u7387\u4e0e\u5f53\u524d\u8bbe\u7f6e\u5e27\u7387\u7684\u6bd4\u4f8b\u540c\u6b65\u4e0b\u8c03\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u964d\u8f7d\u7ea7\u522b</span><div class="selkies-dll-value" data-dll-value="crf"></div></div><input type="range" min="5" max="60" step="1" data-dll="crf"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u9650\u5e27\u671f\u95f4\u4f7f\u7528\uff1b\u4efb\u4f55\u4ea4\u4e92\u90fd\u4f1a\u7acb\u5373\u6062\u590d\u539f\u59cb\u753b\u9762\u53c2\u6570\u3002</div></div>' +
-      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u4e0d\u6d3b\u8dc3\u964d\u91c7\u6837\u4e0b\u9650</span><div class="selkies-dll-value" data-dll-value="sample"></div></div><input type="range" min="10" max="100" step="1" data-dll="sample"><div class="selkies-dll-note">\u4e0d\u6d3b\u8dc3\u65f6\u4f1a\u6309\u9650\u5e27\u6bd4\u4f8b\u964d\u4f4e\u5e26\u5bbd\uff0c\u4f46\u4e0d\u4f1a\u628a\u7f16\u7801\u91c7\u6837\u538b\u5230\u4f4e\u4e8e\u8fd9\u4e2a\u767e\u5206\u6bd4\u3002</div></div>' +
-      '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u7cbe\u7b80\u7279\u6548</span><input type="checkbox" data-dll="paint"></div>' +
+      '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u52a8\u6001\u8282\u6d41</span><input type="checkbox" data-dll="enabled"></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8282\u6d41\u6a21\u5f0f</span></div><select class="selkies-dll-select" data-dll="mode"><option value="idle-low-bandwidth">\u95f2\u7f6e\u4f4e\u5e26\u5bbd</option><option value="idle-low-framerate">\u95f2\u7f6e\u4f4e\u5e27\u7387</option><option value="idle-low-occupancy">\u95f2\u7f6e\u4f4e\u5360\u7528</option></select></div>' +
+      '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8fdb\u5165\u95f2\u7f6e\u5ef6\u8fdf</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="30000" step="100" data-dll="hold"></div>' +
+      '<div class="selkies-dll-field" data-dll-field="fps"><div class="selkies-dll-row"><span>\u95f2\u7f6e\u5e27\u7387\u4e0a\u9650</span><div class="selkies-dll-value" data-dll-value="fps"></div></div><input type="range" min="1" max="60" step="1" data-dll="fps"></div>' +
+      '<div class="selkies-dll-field" data-dll-field="strength"><div class="selkies-dll-row"><span>\u95f2\u7f6e\u8282\u6d41\u5f3a\u5ea6</span><div class="selkies-dll-value" data-dll-value="strength"></div></div><input type="range" min="0" max="100" step="1" data-dll="strength"></div>' +
       "</div>" +
       "</div>" +
       "</details>";
@@ -3477,23 +3500,25 @@
         ".selkies-dll-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px;color:#e2e8f0}" +
         ".selkies-dll-row-compact{padding:2px 0}" +
         ".selkies-dll-field input[type='range']{width:100%;accent-color:#38bdf8}" +
+        ".selkies-dll-select{width:100%;border:1px solid rgba(148,163,184,.28);border-radius:8px;background:#0f172a;color:#e2e8f0;padding:7px 8px;font-size:11px}" +
         ".selkies-dll-row input[type='checkbox']{accent-color:#38bdf8}" +
-        ".selkies-dll-value{font-size:10px;color:#93c5fd;min-width:46px;text-align:right}" +
-        ".selkies-dll-note{font-size:10px;line-height:1.45;color:#94a3b8}";
+        ".selkies-dll-value{font-size:10px;color:#93c5fd;min-width:46px;text-align:right}";
       document.head.appendChild(style);
     }
 
     var config = getDynamicLatencyConfig();
     section.querySelector('[data-dll="enabled"]').checked = config.enabled;
+    section.querySelector('[data-dll="mode"]').value = config.mode;
     section.querySelector('[data-dll="hold"]').value = String(config.holdMs);
     section.querySelector('[data-dll="fps"]').value = String(config.fps);
-    section.querySelector('[data-dll="crf"]').value = String(config.crf);
-    section.querySelector('[data-dll="sample"]').value = String(config.samplePercent);
-    section.querySelector('[data-dll="paint"]').checked = config.disablePaintOver;
+    section.querySelector('[data-dll="strength"]').value = String(config.strength);
     section.querySelector('[data-dll-value="hold"]').textContent = (config.holdMs / 1000).toFixed(1) + "s";
     section.querySelector('[data-dll-value="fps"]').textContent = String(config.fps);
-    section.querySelector('[data-dll-value="crf"]').textContent = String(config.crf);
-    section.querySelector('[data-dll-value="sample"]').textContent = String(config.samplePercent) + "%";
+    section.querySelector('[data-dll-value="strength"]').textContent = String(config.strength);
+    var fpsField = section.querySelector('[data-dll-field="fps"]');
+    var strengthField = section.querySelector('[data-dll-field="strength"]');
+    if (fpsField) fpsField.style.display = modeUsesFramerate(config.mode) ? "" : "none";
+    if (strengthField) strengthField.style.display = modeUsesBandwidth(config.mode) ? "" : "none";
 
     if (!section.dataset.bound) {
       section.dataset.bound = "1";
@@ -3504,9 +3529,10 @@
         if (key === "enabled") {
           setStoredValue("dynamic_low_latency_enabled", !!target.checked);
           syncDynamicLatencySettingsToBackend();
-        } else if (key === "paint") {
-          setStoredValue("dynamic_low_latency_disable_paint_over", !!target.checked);
+        } else if (key === "mode") {
+          setStoredValue("dynamic_throttle_mode", target.value);
           syncDynamicLatencySettingsToBackend();
+          renderDynamicLatencySection();
         } else if (key === "hold") {
           setStoredValue("dynamic_low_latency_hold_ms", target.value);
           section.querySelector('[data-dll-value="hold"]').textContent = (Number(target.value) / 1000).toFixed(1) + "s";
@@ -3514,13 +3540,11 @@
           setStoredValue("dynamic_low_latency_fps", target.value);
           section.querySelector('[data-dll-value="fps"]').textContent = target.value;
           syncDynamicLatencySettingsToBackend();
-        } else if (key === "crf") {
-          setStoredValue("dynamic_low_latency_h264_crf", target.value);
-          section.querySelector('[data-dll-value="crf"]').textContent = target.value;
-          syncDynamicLatencySettingsToBackend();
-        } else if (key === "sample") {
-          setStoredValue("dynamic_low_latency_sample_percent", target.value);
-          section.querySelector('[data-dll-value="sample"]').textContent = target.value + "%";
+        } else if (key === "strength") {
+          setStoredValue("dynamic_throttle_strength", target.value);
+          setStoredValue("dynamic_low_latency_h264_crf", strengthToCrf(target.value));
+          setStoredValue("dynamic_low_latency_sample_percent", strengthToSamplePercent(target.value));
+          section.querySelector('[data-dll-value="strength"]').textContent = target.value;
           syncDynamicLatencySettingsToBackend();
           if (dynamicLatencyApplied) {
             applyDynamicLatencyEncodingProfile(true, getDynamicLatencyConfig());
@@ -3537,8 +3561,9 @@
           if (!target.checked) {
             restoreDynamicLatency();
           }
-        } else if (key === "paint") {
-          setStoredValue("dynamic_low_latency_disable_paint_over", !!target.checked);
+        } else if (key === "mode") {
+          setStoredValue("dynamic_throttle_mode", target.value);
+          renderDynamicLatencySection();
           syncDynamicLatencySettingsToBackend();
         }
       });
@@ -3600,16 +3625,6 @@
     }, 320);
 
     sendRawDataCommand("RESET_IO_MODULES");
-    setActivityTask("repair-ime-clipboard", {
-      title: "\u5df2\u6267\u884c\u8f7b\u4fee\u590d",
-      detail: "\u5df2\u91cd\u7f6e\u952e\u76d8\u4fee\u9970\u952e\u3001IME \u7126\u70b9\u4e0e\u526a\u8d34\u677f\u5185\u90e8\u72b6\u6001\uff0c\u672a\u91cd\u542f X11 \u6216\u63a8\u6d41\u3002",
-      kind: "success",
-      progress: 100,
-      indeterminate: false,
-      priority: 70,
-      startedAt: Date.now(),
-      expiresAt: Date.now() + 2600
-    });
   }
 
   function repairImeAndClipboardHeavy() {
@@ -5016,7 +5031,9 @@
             noteFrameProgress();
             clearStreamRecoveryNoticeTimer();
             scheduleKeyboardAssistFocus(120);
-            completeActivityTask("stream-reconfig", "\u89c6\u9891\u7ba1\u7ebf\u5df2\u6062\u590d\u3002", "success", 1800);
+            if (activityTasks["stream-reconfig"]) {
+              completeActivityTask("stream-reconfig", "\u89c6\u9891\u7ba1\u7ebf\u5df2\u6062\u590d\u3002", "success", 1800);
+            }
           } else {
             suppressDynamicLatency(2000);
             if (dynamicLatencyApplied) {
