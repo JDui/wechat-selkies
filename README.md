@@ -95,15 +95,20 @@ services:
       - AUTO_START_WECHAT=true
       - AUTO_START_QQ=false
       - SELKIES_SESSION_MODE=pin-takeover
+      - CUSTOM_WS_PORT=8081
+      - WATCHDOG_AUDIO=true
       - SELKIES_VIDEO_CORRUPTION_WATCHDOG=true
       - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
       - SELKIES_DEFAULT_ENCODER=x264enc
+      - SELKIES_DISABLE_GAMEPAD=true
       - SELKIES_DYNAMIC_LOW_LATENCY=true
-      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=15
-      - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=1200
+      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
+      - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
-    shm_size: "1gb"
+    mem_reservation: "2g"
+    mem_limit: "8g"
+    shm_size: "2gb"
     restart: unless-stopped
 ```
 
@@ -142,10 +147,10 @@ services:
 | `SELKIES_DEFAULT_H264_STREAMING_MODE` | `true` | 默认开启 H264 streaming mode |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | 默认 H264 CRF |
 | `SELKIES_DYNAMIC_LOW_LATENCY` | `true` | 启用不活跃限帧 |
-| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `1200` | 最后一次交互后多久进入不活跃限帧 |
-| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `15` | 不活跃发送帧率上限，可设置为 `1` 到 `120` |
-| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `40` | 不活跃限帧期间使用的 H264 CRF |
-| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `75` | 不活跃采样 / 带宽缩放下限 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `15000` | 最后一次交互后多久进入不活跃限帧 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | 不活跃发送帧率上限，可设置为 `1` 到 `120` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | 不活跃限帧期间使用的 H264 CRF |
+| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 不活跃采样 / 带宽缩放下限 |
 | `SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER` | `true` | 不活跃限帧期间关闭 paint-over 质量模式 |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 没有客户端在线接收视频流多久后进入自适应休眠 |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |

@@ -18,20 +18,5 @@
 <body>
   <div id="app"></div>
   <div id="root"></div>
-  <div id="touch-gamepad-host"></div>
-  <script>
-    (function () {
-      var runtime = window.__SELKIES_RUNTIME__ || {};
-      var enabled = runtime.gamepadUiEnabled !== false;
-      var host = document.getElementById("touch-gamepad-host");
-      if (!enabled) {
-        if (host) host.remove();
-        return;
-      }
-      var script = document.createElement("script");
-      script.src = "src/universalTouchGamepad.js";
-      document.body.appendChild(script);
-    })();
-  </script>
 </body>
 </html>

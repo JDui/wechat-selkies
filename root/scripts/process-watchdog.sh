@@ -29,6 +29,20 @@ log() {
     printf '%s [watchdog] %s\n' "$(date -Iseconds)" "$*"
 }
 
+setup_state_dir() {
+    local dir="${WATCHDOG_STATE_DIR:-/config/state/watchdog}"
+    if mkdir -p "$dir" 2>/dev/null; then
+        printf '%s\n' "$dir"
+        return
+    fi
+    dir="/run/wechat-selkies-watchdog"
+    if mkdir -p "$dir" 2>/dev/null; then
+        printf '%s\n' "$dir"
+        return
+    fi
+    printf '%s\n' "/tmp"
+}
+
 safe_restart() {
     local name="$1"
     local cmd="$2"
@@ -39,7 +53,7 @@ safe_restart() {
         min_cooldown=60
     fi
 
-    local stamp_file="/tmp/watchdog-${name}.stamp"
+    local stamp_file="${watchdog_state_dir}/watchdog-${name}.stamp"
     local last=0
     if [ -f "$stamp_file" ]; then
         last="$(cat "$stamp_file" 2>/dev/null || echo 0)"
@@ -57,11 +71,15 @@ safe_restart() {
 
 interval="$(validate_interval "${WATCHDOG_INTERVAL:-20}")"
 qq_fail_threshold="$(validate_threshold "${QQ_WATCHDOG_FAIL_THRESHOLD:-3}")"
-qq_fail_counter_file="/tmp/watchdog-qq-fail.count"
 x11_fail_threshold="$(validate_threshold "${X11_WATCHDOG_FAIL_THRESHOLD:-2}")"
-x11_fail_counter_file="/tmp/watchdog-x11-fail.count"
+watchdog_state_dir="$(setup_state_dir)"
+qq_fail_counter_file="${watchdog_state_dir}/watchdog-qq-fail.count"
+x11_fail_counter_file="${watchdog_state_dir}/watchdog-x11-fail.count"
+lock_file="${watchdog_state_dir}/wechat-selkies-watchdog.lock"
 
-exec 9>/tmp/wechat-selkies-watchdog.lock
+chmod 1777 /tmp 2>/dev/null || true
+
+exec 9>"$lock_file"
 if ! flock -n 9; then
     log "already running, exit"
     exit 0
@@ -94,6 +112,17 @@ while true; do
 
     if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
         safe_restart "session-auth-bridge" "python3 -u /scripts/session_auth_bridge.py >>\"${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}\" 2>&1"
+    fi
+
+    if is_true "${WATCHDOG_AUDIO:-true}"; then
+        audio_user="${AUDIO_SERVICE_USER:-abc}"
+        audio_uid="$(id -u "$audio_user" 2>/dev/null || echo "${PUID:-1000}")"
+        runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$audio_uid}"
+        pulse_runtime_path="${PULSE_RUNTIME_PATH:-$runtime_dir/pulse}"
+        pulse_server="${PULSE_SERVER:-unix:$runtime_dir/pulse/native}"
+        if ! XDG_RUNTIME_DIR="$runtime_dir" PULSE_RUNTIME_PATH="$pulse_runtime_path" PULSE_SERVER="$pulse_server" pactl info >/dev/null 2>&1; then
+            safe_restart "audio-service" "/scripts/ensure-audio-service.sh >>\"${AUDIO_SERVICE_LOG_PATH:-/config/logs/audio-service.log}\" 2>&1"
+        fi
     fi
 
     if is_true "${AUTO_START_QQ:-false}" && is_true "${WATCHDOG_RESTART_QQ:-true}"; then

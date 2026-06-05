@@ -28,7 +28,7 @@
   var lastSessionCheckAt = 0;
   var staleSessionHandled = false;
   var videoHealthEvents = [];
-  var GAMEPAD_UI_ENABLED = sanitizeBool(runtime.gamepadUiEnabled, sanitizeBool(runtime.defaultGamepadEnabled, false));
+  var GAMEPAD_UI_ENABLED = false;
   var LOCAL_LINK_OPEN_ENABLED = sanitizeBool(runtime.localLinkOpenEnabled, true);
   var LOCAL_LINK_POLL_INTERVAL_MS = sanitizeInt(runtime.localLinkPollIntervalMs, 800, 300, 10000);
   var LOCAL_LINK_AUTO_CLOSE_MS = 15000;
@@ -80,8 +80,11 @@
   var lastFrontendInteractionAt = Date.now();
   var BASE_BRAND_TITLE = "AXi-SNS-Box";
   var notificationCursorKey = "notification_cursor_v1";
+  var notificationHistoryKey = "notification_history_v1";
   var notificationCursor = parseTimestamp(getStoredValue(notificationCursorKey));
   var notificationPollTimer = null;
+  var notificationHistoryRenderTimer = null;
+  var notificationCenterOpen = sanitizeBool(getStoredValue("notification_center_open"), false);
   var unreadTitleFlashTimer = null;
   var unreadTitleFlashPhase = false;
   var unreadIconFlashTimer = null;
@@ -103,6 +106,7 @@
   var bottomActionSplitOpen = false;
   var bottomActionDockCollapsed = sanitizeBool(getStoredValue("bottom_action_dock_collapsed"), false);
   var bottomActionClipboardButtonsEnabled = sanitizeBool(getStoredValue("bottom_action_clipboard_buttons_enabled"), false);
+  var bottomActionDockPosition = sanitizeDockPosition(getStoredValue("bottom_action_dock_position"));
   var bottomActionDockRestoreTimer = null;
   var managedFileTransfers = Object.create(null);
   var fileTransferSockets = typeof WeakMap === "function" ? new WeakMap() : null;
@@ -188,7 +192,7 @@
     if (!force && now - lastSessionCheckAt < 5000) return Promise.resolve(false);
     lastSessionCheckAt = now;
     return window
-      .fetch(authBasePath() + "session", {
+      .fetch(withSessionIdentity(authBasePath() + "session"), {
         method: "GET",
         credentials: "same-origin",
         cache: "no-store",
@@ -206,6 +210,10 @@
         if (!payload || !payload.ok) return false;
         WS_SESSION_ID = String(payload.session_id || "");
         WS_SESSION_EPOCH = parseTimestamp(payload.session_epoch) || 0;
+        try {
+          if (WS_SESSION_ID) window.sessionStorage.setItem("selkies_session_id", WS_SESSION_ID);
+          if (WS_SESSION_EPOCH) window.sessionStorage.setItem("selkies_session_epoch", String(WS_SESSION_EPOCH));
+        } catch (_storeErr) {}
         return true;
       })
       .catch(function () {
@@ -233,6 +241,16 @@
 
   function withSessionIdentity(url) {
     var raw = String(url || "");
+    if (!WS_SESSION_ID) {
+      try {
+        WS_SESSION_ID = String(window.sessionStorage.getItem("selkies_session_id") || "");
+      } catch (_sidErr) {}
+    }
+    if (!WS_SESSION_EPOCH) {
+      try {
+        WS_SESSION_EPOCH = parseTimestamp(window.sessionStorage.getItem("selkies_session_epoch")) || 0;
+      } catch (_epochErr) {}
+    }
     if (!WS_SESSION_ID || !WS_SESSION_EPOCH) return raw;
     var sid = encodeURIComponent(WS_SESSION_ID);
     var epoch = encodeURIComponent(String(WS_SESSION_EPOCH));
@@ -1012,11 +1030,204 @@
       });
   }
 
+  function getNotificationHistory() {
+    var raw = getStoredValue(notificationHistoryKey);
+    if (!raw) return [];
+    try {
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_err) {
+      return [];
+    }
+  }
+
+  function setNotificationHistory(items) {
+    setStoredValue(notificationHistoryKey, JSON.stringify((items || []).slice(0, 100)));
+  }
+
+  function notificationHistoryEventKey(event, eventId) {
+    var safe = event || {};
+    return [
+      String(eventId || ""),
+      String(parseTimestamp(safe.ts) || ""),
+      String(safe.app || ""),
+      String(safe.title || ""),
+      String(safe.body || "")
+    ].join("|");
+  }
+
+  function addNotificationHistoryEvents(events) {
+    if (!Array.isArray(events) || !events.length) return;
+    var current = getNotificationHistory();
+    var seen = Object.create(null);
+    for (var c = 0; c < current.length; c += 1) {
+      if (current[c]) seen[String(current[c].key || notificationHistoryEventKey(current[c], current[c].id))] = true;
+    }
+    for (var i = 0; i < events.length; i += 1) {
+      var event = events[i] || {};
+      var app = String(event.app || "");
+      if (app !== "wechat" && app !== "qq") continue;
+      var eventId = parseTimestamp(event.id) || parseTimestamp(event.ts) || Date.now() + i;
+      var eventKey = notificationHistoryEventKey(event, eventId);
+      if (seen[eventKey]) continue;
+      seen[eventKey] = true;
+      current.unshift({
+        key: eventKey,
+        id: eventId,
+        ts: parseTimestamp(event.ts) || Date.now(),
+        app: app,
+        title: String(event.title || (app === "wechat" ? "\u5fae\u4fe1\u65b0\u6d88\u606f" : "QQ \u65b0\u6d88\u606f")),
+        body: String(event.body || ""),
+        source: String(event.source || "")
+      });
+    }
+    current.sort(function (a, b) {
+      var bTime = parseTimestamp(b && b.ts) || parseTimestamp(b && b.id);
+      var aTime = parseTimestamp(a && a.ts) || parseTimestamp(a && a.id);
+      return bTime - aTime;
+    });
+    setNotificationHistory(current);
+    renderNotificationCenterHistory();
+  }
+
+  function formatNotificationCenterTime(ts) {
+    var value = parseTimestamp(ts);
+    if (!value) return "";
+    var date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "";
+    return date.toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
+
+  function ensureNotificationCenterStyle() {
+    if (document.getElementById("selkies-notification-center-style")) return;
+    var style = document.createElement("style");
+    style.id = "selkies-notification-center-style";
+    style.textContent =
+      "#selkies-notification-center{position:fixed;right:0;top:64px;bottom:44px;z-index:10024;display:flex;align-items:stretch;pointer-events:none}" +
+      "#selkies-notification-center[data-open='1']{pointer-events:auto}" +
+      "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:10px 0 0 10px;background:#101826;color:#e2e8f0;min-width:34px;height:58px;padding:0 8px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:-8px 0 18px rgba(2,6,23,.18);pointer-events:auto}" +
+      "#selkies-notification-center[data-open='1'] #selkies-notification-center-toggle{right:320px}" +
+      "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:-18px 0 36px rgba(2,6,23,.28);backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease}" +
+      "#selkies-notification-center[data-open='1'] #selkies-notification-center-panel{transform:translateX(0)}" +
+      ".selkies-notification-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px 10px;border-bottom:1px solid rgba(148,163,184,.14)}" +
+      ".selkies-notification-center-title{font-size:13px;font-weight:800;color:#f8fafc}" +
+      ".selkies-notification-center-count{font-size:11px;color:#93c5fd}" +
+      ".selkies-notification-center-list{flex:1;overflow:auto;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px}" +
+      ".selkies-notification-center-empty{font-size:12px;line-height:1.6;color:#94a3b8;padding:12px 4px}" +
+      ".selkies-notification-center-item{border:1px solid rgba(71,85,105,.9);border-radius:8px;background:#0b1220;padding:9px 10px;display:flex;flex-direction:column;gap:5px}" +
+      ".selkies-notification-center-row{display:flex;align-items:center;justify-content:space-between;gap:8px}" +
+      ".selkies-notification-center-app{font-size:11px;font-weight:800;color:#bfdbfe;text-transform:uppercase}" +
+      ".selkies-notification-center-time{font-size:10px;color:#64748b;white-space:nowrap}" +
+      ".selkies-notification-center-subject{font-size:12px;font-weight:700;color:#e2e8f0;line-height:1.35;overflow-wrap:anywhere}" +
+      ".selkies-notification-center-body{font-size:11px;line-height:1.45;color:#94a3b8;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}" +
+      ".selkies-notification-center-source{font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      ".selkies-notification-center-footer{padding:10px;border-top:1px solid rgba(148,163,184,.14)}" +
+      ".selkies-notification-center-clear{appearance:none;width:100%;height:34px;border:1px solid #7f1d1d;border-radius:8px;background:#991b1b;color:#fee2e2;font-size:12px;font-weight:800;cursor:pointer}" +
+      ".selkies-notification-center-clear:hover{filter:brightness(1.06)}" +
+      "@media (max-width:640px){#selkies-notification-center{top:48px;bottom:34px}#selkies-notification-center[data-open='1'] #selkies-notification-center-toggle{right:min(320px,calc(100vw - 42px))}}";
+    document.head.appendChild(style);
+  }
+
+  function ensureNotificationCenter() {
+    if (!document.body) return null;
+    ensureNotificationCenterStyle();
+    var root = document.getElementById("selkies-notification-center");
+    if (root) return root;
+    root = document.createElement("div");
+    root.id = "selkies-notification-center";
+    root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
+    root.innerHTML =
+      '<button type="button" id="selkies-notification-center-toggle" title="\u901a\u77e5\u4e2d\u5fc3">\u901a\u77e5</button>' +
+      '<aside id="selkies-notification-center-panel" aria-label="\u901a\u77e5\u4e2d\u5fc3\u5386\u53f2">' +
+      '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-count"></div></div>' +
+      '<div class="selkies-notification-center-list"></div>' +
+      '<div class="selkies-notification-center-footer"><button type="button" class="selkies-notification-center-clear">\u4e00\u952e\u6e05\u7406</button></div>' +
+      "</aside>";
+    document.body.appendChild(root);
+    root.querySelector("#selkies-notification-center-toggle").addEventListener("click", function () {
+      notificationCenterOpen = !notificationCenterOpen;
+      setStoredValue("notification_center_open", notificationCenterOpen);
+      root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
+    });
+    root.querySelector(".selkies-notification-center-clear").addEventListener("click", function () {
+      setNotificationHistory([]);
+      setUnreadState("wechat", false);
+      setUnreadState("qq", false);
+      renderNotificationCenterHistory();
+    });
+    return root;
+  }
+
+  function createNotificationCenterItem(entry) {
+    var item = document.createElement("div");
+    item.className = "selkies-notification-center-item";
+    var row = document.createElement("div");
+    row.className = "selkies-notification-center-row";
+    var app = document.createElement("div");
+    app.className = "selkies-notification-center-app";
+    app.textContent = entry.app === "wechat" ? "\u5fae\u4fe1" : "QQ";
+    var time = document.createElement("div");
+    time.className = "selkies-notification-center-time";
+    time.textContent = formatNotificationCenterTime(entry.ts);
+    row.appendChild(app);
+    row.appendChild(time);
+    var subject = document.createElement("div");
+    subject.className = "selkies-notification-center-subject";
+    subject.textContent = entry.title || "";
+    var body = document.createElement("div");
+    body.className = "selkies-notification-center-body";
+    body.textContent = entry.body || "";
+    item.appendChild(row);
+    item.appendChild(subject);
+    if (entry.body) item.appendChild(body);
+    if (entry.source) {
+      var source = document.createElement("div");
+      source.className = "selkies-notification-center-source";
+      source.textContent = entry.source;
+      item.appendChild(source);
+    }
+    return item;
+  }
+
+  function renderNotificationCenterHistory() {
+    var root = ensureNotificationCenter();
+    if (!root) return;
+    root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
+    var historyItems = getNotificationHistory().slice(0, 100);
+    var count = root.querySelector(".selkies-notification-center-count");
+    if (count) count.textContent = String(historyItems.length) + "/100";
+    var list = root.querySelector(".selkies-notification-center-list");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!historyItems.length) {
+      var empty = document.createElement("div");
+      empty.className = "selkies-notification-center-empty";
+      empty.textContent = "\u6682\u65f6\u8fd8\u6ca1\u6709\u901a\u77e5\u5386\u53f2\u3002";
+      list.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < historyItems.length; i += 1) {
+      list.appendChild(createNotificationCenterItem(historyItems[i]));
+    }
+  }
+
+  function startNotificationHistoryCenter() {
+    if (notificationHistoryRenderTimer) return;
+    renderNotificationCenterHistory();
+    notificationHistoryRenderTimer = window.setInterval(renderNotificationCenterHistory, 3000);
+  }
+
   function applyNotificationEvents(events) {
     if (!Array.isArray(events) || !events.length) return;
     events.sort(function (a, b) {
       return parseTimestamp(a && a.id) - parseTimestamp(b && b.id);
     });
+    addNotificationHistoryEvents(events);
     for (var i = 0; i < events.length; i += 1) {
       var event = events[i] || {};
       var eventId = parseTimestamp(event.id);
@@ -1269,6 +1480,10 @@
     return n;
   }
 
+  function sanitizeDockPosition(value) {
+    return String(value || "").toLowerCase() === "top" ? "top" : "bottom";
+  }
+
   function clamp(value, minValue, maxValue) {
     return Math.max(minValue, Math.min(maxValue, value));
   }
@@ -1391,32 +1606,30 @@
 
   function applyRuntimeDefaults() {
     var frameRate = sanitizeInt(runtime.defaultFramerate, 48, 1, 240);
-    var gamepadEnabled = sanitizeBool(runtime.defaultGamepadEnabled, false);
     var binaryClipboard = sanitizeBool(runtime.defaultBinaryClipboard, true);
     var defaultUseCpu = sanitizeBool(runtime.defaultUseCpu, false);
     var defaultStreamingMode = sanitizeBool(runtime.defaultH264StreamingMode, true);
     var defaultPaintOver = sanitizeBool(runtime.defaultUsePaintOverQuality, false);
     var defaultH264Crf = sanitizeInt(runtime.defaultH264Crf, 30, 5, 50);
     var dynamicLatencyEnabled = sanitizeBool(runtime.dynamicLowLatencyEnabled, true);
-    var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 30000);
+    var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 15000, 300, 30000);
     var dynamicThrottleMode = sanitizeThrottleMode(runtime.dynamicThrottleMode || runtime.dynamicLowLatencyMode);
-    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120);
-    var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 50);
-    var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100);
+    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 8, 1, 120);
+    var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 35, 5, 50);
+    var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 87, 10, 100);
     var dynamicThrottleStrength = deriveThrottleStrength(dynamicLatencyCrf, dynamicLatencySample);
 
     setStoredDefault("framerate", frameRate);
-    if (GAMEPAD_UI_ENABLED) {
-      setStoredDefault("isGamepadEnabled", gamepadEnabled);
-      setStoredDefault("gamepad_enabled", gamepadEnabled);
-    } else {
-      setStoredValue("isGamepadEnabled", false);
-      setStoredValue("gamepad_enabled", false);
-      setStoredValue("ui_sidebar_show_gamepads", false);
-      setStoredValue("enable_player2", false);
-      setStoredValue("enable_player3", false);
-      setStoredValue("enable_player4", false);
-    }
+    setStoredValue("isGamepadEnabled", false);
+    setStoredValue("gamepad_enabled", false);
+    setStoredValue("ui_sidebar_show_gamepads", false);
+    setStoredValue("ui_sidebar_show_apps", false);
+    setStoredValue("ui_sidebar_show_sharing", false);
+    setStoredValue("enable_sharing", false);
+    setStoredValue("enable_shared", false);
+    setStoredValue("enable_player2", false);
+    setStoredValue("enable_player3", false);
+    setStoredValue("enable_player4", false);
     setStoredDefault("enable_binary_clipboard", binaryClipboard);
     setStoredDefault("use_cpu", defaultUseCpu);
     setStoredDefault("h264_streaming_mode", defaultStreamingMode);
@@ -1431,6 +1644,7 @@
     setStoredDefault("dynamic_throttle_strength", dynamicThrottleStrength);
     setStoredDefault("dynamic_low_latency_disable_paint_over", dynamicThrottleMode === "idle-low-occupancy");
     setStoredDefault("bottom_action_clipboard_buttons_enabled", false);
+    setStoredDefault("bottom_action_dock_position", bottomActionDockPosition);
     setStoredValue("ui_show_sidebar", true);
     setStoredValue("ui_show_core_buttons", true);
     setStoredValue("ui_sidebar_show_fullscreen", true);
@@ -3113,8 +3327,8 @@
     document.addEventListener("keyup", handleKeyup, true);
   }
 
-  function hideDisabledGamepadUi() {
-    if (GAMEPAD_UI_ENABLED || !document.body) return;
+  function hideRemovedSidebarSections() {
+    if (!document.body) return;
 
     var host = document.getElementById("touch-gamepad-host");
     if (host) {
@@ -3135,9 +3349,20 @@
       "\u542f\u7528/\u7981\u7528\u6e38\u620f\u624b\u67c4\u652f\u6301",
       "player 2",
       "player 3",
-      "player 4"
+      "player 4",
+      "share",
+      "sharing",
+      "shared",
+      "\u5171\u4eab",
+      "\u5171\u4eab\u4f1a\u8bdd",
+      "applications",
+      "application",
+      "apps",
+      "\u5e94\u7528\u7a0b\u5e8f",
+      "\u5e94\u7528"
     ];
-    var nodes = sidebarHost.querySelectorAll("details,section,article,div,button,label,summary,span");
+    var containsTexts = ["touch gamepad", "gamepad", "\u624b\u67c4"];
+    var nodes = sidebarHost.querySelectorAll("details,section,article,div,button,label,summary,span,a");
     for (var i = 0; i < nodes.length; i += 1) {
       var node = nodes[i];
       if (!isElementVisible(node)) continue;
@@ -3146,19 +3371,23 @@
         .trim()
         .toLowerCase();
       if (!text) continue;
-      if (exactTexts.indexOf(text) < 0) continue;
+      var shouldHide = exactTexts.indexOf(text) >= 0;
+      for (var c = 0; !shouldHide && c < containsTexts.length; c += 1) {
+        shouldHide = text.indexOf(containsTexts[c]) >= 0;
+      }
+      if (!shouldHide) continue;
       var container = node.closest("details,section,article,li,div");
       if (!container || container === sidebarHost) continue;
       if (container.getBoundingClientRect().height < 18) continue;
       container.style.display = "none";
-      container.setAttribute("data-selkies-gamepad-hidden", "1");
+      container.setAttribute("data-selkies-sidebar-section-hidden", "1");
     }
   }
 
-  function startGamepadUiGuard() {
-    hideDisabledGamepadUi();
-    window.setTimeout(hideDisabledGamepadUi, 1200);
-    window.setInterval(hideDisabledGamepadUi, 8000);
+  function startRemovedSidebarSectionGuard() {
+    hideRemovedSidebarSections();
+    window.setTimeout(hideRemovedSidebarSections, 1200);
+    window.setInterval(hideRemovedSidebarSections, 4000);
   }
 
   function sanitizeThrottleMode(value) {
@@ -3193,17 +3422,17 @@
   function getDynamicLatencyConfig() {
     var mode = sanitizeThrottleMode(getStoredValue("dynamic_throttle_mode") || runtime.dynamicThrottleMode || runtime.dynamicLowLatencyMode);
     var fallbackStrength = deriveThrottleStrength(
-      sanitizeInt(runtime.dynamicLowLatencyH264Crf, 45, 5, 60),
-      sanitizeInt(runtime.dynamicLowLatencySamplePercent, 60, 10, 100)
+      sanitizeInt(runtime.dynamicLowLatencyH264Crf, 35, 5, 60),
+      sanitizeInt(runtime.dynamicLowLatencySamplePercent, 87, 10, 100)
     );
     var strength = sanitizeInt(getStoredValue("dynamic_throttle_strength"), fallbackStrength, 0, 100);
-    var fps = sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 15, 1, 120), 1, 120);
+    var fps = sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 8, 1, 120), 1, 120);
     var crf = modeUsesBandwidth(mode) ? strengthToCrf(strength) : sanitizeInt(getStoredValue("h264_crf"), sanitizeInt(runtime.defaultH264Crf, 30, 5, 50), 5, 60);
     var samplePercent = modeUsesBandwidth(mode) ? strengthToSamplePercent(strength) : 100;
     return {
       enabled: sanitizeBool(getStoredValue("dynamic_low_latency_enabled"), sanitizeBool(runtime.dynamicLowLatencyEnabled, true)),
       mode: mode,
-      holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 1600, 300, 30000), 300, 30000),
+      holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 15000, 300, 30000), 300, 30000),
       fps: modeUsesFramerate(mode) ? fps : sanitizeInt(getStoredValue("framerate"), sanitizeInt(runtime.defaultFramerate, 48, 1, 240), 1, 240),
       strength: strength,
       crf: crf,
@@ -3654,8 +3883,13 @@
     if (!host) return;
     ensureLocalLinkUiStyle();
     var section = ensureRepairToolsSection();
-    if (section.parentElement !== host || host.firstElementChild !== section) {
-      host.insertBefore(section, host.firstChild);
+    var linkSection = document.getElementById("selkies-link-history-section");
+    if (linkSection && linkSection.parentElement === host) {
+      if (section.parentElement !== host || linkSection.nextElementSibling !== section) {
+        host.insertBefore(section, linkSection.nextElementSibling);
+      }
+    } else if (section.parentElement !== host) {
+      host.appendChild(section);
     }
     if (!document.getElementById("selkies-repair-tools-style")) {
       var style = document.createElement("style");
@@ -3700,6 +3934,7 @@
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
+      '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
@@ -3731,6 +3966,7 @@
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
+    var bottomDockPositionSelect = section.querySelector('[data-debug-select="bottom-dock-position"]');
     var idleFocusRow = section.querySelector('[data-debug-row="idle-focus-seconds"]');
     var idleFocusSelect = section.querySelector('[data-debug-select="idle-focus-seconds"]');
     if (notificationToggle) {
@@ -3741,6 +3977,9 @@
     }
     if (bottomClipboardToggle) {
       bottomClipboardToggle.checked = !!bottomActionClipboardButtonsEnabled;
+    }
+    if (bottomDockPositionSelect) {
+      bottomDockPositionSelect.value = bottomActionDockPosition;
     }
     if (idleFocusRow) {
       idleFocusRow.setAttribute("data-hidden", notificationPassthroughEnabled ? "0" : "1");
@@ -3772,6 +4011,21 @@
           indeterminate: false,
           priority: 70,
           expiresAt: Date.now() + 2600
+        });
+      });
+      section.querySelector('[data-debug-select="bottom-dock-position"]').addEventListener("change", function (event) {
+        bottomActionDockPosition = sanitizeDockPosition(event && event.target && event.target.value);
+        setStoredValue("bottom_action_dock_position", bottomActionDockPosition);
+        syncBottomActionSplitState();
+        updateBottomActionDockVisibility();
+        setActivityTask("bottom-dock-position-setting", {
+          title: bottomActionDockPosition === "top" ? "\u5feb\u6377 Bar \u5df2\u79fb\u5230\u9876\u90e8" : "\u5feb\u6377 Bar \u5df2\u79fb\u5230\u5e95\u90e8",
+          detail: "\u6298\u53e0\u3001\u81ea\u52a8\u6062\u590d\u548c\u5206\u5c4f\u83dc\u5355\u89c4\u5219\u4fdd\u6301\u4e0d\u53d8\u3002",
+          kind: "success",
+          progress: 100,
+          indeterminate: false,
+          priority: 70,
+          expiresAt: Date.now() + 2400
         });
       });
       section.querySelector('[data-debug-toggle="adaptive-sleep"]').addEventListener("change", function (event) {
@@ -3910,20 +4164,24 @@
       "#selkies-bottom-action-dock-shell{position:fixed;left:50%;bottom:0px;transform:translateX(-50%);z-index:10025;" +
       "display:flex;flex-direction:column;align-items:center;opacity:0;pointer-events:none;" +
       "transition:opacity .22s ease,transform .22s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top']{top:0;bottom:auto;flex-direction:column-reverse}" +
       "#selkies-bottom-action-dock-shell[data-visible='1']{opacity:1;pointer-events:auto}" +
       "#selkies-bottom-split-popover{position:absolute;left:50%;bottom:calc(100% + 2px);transform:translateX(-50%) translateY(8px) scale(.96);" +
       "display:flex;flex-direction:column;gap:6px;min-width:164px;padding:8px;" +
       "border:1px solid rgba(51,65,85,.92);border-radius:14px;background:rgba(8,15,28,.92);backdrop-filter:blur(16px);" +
       "box-shadow:0 12px 24px rgba(2,6,23,.28);opacity:0;pointer-events:none;visibility:hidden;" +
       "transition:opacity .18s ease,transform .18s ease,visibility .18s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-split-popover{top:calc(100% + 2px);bottom:auto;transform:translateX(-50%) translateY(-8px) scale(.96)}" +
       "#selkies-bottom-action-dock-shell[data-split-open='1'] #selkies-bottom-split-popover{opacity:1;pointer-events:auto;visibility:visible;transform:translateX(-50%) translateY(0) scale(1)}" +
       "#selkies-bottom-action-dock{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:0;height:24px;box-sizing:border-box;overflow:hidden;" +
       "border:1px solid rgba(51,65,85,.92);border-bottom:none;border-radius:10px 10px 0 0;background:rgba(8,15,28,.96);backdrop-filter:blur(16px);" +
       "box-shadow:0 -6px 12px rgba(2,6,23,.12);transform-origin:center bottom;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock{border-top:none;border-bottom:1px solid rgba(51,65,85,.92);border-radius:0 0 10px 10px;box-shadow:0 6px 12px rgba(2,6,23,.12);transform-origin:center top}" +
       "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(4,minmax(0,1fr))}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock{opacity:0;transform:translateY(10px) scale(.94);filter:blur(1px);pointer-events:none}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-split-popover{opacity:0;pointer-events:none;visibility:hidden}" +
       "#selkies-bottom-dock-collapsed-toggle{position:absolute;left:50%;bottom:0;appearance:none;border:1px solid rgba(71,85,105,.92);border-bottom:none;background:#101826;color:#e2e8f0;border-radius:10px 10px 0 0;min-width:30px;height:24px;box-sizing:border-box;padding:0 8px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 -6px 12px rgba(2,6,23,.12);opacity:0;transform:translateX(-50%) translateY(8px) scale(.92);pointer-events:none;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-dock-collapsed-toggle{top:0;bottom:auto;border-top:none;border-bottom:1px solid rgba(71,85,105,.92);border-radius:0 0 10px 10px;box-shadow:0 6px 12px rgba(2,6,23,.12);transform:translateX(-50%) translateY(-8px) scale(.92)}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-dock-collapsed-toggle{opacity:1;transform:translateX(-50%) translateY(0) scale(1);pointer-events:auto}" +
       ".selkies-bottom-dock-btn{appearance:none;border:1px solid rgba(71,85,105,.92);background:#101826;color:#e2e8f0;" +
       "border-radius:0;min-width:48px;height:100%;box-sizing:border-box;padding:0 6px;font-size:10px;font-weight:700;letter-spacing:.01em;" +
@@ -3938,6 +4196,8 @@
       ".selkies-bottom-dock-btn[data-tone='collapse']{background:#101826;border-color:#64748b;color:#cbd5e1;min-width:30px;padding:0 4px}" +
       "#selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:9px}" +
       "#selkies-bottom-action-dock .selkies-bottom-dock-btn:last-child{border-top-right-radius:9px}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:0;border-bottom-left-radius:9px}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock .selkies-bottom-dock-btn:last-child{border-top-right-radius:0;border-bottom-right-radius:9px}" +
       "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='client-to-remote'],#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='remote-to-client']{display:none}" +
       "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='wechat-focus']{border-top-left-radius:9px}" +
       ".selkies-bottom-dock-btn[data-active='1']{border-color:#93c5fd;color:#f8fafc}" +
@@ -3959,6 +4219,7 @@
     shell.setAttribute("data-split-open", bottomActionSplitOpen ? "1" : "0");
     shell.setAttribute("data-collapsed", bottomActionDockCollapsed ? "1" : "0");
     shell.setAttribute("data-clipboard-buttons", bottomActionClipboardButtonsEnabled ? "1" : "0");
+    shell.setAttribute("data-position", bottomActionDockPosition);
     var splitButton = shell.querySelector('[data-dock-action="split-toggle"]');
     if (splitButton) {
       splitButton.setAttribute("data-active", bottomActionSplitOpen ? "1" : "0");
@@ -4208,6 +4469,7 @@
   function startDynamicLatencyMount() {
     if (dynamicLatencyMountTimer) return;
     renderDynamicLatencySection();
+    startLocalLinkHistoryMount();
     renderRepairToolsSection();
     renderDebugToolsSection();
     dynamicLatencyMountTimer = window.setInterval(renderDynamicLatencySection, 6000);
@@ -5106,11 +5368,12 @@
     startClientAwakeHeartbeat();
     startIdleCleanupWatcher();
     startBottomActionDock();
+    startNotificationHistoryCenter();
     startNotificationEventPoller();
     bindSidebarAutoCollapse();
     bindSidebarKeyboardShortcut();
     startLocalLinkEventPoller();
-    startGamepadUiGuard();
+    startRemovedSidebarSectionGuard();
     syncStreamActivity();
   }
 

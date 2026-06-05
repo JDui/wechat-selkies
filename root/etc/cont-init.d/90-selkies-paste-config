@@ -8,7 +8,6 @@ ENABLED_RAW="${SELKIES_PASTE_IMAGE:-true}"
 MAX_BYTES_RAW="${SELKIES_PASTE_IMAGE_MAX_SIZE:-20971520}"
 AUTO_PASTE_RAW="${SELKIES_PASTE_IMAGE_AUTO_PASTE:-true}"
 DEFAULT_FRAMERATE_RAW="${SELKIES_DEFAULT_FRAMERATE:-48}"
-DEFAULT_GAMEPAD_RAW="${SELKIES_DEFAULT_GAMEPAD_ENABLED:-false}"
 DEFAULT_BINARY_CLIPBOARD_RAW="${SELKIES_DEFAULT_BINARY_CLIPBOARD:-true}"
 DEFAULT_ENCODER_RAW="${SELKIES_DEFAULT_ENCODER:-x264enc}"
 DEFAULT_USE_CPU_RAW="${SELKIES_DEFAULT_USE_CPU:-false}"
@@ -16,11 +15,11 @@ DEFAULT_H264_STREAMING_MODE_RAW="${SELKIES_DEFAULT_H264_STREAMING_MODE:-true}"
 DEFAULT_USE_PAINT_OVER_QUALITY_RAW="${SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY:-false}"
 DEFAULT_H264_CRF_RAW="${SELKIES_DEFAULT_H264_CRF:-30}"
 DEFAULT_DYNAMIC_LOW_LATENCY_RAW="${SELKIES_DYNAMIC_THROTTLE:-${SELKIES_DYNAMIC_LOW_LATENCY:-true}}"
-DEFAULT_DYNAMIC_LOW_LATENCY_HOLD_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS:-1200}"
+DEFAULT_DYNAMIC_LOW_LATENCY_HOLD_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS:-15000}"
 DEFAULT_DYNAMIC_THROTTLE_MODE_RAW="${SELKIES_DYNAMIC_THROTTLE_MODE:-idle-low-occupancy}"
-DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_FPS:-15}"
-DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF:-40}"
-DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT:-75}"
+DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_FPS:-8}"
+DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF:-35}"
+DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT:-87}"
 DEFAULT_STREAM_WAIT_THRESHOLD_RAW="${SELKIES_STREAM_WAIT_THRESHOLD_MS:-35000}"
 DEFAULT_STREAM_STALL_THRESHOLD_RAW="${SELKIES_STREAM_STALL_THRESHOLD_MS:-18000}"
 DEFAULT_STREAM_STALL_RESTART_LIMIT_RAW="${SELKIES_STREAM_STALL_RESTART_LIMIT:-2}"
@@ -56,10 +55,6 @@ if ! [[ "$default_framerate" =~ ^[0-9]+$ ]] || [ "$default_framerate" -lt 1 ] ||
 fi
 
 default_gamepad_js="false"
-case "${DEFAULT_GAMEPAD_RAW,,}" in
-  true|1|yes|on) default_gamepad_js="true" ;;
-  *) default_gamepad_js="false" ;;
-esac
 
 default_binary_clipboard_js="true"
 case "${DEFAULT_BINARY_CLIPBOARD_RAW,,}" in
@@ -98,7 +93,7 @@ esac
 
 default_dynamic_low_latency_hold_ms="${DEFAULT_DYNAMIC_LOW_LATENCY_HOLD_RAW}"
 if ! [[ "$default_dynamic_low_latency_hold_ms" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_hold_ms" -lt 300 ] || [ "$default_dynamic_low_latency_hold_ms" -gt 30000 ]; then
-  default_dynamic_low_latency_hold_ms="1200"
+  default_dynamic_low_latency_hold_ms="15000"
 fi
 
 case "$DEFAULT_DYNAMIC_THROTTLE_MODE_RAW" in
@@ -110,17 +105,17 @@ esac
 
 default_dynamic_low_latency_fps="${DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW}"
 if ! [[ "$default_dynamic_low_latency_fps" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_fps" -lt 1 ] || [ "$default_dynamic_low_latency_fps" -gt 120 ]; then
-  default_dynamic_low_latency_fps="15"
+  default_dynamic_low_latency_fps="8"
 fi
 
 default_dynamic_low_latency_crf="${DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW}"
 if ! [[ "$default_dynamic_low_latency_crf" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_crf" -lt 5 ] || [ "$default_dynamic_low_latency_crf" -gt 60 ]; then
-  default_dynamic_low_latency_crf="40"
+  default_dynamic_low_latency_crf="35"
 fi
 
 default_dynamic_low_latency_sample="${DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW}"
 if ! [[ "$default_dynamic_low_latency_sample" =~ ^[0-9]+$ ]] || [ "$default_dynamic_low_latency_sample" -lt 10 ] || [ "$default_dynamic_low_latency_sample" -gt 100 ]; then
-  default_dynamic_low_latency_sample="75"
+  default_dynamic_low_latency_sample="87"
 fi
 
 default_stream_wait_threshold_ms="${DEFAULT_STREAM_WAIT_THRESHOLD_RAW}"

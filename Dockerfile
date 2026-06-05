@@ -116,6 +116,7 @@ ENV WATCHDOG_INTERVAL="10"
 ENV WATCHDOG_TRAY="true"
 ENV WATCHDOG_RESTART_WECHAT="true"
 ENV WATCHDOG_RESTART_QQ="true"
+ENV WATCHDOG_AUDIO="true"
 ENV WATCHDOG_LOG_PATH="/config/logs/process-watchdog.log"
 ENV NOTIFICATION_BRIDGE_PORT="38081"
 ENV NOTIFICATION_BRIDGE_LOG_PATH="/config/logs/notification-bridge.log"
@@ -133,6 +134,9 @@ ENV SELKIES_SESSION_MODE="pin-takeover"
 ENV SELKIES_SESSION_STATE_PATH="/run/selkies-active-session.json"
 ENV SELKIES_SESSION_AUTH_PORT="38082"
 ENV SELKIES_SESSION_COOKIE_NAME="selkies_session"
+ENV CUSTOM_WS_PORT="8081"
+ENV SELKIES_AUDIO_READY_TIMEOUT_SECONDS="15"
+ENV SELKIES_PACTL_TIMEOUT_SECONDS="5"
 ENV X11_WATCHDOG="true"
 ENV X11_WATCHDOG_FAIL_THRESHOLD="6"
 ENV X11_HEALTHCHECK_TIMEOUT="4"
@@ -149,7 +153,7 @@ ENV SELKIES_ENABLE_BINARY_CLIPBOARD="true"
 ENV SELKIES_PASTE_IMAGE="true"
 ENV SELKIES_ENCODER="x264enc,x264enc-striped,jpeg"
 ENV SELKIES_DEFAULT_FRAMERATE="48"
-ENV SELKIES_DEFAULT_GAMEPAD_ENABLED="false"
+ENV SELKIES_DISABLE_GAMEPAD="true"
 ENV SELKIES_DEFAULT_BINARY_CLIPBOARD="true"
 ENV SELKIES_DEFAULT_ENCODER="x264enc"
 ENV SELKIES_DEFAULT_USE_CPU="false"
@@ -157,11 +161,11 @@ ENV SELKIES_DEFAULT_H264_STREAMING_MODE="true"
 ENV SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY="false"
 ENV SELKIES_DEFAULT_H264_CRF="30"
 ENV SELKIES_DYNAMIC_THROTTLE="true"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS="1200"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS="15000"
 ENV SELKIES_DYNAMIC_THROTTLE_MODE="idle-low-occupancy"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="15"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF="40"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT="75"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="8"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF="35"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT="87"
 ENV SELKIES_STREAM_WAIT_THRESHOLD_MS="35000"
 ENV SELKIES_STREAM_STALL_THRESHOLD_MS="18000"
 ENV SELKIES_STREAM_STALL_RESTART_LIMIT="2"
@@ -197,6 +201,7 @@ RUN sed -i 's/\r$//' \
     /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
+    /etc/cont-init.d/93-selkies-audio-wait-patch \
     /defaults/default.conf \
     /defaults/autostart \
     /defaults/dunstrc \
@@ -217,6 +222,7 @@ RUN sed -i 's/\r$//' \
     /scripts/recover-xstack.sh \
     /scripts/recover-ui-services.sh \
     /scripts/healthcheck.sh \
+    /scripts/cpu-diagnostics.sh \
     /scripts/window_tiler.py \
     /scripts/patch_openbox_rc.py \
     /scripts/split_fab.py \
@@ -227,6 +233,7 @@ RUN sed -i 's/\r$//' \
 RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
+    /etc/cont-init.d/93-selkies-audio-wait-patch \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run \
     /scripts/start.sh \
@@ -244,6 +251,7 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /scripts/recover-xstack.sh \
     /scripts/recover-ui-services.sh \
     /scripts/healthcheck.sh \
+    /scripts/cpu-diagnostics.sh \
     /scripts/window_tiler.py \
     /scripts/patch_openbox_rc.py \
     /scripts/split_fab.py \

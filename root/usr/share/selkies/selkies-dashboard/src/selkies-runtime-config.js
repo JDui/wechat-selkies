@@ -18,10 +18,10 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   defaultGamepadEnabled: false,
   gamepadUiEnabled: false,
   dynamicLowLatencyEnabled: true,
-  dynamicLowLatencyHoldMs: 1200,
+  dynamicLowLatencyHoldMs: 15000,
   dynamicThrottleMode: "idle-low-occupancy",
-  dynamicLowLatencyFps: 15,
-  dynamicLowLatencyH264Crf: 40,
-  dynamicLowLatencySamplePercent: 75,
+  dynamicLowLatencyFps: 8,
+  dynamicLowLatencyH264Crf: 35,
+  dynamicLowLatencySamplePercent: 87,
   defaultBinaryClipboard: true
 };

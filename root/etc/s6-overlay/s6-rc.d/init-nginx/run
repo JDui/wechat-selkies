@@ -8,7 +8,7 @@ NGINX_CONFIG=/etc/nginx/sites-available/default
 # user passed env vars
 CPORT="${CUSTOM_PORT:-3000}"
 CHPORT="${CUSTOM_HTTPS_PORT:-3001}"
-CWS="${CUSTOM_WS_PORT:-8082}"
+CWS="${CUSTOM_WS_PORT:-8081}"
 CLINK="${LOCAL_LINK_BRIDGE_PORT:-38080}"
 CNOTIFY="${NOTIFICATION_BRIDGE_PORT:-38081}"
 CAUTH="${SELKIES_SESSION_AUTH_PORT:-38082}"
@@ -281,6 +281,7 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
     const pinInput = document.getElementById("pin");
     const errEl = document.getElementById("err");
     const pinApi = "${PW_PREFIX}auth/pin";
+    const appPath = "${PW_PREFIX}";
     pinForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       errEl.textContent = "";
@@ -301,22 +302,17 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
           pinInput.select();
           return;
         }
-        const pageResp = await fetch(window.location.href, {
-          credentials: "same-origin",
-          cache: "no-store",
-          headers: {
-            "Accept": "text/html",
-            "X-Requested-With": "XMLHttpRequest"
+        try {
+          const payload = await resp.clone().json();
+          if (payload && payload.session_id) {
+            sessionStorage.setItem("selkies_session_id", String(payload.session_id));
+            sessionStorage.setItem("selkies_session_epoch", String(payload.session_epoch || 0));
           }
-        });
-        if (!pageResp.ok) {
-          errEl.textContent = "PIN 已通过，但页面加载失败，请重新输入";
-          return;
+        } catch (_jsonErr) {
         }
-        const html = await pageResp.text();
-        document.open();
-        document.write(html);
-        document.close();
+        const nextUrl = new URL(appPath || "/", window.location.href);
+        nextUrl.searchParams.set("_pin", String(Date.now()));
+        window.location.replace(nextUrl.toString());
       } catch (_) {
         errEl.textContent = "网络异常，请稍后重试";
       }

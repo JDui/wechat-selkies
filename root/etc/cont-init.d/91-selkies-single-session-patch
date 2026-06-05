@@ -65,12 +65,25 @@ replacement = r"""\1        # PIN-session takeover
         except Exception:
             pass
 
+        query_params = urllib.parse.parse_qs(urllib.parse.urlparse(websocket.request.path).query)
+        query_session_id = str((query_params.get("selkies_session_id") or [""])[0] or "")
+        try:
+            query_session_epoch = int((query_params.get("selkies_session_epoch") or [0])[0] or 0)
+        except (TypeError, ValueError):
+            query_session_epoch = 0
+
         session_enabled = bool(os.environ.get("PASSWORD", ""))
-        ws_identified = (not session_enabled) or (
+        cookie_identified = (
             bool(token_hash)
             and bool(active_token_hash)
             and token_hash == active_token_hash
         )
+        query_identified = (
+            bool(query_session_id)
+            and query_session_id == active_session_id
+            and query_session_epoch == active_session_epoch
+        )
+        ws_identified = (not session_enabled) or cookie_identified or query_identified
 
         if not ws_identified:
             data_logger.info(f"Rejecting stale session websocket from {raddr}")
@@ -99,8 +112,15 @@ replacement = r"""\1        # PIN-session takeover
             for stale_ws in existing_clients:
                 stale_meta = self._session_meta.get(stale_ws) or {}
                 same_session_refresh = (
-                    bool(token_hash)
-                    and stale_meta.get("token_hash", "") == token_hash
+                    (
+                        bool(token_hash)
+                        and stale_meta.get("token_hash", "") == token_hash
+                    )
+                    or (
+                        bool(active_session_id)
+                        and stale_meta.get("session_id", "") == active_session_id
+                        and int(stale_meta.get("session_epoch", 0) or 0) == active_session_epoch
+                    )
                 )
                 if same_session_refresh:
                     try:

@@ -163,6 +163,8 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - WATCHDOG_TRAY=false          # keep tray disabled unless you explicitly need it
           - WATCHDOG_RESTART_WECHAT=true # auto-restart WeChat when process exits
           - WATCHDOG_RESTART_QQ=true     # auto-restart QQ when process exits
+          - WATCHDOG_AUDIO=true          # auto-recover PulseAudio when unavailable
+          - CUSTOM_WS_PORT=8081           # Selkies websocket backend port
           - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
           - QQ_NICE_LEVEL=-2             # process nice level, lower value = higher priority (requires permission)
           - QQ_WATCHDOG_HANG_DETECT=true
@@ -177,7 +179,7 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
           - SELKIES_DEFAULT_ENCODER=x264enc
           - SELKIES_DEFAULT_FRAMERATE=48
-          - SELKIES_DEFAULT_GAMEPAD_ENABLED=false
+          - SELKIES_DISABLE_GAMEPAD=true
           - SELKIES_DEFAULT_BINARY_CLIPBOARD=true
           - SELKIES_DEFAULT_USE_CPU=false
           - SELKIES_DEFAULT_H264_STREAMING_MODE=true
@@ -185,10 +187,10 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_DEFAULT_H264_CRF=30
           - SELKIES_DYNAMIC_THROTTLE=true
           - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
-          - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=1200
-          - SELKIES_DYNAMIC_LOW_LATENCY_FPS=15
-          - SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF=40
-          - SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT=75
+          - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
+          - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
+          - SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF=35
+          - SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT=87
           - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
           - SELKIES_STREAM_STALL_THRESHOLD_MS=18000
           - SELKIES_STREAM_STALL_RESTART_LIMIT=2
@@ -198,9 +200,9 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - LOCAL_LINK_BRIDGE_PORT=38080
           # - CUSTOM_USER=<Your Name>      # legacy field; kept for compatibility
           # - PASSWORD=<Your PIN>          # PIN login (password only, no username input)
-        mem_reservation: "1g"            # reduce OOM risk during long-running idle sessions
-        mem_limit: "2g"                  # hard limit, adjust by host capacity
-        shm_size: "1gb"                  # recommended, will improve performance
+        mem_reservation: "2g"            # reduce OOM risk during long-running idle sessions
+        mem_limit: "8g"                  # NAS-friendly default; adjust by host capacity
+        shm_size: "2gb"                  # recommended, will improve performance
     ```
 3. **Start the service**
    ```bash
@@ -258,6 +260,7 @@ Configure the following environment variables in `docker-compose.yml`:
 | `WATCHDOG_TRAY` | `false` | Auto-restart the stalonetray process (disabled by default to reduce extra X11 clients) |
 | `WATCHDOG_RESTART_WECHAT` | `true` | Auto-restart WeChat if process exits |
 | `WATCHDOG_RESTART_QQ` | `true` | Auto-restart QQ if process exits (only when AUTO_START_QQ=true) |
+| `WATCHDOG_AUDIO` | `true` | Auto-recover PulseAudio when audio becomes unavailable |
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | Seconds without an online client receiving video before adaptive sleep stops audio/video streaming |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | Adaptive sleep monitor polling interval |
@@ -269,10 +272,10 @@ Configure the following environment variables in `docker-compose.yml`:
 | `DRI_NODE` | `/dev/dri/renderD128` | VAAPI render node path (GPU encoding is preferred when available) |
 | `SELKIES_DYNAMIC_THROTTLE` | `true` | Enable Dynamic Throttle from the browser sidebar (`SELKIES_DYNAMIC_LOW_LATENCY` remains a legacy alias) |
 | `SELKIES_DYNAMIC_THROTTLE_MODE` | `idle-low-occupancy` | Idle mode: `idle-low-bandwidth`, `idle-low-framerate`, or `idle-low-occupancy` |
-| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `1200` | Idle time after the last interaction before throttling can engage; max `30000` |
-| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `15` | Default idle send-rate cap for low-framerate modes; can be set from 1 to 120 FPS |
-| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `40` | Legacy/default quality side of the combined idle throttle strength |
-| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `75` | Legacy/default sampling side of the combined idle throttle strength |
+| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `15000` | Idle time after the last interaction before throttling can engage; max `30000` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | Default idle send-rate cap for low-framerate modes; can be set from 1 to 120 FPS |
+| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | Legacy/default quality side of the combined idle throttle strength |
+| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | Legacy/default sampling side of the combined idle throttle strength |
 | `SELKIES_ENABLE_BINARY_CLIPBOARD` | `true` | Enable binary clipboard (images, etc.) |
 | `SELKIES_PASTE_IMAGE` | `true` | Enable Ctrl+V image paste in browser |
 | `SELKIES_PASTE_IMAGE_MAX_SIZE` | `20971520` | Max image size in bytes (default 20MB) |
@@ -280,7 +283,7 @@ Configure the following environment variables in `docker-compose.yml`:
 | `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | Available encoder list exposed to Selkies |
 | `SELKIES_DEFAULT_ENCODER` | `x264enc` | Default encoder (`x264enc`, `x264enc-striped`, or `jpeg`; `x264enc` remains the stable VAAPI-preferred default) |
 | `SELKIES_DEFAULT_FRAMERATE` | `48` | Default frame rate |
-| `SELKIES_DEFAULT_GAMEPAD_ENABLED` | `false` | Default touch gamepad toggle |
+| `SELKIES_DISABLE_GAMEPAD` | `true` | Disable virtual gamepad sockets and frontend gamepad UI |
 | `SELKIES_DEFAULT_BINARY_CLIPBOARD` | `true` | Frontend default for binary clipboard toggle |
 | `SELKIES_DEFAULT_USE_CPU` | `false` | Prefer VAAPI encoding by default (fallback to CPU when DRI is unavailable) |
 | `SELKIES_DEFAULT_H264_STREAMING_MODE` | `true` | Enable H264 streaming mode by default (lower end-to-end latency) |

@@ -15,8 +15,8 @@ services:
       - "3001:3001"       # https port
     restart: unless-stopped
     stop_grace_period: 1m
-    mem_reservation: "1g" # reduce OOM risk during long-running idle sessions
-    mem_limit: "2g"       # hard limit; increase if host has enough memory
+    mem_reservation: "2g" # reduce OOM risk during long-running idle sessions
+    mem_limit: "8g"       # NAS has sufficient memory; avoid desktop/encoder reclaim stalls
     pids_limit: 4096
     ulimits:
       nofile:
@@ -42,6 +42,7 @@ services:
       - WATCHDOG_TRAY=false
       - WATCHDOG_RESTART_WECHAT=true
       - WATCHDOG_RESTART_QQ=true
+      - WATCHDOG_AUDIO=true
       - NOTIFICATION_BRIDGE_LOG_MAX_BYTES=2097152
       - X11_WATCHDOG=true
       - X11_WATCHDOG_FAIL_THRESHOLD=6
@@ -49,6 +50,7 @@ services:
       - SELKIES_SESSION_MODE=pin-takeover
       - SELKIES_SESSION_STATE_PATH=/run/selkies-active-session.json
       - SELKIES_SESSION_AUTH_PORT=38082
+      - CUSTOM_WS_PORT=8081
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
@@ -63,7 +65,7 @@ services:
       - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
       - SELKIES_DEFAULT_ENCODER=x264enc
       - SELKIES_DEFAULT_FRAMERATE=48
-      - SELKIES_DEFAULT_GAMEPAD_ENABLED=false
+      - SELKIES_DISABLE_GAMEPAD=true
       - SELKIES_DEFAULT_BINARY_CLIPBOARD=true
       - SELKIES_DEFAULT_USE_CPU=false
       - SELKIES_DEFAULT_H264_STREAMING_MODE=true
@@ -71,6 +73,10 @@ services:
       - SELKIES_DEFAULT_H264_CRF=30
       - SELKIES_DYNAMIC_THROTTLE=true
       - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
+      - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
+      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
+      - SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF=35
+      - SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT=87
       - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
       - SELKIES_STREAM_RECOVER_COOLDOWN_MS=120000
       - SELKIES_VIDEO_CORRUPTION_WATCHDOG=true
@@ -80,4 +86,4 @@ services:
       # - PASSWORD=<Your PIN>       # PIN-only login (no username input)
       # - SELKIES_PASTE_IMAGE_MAX_SIZE=20971520 # max image size in bytes
       # - SELKIES_PASTE_IMAGE_AUTO_PASTE=false  # disable auto Ctrl+V after write
-    shm_size: "1gb"       # recommended, will improve performance
+    shm_size: "2gb"       # improves browser/desktop shared-memory headroom

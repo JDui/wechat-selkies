@@ -78,15 +78,18 @@ start_notification_bridge() {
 }
 
 configure_audio_environment() {
-    local audio_user uid runtime_dir
+    local audio_user uid gid runtime_dir
+    chmod 1777 /tmp 2>/dev/null || true
     audio_user="${AUDIO_SERVICE_USER:-abc}"
     uid="$(id -u "$audio_user" 2>/dev/null || echo "${PUID:-1000}")"
+    gid="$(id -g "$audio_user" 2>/dev/null || echo "${PGID:-100}")"
     runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$uid}"
     export XDG_RUNTIME_DIR="$runtime_dir"
     export PULSE_RUNTIME_PATH="$runtime_dir/pulse"
     export PULSE_SERVER="unix:$runtime_dir/pulse/native"
     mkdir -p "$runtime_dir" /config/.config/pulse 2>/dev/null || true
-    chmod 700 "$runtime_dir" 2>/dev/null || true
+    chown -R "$uid:$gid" "$runtime_dir" /config/.config/pulse 2>/dev/null || true
+    chmod 700 "$runtime_dir" /config/.config/pulse 2>/dev/null || true
 }
 
 start_audio_service() {

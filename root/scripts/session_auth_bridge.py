@@ -9,7 +9,7 @@ import time
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 PORT = int(os.environ.get("SELKIES_SESSION_AUTH_PORT", "38082"))
@@ -75,6 +75,50 @@ def is_valid_token(token):
     return bool(expected) and hmac.compare_digest(token_digest(token), expected)
 
 
+def is_valid_session_identity(session_id, session_epoch):
+    if not PASSWORD:
+        return True
+    if not session_id or not session_epoch:
+        return False
+    state = read_state()
+    expected_id = str(state.get("session_id") or "")
+    try:
+        expected_epoch = int(state.get("session_epoch") or 0)
+        actual_epoch = int(session_epoch or 0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        bool(expected_id)
+        and hmac.compare_digest(str(session_id), expected_id)
+        and actual_epoch == expected_epoch
+    )
+
+
+def parse_session_identity_from_query(query):
+    params = parse_qs(query or "")
+    return (
+        str((params.get("selkies_session_id") or [""])[0] or ""),
+        str((params.get("selkies_session_epoch") or [""])[0] or ""),
+    )
+
+
+def parse_session_identity_from_url(raw_url):
+    return parse_session_identity_from_query(urlparse(raw_url or "").query)
+
+
+def request_has_valid_session(handler):
+    token = parse_cookie(handler.headers.get("Cookie"))
+    if is_valid_token(token):
+        return True
+
+    session_id, session_epoch = parse_session_identity_from_query(urlparse(handler.path).query)
+    if is_valid_session_identity(session_id, session_epoch):
+        return True
+
+    session_id, session_epoch = parse_session_identity_from_url(handler.headers.get("X-Original-URI"))
+    return is_valid_session_identity(session_id, session_epoch)
+
+
 def new_session():
     now_ms = int(time.time() * 1000)
     session_id = "sid_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")
@@ -135,17 +179,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not PASSWORD:
                 self.send_empty(HTTPStatus.NO_CONTENT)
                 return
-            if not is_valid_token(parse_cookie(self.headers.get("Cookie"))):
+            if not request_has_valid_session(self):
                 self.send_empty(HTTPStatus.UNAUTHORIZED)
                 return
             self.send_empty(HTTPStatus.NO_CONTENT)
             return
         if path == "/session":
-            token = parse_cookie(self.headers.get("Cookie"))
             if not PASSWORD:
                 self.send_json(HTTPStatus.OK, {"ok": True, "enabled": False})
                 return
-            if not is_valid_token(token):
+            if not request_has_valid_session(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "stale": True})
                 return
             state = read_state()

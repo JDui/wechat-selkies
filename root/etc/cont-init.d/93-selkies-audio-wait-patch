@@ -1,0 +1,100 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+targets=(
+  "/etc/s6-overlay/s6-rc.d/svc-selkies/run"
+  "/run/s6-rc/servicedirs/svc-selkies/run"
+)
+
+patched_any="false"
+
+for target in "${targets[@]}"; do
+  if [ ! -f "$target" ]; then
+    continue
+  fi
+
+  if python3 - "$target" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+old_blocks = [
+    """  until [ -f /defaults/pid ]; do
+    sleep .5
+  done""",
+    """  audio_ready_timeout="${SELKIES_AUDIO_READY_TIMEOUT_SECONDS:-15}"
+  if ! [[ "$audio_ready_timeout" =~ ^[0-9]+$ ]]; then
+    audio_ready_timeout="15"
+  fi
+  audio_ready_deadline=$((SECONDS + audio_ready_timeout))
+  until [ -f /defaults/pid ] || [ "$SECONDS" -ge "$audio_ready_deadline" ]; do
+    sleep .5
+  done
+  if [ ! -f /defaults/pid ]; then
+    echo "[svc-selkies] warning: /defaults/pid not found after ${audio_ready_timeout}s; continuing Selkies startup" >&2
+  fi""",
+]
+new = """  audio_ready_timeout="${SELKIES_AUDIO_READY_TIMEOUT_SECONDS:-15}"
+  if ! [[ "$audio_ready_timeout" =~ ^[0-9]+$ ]]; then
+    audio_ready_timeout="15"
+  fi
+  # SELKIES_AUDIO_READY_COUNTER_PATCH
+  audio_ready_waited=0
+  until [ -f /defaults/pid ] || [ "$audio_ready_waited" -ge "$audio_ready_timeout" ]; do
+    sleep 1
+    audio_ready_waited=$((audio_ready_waited + 1))
+  done
+  if [ ! -f /defaults/pid ]; then
+    echo "[svc-selkies] warning: /defaults/pid not found after ${audio_ready_timeout}s; continuing Selkies startup" >&2
+  fi"""
+
+for old in old_blocks:
+    if old in text:
+        text = text.replace(old, new, 1)
+        break
+else:
+    if "SELKIES_AUDIO_READY_COUNTER_PATCH" not in text:
+        print(f"[selkies-audio-wait-patch] warning: audio wait target not found in {path}; continuing")
+
+pactl_old = """  s6-setuidgid abc with-contenv pactl \\
+    load-module module-null-sink \\
+    sink_name="output" \\
+    sink_properties=device.description="output"
+  s6-setuidgid abc with-contenv pactl \\
+    load-module module-null-sink \\
+    sink_name="input" \\
+    sink_properties=device.description="input\""""
+pactl_new = """  # SELKIES_PACTL_TIMEOUT_PATCH
+  pactl_timeout="${SELKIES_PACTL_TIMEOUT_SECONDS:-5}"
+  if ! [[ "$pactl_timeout" =~ ^[0-9]+$ ]]; then
+    pactl_timeout="5"
+  fi
+  timeout "$pactl_timeout" s6-setuidgid abc with-contenv pactl \\
+    load-module module-null-sink \\
+    sink_name="output" \\
+    sink_properties=device.description="output" || \\
+    echo "[svc-selkies] warning: pactl output sink setup timed out or failed; continuing Selkies startup" >&2
+  timeout "$pactl_timeout" s6-setuidgid abc with-contenv pactl \\
+    load-module module-null-sink \\
+    sink_name="input" \\
+    sink_properties=device.description="input" || \\
+    echo "[svc-selkies] warning: pactl input sink setup timed out or failed; continuing Selkies startup" >&2"""
+
+if "SELKIES_PACTL_TIMEOUT_PATCH" not in text:
+    if pactl_old in text:
+        text = text.replace(pactl_old, pactl_new, 1)
+    else:
+        print(f"[selkies-audio-wait-patch] warning: pactl setup target not found in {path}; continuing")
+
+path.write_text(text, encoding="utf-8")
+print(f"[selkies-audio-wait-patch] patched {path}")
+PY
+  then
+    patched_any="true"
+  fi
+done
+
+if [ "$patched_any" != "true" ]; then
+  echo "[selkies-audio-wait-patch] svc-selkies run script not found; skipping"
+fi
