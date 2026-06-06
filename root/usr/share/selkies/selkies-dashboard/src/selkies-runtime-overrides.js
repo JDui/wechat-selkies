@@ -93,8 +93,15 @@
   var notificationSessionSeenKey = "notification_session_seen_v1";
   var lastNotificationSessionKey = getStoredValue(notificationSessionSeenKey);
   var notificationBandwidthStateKey = "notification_bandwidth_daily_v1";
+  var notificationBandwidthSamplesKey = "notification_bandwidth_samples_v1";
   var notificationBandwidthEventTimer = null;
   var lastNetworkStatsAt = 0;
+  var notificationBandwidthSummary = {
+    uploadKbps: 0,
+    downloadKbps: 0,
+    dominant: "upload",
+    total24hBytes: 0
+  };
   var unreadTitleFlashTimer = null;
   var unreadTitleFlashPhase = false;
   var unreadIconFlashTimer = null;
@@ -1138,8 +1145,7 @@
     var safe = entry || {};
     return [
       String(safe.app || ""),
-      String(safe.title || "").replace(/\s+/g, " ").trim(),
-      String(safe.source || "").replace(/\s+/g, " ").trim()
+      String(safe.title || "").replace(/\s+/g, " ").trim()
     ].join("|");
   }
 
@@ -1169,30 +1175,45 @@
       source: source
     });
     var mergeWindowMs = typeof dedupeMs === "number" ? dedupeMs : NOTIFICATION_MERGE_WINDOW_MS;
-    var lastSimilarAt = notificationHistoryRecentKeys[similarKey] || 0;
-    if (mergeWindowMs && lastSimilarAt && now - lastSimilarAt < mergeWindowMs) return false;
-    notificationHistoryRecentKeys[similarKey] = now;
-    pruneNotificationHistoryRecent(now);
-
     var key = String(safe.key || ["notice", app, ts, title, body, source].join("|"));
     var current = getNotificationHistory();
     for (var i = 0; i < current.length; i += 1) {
-      if (String(current[i] && current[i].key) === key) return false;
+      if (String(current[i] && current[i].key) === key) {
+        current[i] = Object.assign({}, current[i], {
+          id: safe.id || ts,
+          ts: ts,
+          app: app,
+          title: title || current[i].title || "\u9875\u9762\u901a\u77e5",
+          body: body,
+          source: source
+        });
+        setNotificationHistory(current);
+        notificationHistoryRecentKeys[similarKey] = now;
+        pruneNotificationHistoryRecent(now);
+        renderNotificationCenterHistory();
+        return true;
+      }
       if (
         mergeWindowMs &&
         notificationHistorySimilarKey(current[i]) === similarKey &&
         Math.abs((parseTimestamp(current[i] && current[i].ts) || 0) - ts) < mergeWindowMs
       ) {
         current[i] = Object.assign({}, current[i], {
+          id: safe.id || ts,
           ts: ts,
+          title: title || current[i].title || "\u9875\u9762\u901a\u77e5",
           body: body || current[i].body || "",
           source: source || current[i].source || ""
         });
         setNotificationHistory(current);
+        notificationHistoryRecentKeys[similarKey] = now;
+        pruneNotificationHistoryRecent(now);
         renderNotificationCenterHistory();
-        return false;
+        return true;
       }
     }
+    notificationHistoryRecentKeys[similarKey] = now;
+    pruneNotificationHistoryRecent(now);
     current.unshift({
       key: key,
       id: safe.id || ts,
@@ -1215,10 +1236,6 @@
   function addNotificationHistoryEvents(events) {
     if (!Array.isArray(events) || !events.length) return;
     var seen = Object.create(null);
-    var current = getNotificationHistory();
-    for (var c = 0; c < current.length; c += 1) {
-      if (current[c]) seen[String(current[c].key || notificationHistoryEventKey(current[c], current[c].id))] = true;
-    }
     for (var i = 0; i < events.length; i += 1) {
       var event = events[i] || {};
       var app = String(event.app || "");
@@ -1281,6 +1298,71 @@
     setStoredValue(notificationBandwidthStateKey, JSON.stringify(state || {}));
   }
 
+  function readBandwidthSamples() {
+    var raw = getStoredValue(notificationBandwidthSamplesKey);
+    if (!raw) return [];
+    try {
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_err) {
+      return [];
+    }
+  }
+
+  function writeBandwidthSamples(samples) {
+    var cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    var cleaned = [];
+    var total = 0;
+    var items = Array.isArray(samples) ? samples : [];
+    for (var i = 0; i < items.length; i += 1) {
+      var item = items[i] || {};
+      var ts = parseTimestamp(item.ts);
+      if (!ts || ts < cutoff) continue;
+      var uploadBytes = Math.max(0, Number(item.uploadBytes) || 0);
+      var downloadBytes = Math.max(0, Number(item.downloadBytes) || 0);
+      cleaned.push({ ts: ts, uploadBytes: uploadBytes, downloadBytes: downloadBytes });
+      total += uploadBytes + downloadBytes;
+    }
+    while (cleaned.length > 720) {
+      var removed = cleaned.shift();
+      total -= (Number(removed.uploadBytes) || 0) + (Number(removed.downloadBytes) || 0);
+    }
+    notificationBandwidthSummary.total24hBytes = Math.max(0, total);
+    setStoredValue(notificationBandwidthSamplesKey, JSON.stringify(cleaned));
+    return cleaned;
+  }
+
+  function formatTrafficSpeed(kbps) {
+    var value = Math.max(0, Number(kbps) || 0);
+    if (value >= 1024) return (value / 1024).toFixed(value >= 10240 ? 1 : 2) + " MB/s";
+    return value.toFixed(value >= 10 ? 0 : 1) + " KB/s";
+  }
+
+  function formatTrafficTotal(bytes) {
+    var gb = Math.max(0, Number(bytes) || 0) / 1024 / 1024 / 1024;
+    return gb.toFixed(gb >= 10 ? 1 : 2) + " GB";
+  }
+
+  function renderNotificationBandwidthSummary() {
+    var root = document.getElementById("selkies-notification-center");
+    var el = root && root.querySelector(".selkies-notification-center-bandwidth");
+    if (!el) return;
+    var upload = Math.max(0, Number(notificationBandwidthSummary.uploadKbps) || 0);
+    var download = Math.max(0, Number(notificationBandwidthSummary.downloadKbps) || 0);
+    var dominant = upload >= download ? "upload" : "download";
+    notificationBandwidthSummary.dominant = dominant;
+    var speed = dominant === "upload" ? upload : download;
+    var speedEl = el.querySelector("[data-bandwidth='speed']");
+    var totalEl = el.querySelector("[data-bandwidth='total']");
+    if (speedEl) {
+      speedEl.textContent = formatTrafficSpeed(speed);
+      speedEl.setAttribute("data-direction", dominant);
+    }
+    if (totalEl) {
+      totalEl.textContent = formatTrafficTotal(notificationBandwidthSummary.total24hBytes);
+    }
+  }
+
   function maybeRecordDailyBandwidthNotice(force) {
     var state = readBandwidthState();
     var mb = state.bytes / 1024 / 1024;
@@ -1307,13 +1389,26 @@
 
   function recordNetworkStatsBandwidth(payload) {
     if (!payload || payload.type !== "network_stats") return;
-    var mbps = Number(payload.bandwidth_mbps);
-    if (!Number.isFinite(mbps) || mbps <= 0) return;
+    var uploadKbps = Number(payload.upload_kbps);
+    var downloadKbps = Number(payload.download_kbps);
+    if (!Number.isFinite(uploadKbps)) uploadKbps = Number(payload.bandwidth_mbps) * 1000;
+    if (!Number.isFinite(downloadKbps)) downloadKbps = 0;
+    uploadKbps = Math.max(0, uploadKbps || 0);
+    downloadKbps = Math.max(0, downloadKbps || 0);
+    if (uploadKbps <= 0 && downloadKbps <= 0) return;
     var now = Date.now();
     var elapsedSeconds = lastNetworkStatsAt ? Math.max(1, Math.min(30, (now - lastNetworkStatsAt) / 1000)) : 5;
     lastNetworkStatsAt = now;
-    var bytes = (mbps * 1000000 / 8) * elapsedSeconds;
+    var uploadBytes = (uploadKbps * 1000 / 8) * elapsedSeconds;
+    var downloadBytes = (downloadKbps * 1000 / 8) * elapsedSeconds;
+    var bytes = uploadBytes + downloadBytes;
     if (!Number.isFinite(bytes) || bytes <= 0) return;
+    var samples = readBandwidthSamples();
+    samples.push({ ts: now, uploadBytes: uploadBytes, downloadBytes: downloadBytes });
+    writeBandwidthSamples(samples);
+    notificationBandwidthSummary.uploadKbps = uploadKbps;
+    notificationBandwidthSummary.downloadKbps = downloadKbps;
+    renderNotificationBandwidthSummary();
     var state = readBandwidthState();
     state.bytes = Math.max(0, Number(state.bytes) || 0) + bytes;
     state.updatedAt = now;
@@ -1323,7 +1418,11 @@
 
   function startBandwidthNoticeTimer() {
     if (notificationBandwidthEventTimer) return;
+    writeBandwidthSamples(readBandwidthSamples());
+    renderNotificationBandwidthSummary();
     notificationBandwidthEventTimer = window.setInterval(function () {
+      writeBandwidthSamples(readBandwidthSamples());
+      renderNotificationBandwidthSummary();
       maybeRecordDailyBandwidthNotice(true);
     }, 10 * 60 * 1000);
   }
@@ -1337,13 +1436,17 @@
       "#selkies-notification-center[data-enabled='0']{display:none}" +
       "#selkies-notification-center[data-open='1']{pointer-events:auto}" +
       "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(148,163,184,.38);border-right:none;border-radius:8px 0 0 8px;background:rgba(15,23,42,.42);width:10px;min-width:10px;height:76px;padding:0;font-size:0;line-height:0;cursor:pointer;box-shadow:none;backdrop-filter:blur(10px);pointer-events:auto;transition:right .22s ease,background .18s ease,border-color .18s ease}" +
-      "#selkies-notification-center-toggle::before{content:'';display:block;width:3px;height:44px;margin:15px 0 0 3px;border-radius:999px;background:linear-gradient(180deg,#38bdf8,#f472b6);opacity:.96}" +
       "#selkies-notification-center-toggle:hover{background:rgba(30,41,59,.64);border-color:#93c5fd}" +
       "#selkies-notification-center[data-open='1'] #selkies-notification-center-toggle{right:320px}" +
       "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:none;opacity:0;backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease,opacity .22s ease}" +
       "#selkies-notification-center[data-open='1'] #selkies-notification-center-panel{transform:translateX(0);opacity:1;box-shadow:-18px 0 36px rgba(2,6,23,.28)}" +
       ".selkies-notification-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px 10px;border-bottom:1px solid rgba(148,163,184,.14)}" +
       ".selkies-notification-center-title{font-size:13px;font-weight:800;color:#f8fafc}" +
+      ".selkies-notification-center-bandwidth{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:10px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}" +
+      ".selkies-notification-center-bandwidth [data-bandwidth='speed'][data-direction='upload']{color:#fb923c}" +
+      ".selkies-notification-center-bandwidth [data-bandwidth='speed'][data-direction='download']{color:#f472b6}" +
+      ".selkies-notification-center-bandwidth [data-bandwidth='sep']{color:#475569}" +
+      ".selkies-notification-center-bandwidth [data-bandwidth='total']{color:#cbd5e1}" +
       ".selkies-notification-center-count{font-size:11px;color:#93c5fd}" +
       ".selkies-notification-center-list{flex:1;overflow:auto;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px}" +
       ".selkies-notification-center-empty{font-size:12px;line-height:1.6;color:#94a3b8;padding:12px 4px}" +
@@ -1376,7 +1479,7 @@
     root.innerHTML =
       '<button type="button" id="selkies-notification-center-toggle" title="\u901a\u77e5\u4e2d\u5fc3" aria-label="\u901a\u77e5\u4e2d\u5fc3"></button>' +
       '<aside id="selkies-notification-center-panel" aria-label="\u901a\u77e5\u4e2d\u5fc3\u5386\u53f2">' +
-      '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-count"></div></div>' +
+      '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-bandwidth"><span data-bandwidth="speed" data-direction="upload">0 KB/s</span><span data-bandwidth="sep">|</span><span data-bandwidth="total">0.00 GB</span></div><div class="selkies-notification-center-count"></div></div>' +
       '<div class="selkies-notification-center-list"></div>' +
       '<div class="selkies-notification-center-links"></div>' +
       '<div class="selkies-notification-center-footer"><button type="button" class="selkies-notification-center-clear">\u4e00\u952e\u6e05\u7406</button></div>' +
@@ -1393,6 +1496,7 @@
       setUnreadState("qq", false);
       renderNotificationCenterHistory();
     });
+    renderNotificationBandwidthSummary();
     return root;
   }
 
@@ -1446,6 +1550,7 @@
     if (!root) return;
     root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
     root.setAttribute("data-enabled", notificationCenterEnabled ? "1" : "0");
+    renderNotificationBandwidthSummary();
     var historyItems = getNotificationHistory().slice(0, NOTIFICATION_HISTORY_LIMIT);
     var count = root.querySelector(".selkies-notification-center-count");
     if (count) count.textContent = String(historyItems.length) + "/" + String(NOTIFICATION_HISTORY_LIMIT);
@@ -3634,6 +3739,55 @@
     document.addEventListener("keyup", handleKeyup, true);
   }
 
+  function ensureSidebarRepairButtonStyle() {
+    if (document.getElementById("selkies-sidebar-repair-button-style")) return;
+    var style = document.createElement("style");
+    style.id = "selkies-sidebar-repair-button-style";
+    style.textContent =
+      ".selkies-sidebar-stream-repair{margin:10px 0;display:flex}" +
+      ".selkies-sidebar-stream-repair button{appearance:none;width:100%;min-height:32px;border:1px solid #7f1d1d;border-radius:8px;background:linear-gradient(180deg,#dc2626,#991b1b);color:#fee2e2;font-size:12px;font-weight:800;cursor:pointer}" +
+      ".selkies-sidebar-stream-repair button:hover{filter:brightness(1.06)}" +
+      ".selkies-sidebar-stream-repair button:active{transform:translateY(1px)}";
+    document.head.appendChild(style);
+  }
+
+  function ensureSidebarRepairButton(sidebarHost) {
+    if (!sidebarHost) return null;
+    ensureSidebarRepairButtonStyle();
+    var holder = sidebarHost.querySelector(".selkies-sidebar-stream-repair");
+    if (holder) return holder;
+    holder = document.createElement("div");
+    holder.className = "selkies-sidebar-stream-repair";
+    holder.innerHTML = '<button type="button">\u21bb \u91cd\u4fee\u590d\u63a8\u6d41</button>';
+    var button = holder.querySelector("button");
+    if (button) {
+      button.addEventListener("click", function (event) {
+        try {
+          event.preventDefault();
+          event.stopPropagation();
+        } catch (_err) {}
+        repairImeAndClipboardHeavy();
+      });
+    }
+    return holder;
+  }
+
+  function maybeHideGameModeCloseButton(node, text) {
+    var safe = String(text || "");
+    if (safe !== "x" && safe !== "\u00d7" && safe !== "+" && safe !== "\u2715") return false;
+    var parent = node && node.parentElement;
+    for (var depth = 0; parent && depth < 4; depth += 1) {
+      var parentText = String(parent.innerText || parent.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (parentText.indexOf("\u6e38\u620f\u6a21\u5f0f") >= 0 || parentText.indexOf("game mode") >= 0) {
+        node.style.display = "none";
+        node.setAttribute("data-selkies-game-mode-close-hidden", "1");
+        return true;
+      }
+      parent = parent.parentElement;
+    }
+    return false;
+  }
+
   function hideRemovedSidebarSections() {
     if (!document.body) return;
 
@@ -3654,6 +3808,9 @@
       "\u6e38\u620f\u624b\u67c4",
       "\u6e38\u620f\u624b\u67c4\u652f\u6301",
       "\u542f\u7528/\u7981\u7528\u6e38\u620f\u624b\u67c4\u652f\u6301",
+      "\u542f\u7528/\u7981\u7528\u624b\u67c4\u8f93\u5165",
+      "\u542f\u7528\u624b\u67c4\u8f93\u5165",
+      "\u7981\u7528\u624b\u67c4\u8f93\u5165",
       "player 2",
       "player 3",
       "player 4",
@@ -3668,7 +3825,7 @@
       "\u5e94\u7528\u7a0b\u5e8f",
       "\u5e94\u7528"
     ];
-    var containsTexts = ["touch gamepad", "gamepad", "\u624b\u67c4"];
+    var containsTexts = ["touch gamepad", "gamepad", "\u624b\u67c4", "\u624b\u67c4\u8f93\u5165"];
     var nodes = sidebarHost.querySelectorAll("details,section,article,div,button,label,summary,span,a");
     for (var i = 0; i < nodes.length; i += 1) {
       var node = nodes[i];
@@ -3678,6 +3835,7 @@
         .trim()
         .toLowerCase();
       if (!text) continue;
+      if (maybeHideGameModeCloseButton(node, text)) continue;
       var shouldHide = exactTexts.indexOf(text) >= 0;
       for (var c = 0; !shouldHide && c < containsTexts.length; c += 1) {
         shouldHide = text.indexOf(containsTexts[c]) >= 0;
@@ -3686,6 +3844,16 @@
       var container = node.closest("details,section,article,li,div");
       if (!container || container === sidebarHost) continue;
       if (container.getBoundingClientRect().height < 18) continue;
+      if (!sidebarHost.querySelector(".selkies-sidebar-stream-repair")) {
+        var repairButton = ensureSidebarRepairButton(sidebarHost);
+        if (repairButton) {
+          try {
+            sidebarHost.insertBefore(repairButton, container);
+          } catch (_insertErr) {
+            sidebarHost.appendChild(repairButton);
+          }
+        }
+      }
       container.style.display = "none";
       container.setAttribute("data-selkies-sidebar-section-hidden", "1");
     }

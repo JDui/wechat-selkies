@@ -100,6 +100,27 @@ class EventQueue:
             payload = dict(event)
             payload["id"] = self._next_id
             self._next_id += 1
+            now_ms = int(payload.get("ts") or time.time() * 1000)
+            merge_key = (
+                normalize_text(payload.get("app")),
+                normalize_text(payload.get("title")),
+            )
+            events = list(self._events)
+            for index in range(len(events) - 1, -1, -1):
+                existing = events[index] or {}
+                existing_key = (
+                    normalize_text(existing.get("app")),
+                    normalize_text(existing.get("title")),
+                )
+                try:
+                    existing_ts = int(existing.get("ts") or 0)
+                except Exception:
+                    existing_ts = 0
+                if existing_key == merge_key and abs(now_ms - existing_ts) < 8000:
+                    events.pop(index)
+                    events.append(payload)
+                    self._events = deque(events, maxlen=self._events.maxlen)
+                    return payload["id"]
             self._events.append(payload)
             return payload["id"]
 
@@ -432,9 +453,6 @@ def enqueue_notification_event(app, title, body, source, extra=None):
     merge_key = "|".join([normalize_text(app), normalize_text(title), normalize_text(source)])
     now_seconds = time.time()
     with RECENT_EVENT_LOCK:
-        last_seen_at = RECENT_EVENT_KEYS.get(merge_key, 0.0)
-        if last_seen_at and now_seconds - last_seen_at < EVENT_MERGE_WINDOW_SECONDS:
-            return
         RECENT_EVENT_KEYS[merge_key] = now_seconds
         if len(RECENT_EVENT_KEYS) > 512:
             cutoff = now_seconds - 60.0
