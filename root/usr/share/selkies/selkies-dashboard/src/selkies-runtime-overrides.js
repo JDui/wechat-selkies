@@ -84,7 +84,11 @@
   var notificationCursor = parseTimestamp(getStoredValue(notificationCursorKey));
   var notificationPollTimer = null;
   var notificationHistoryRenderTimer = null;
+  var notificationHistoryRecentKeys = Object.create(null);
   var notificationCenterOpen = sanitizeBool(getStoredValue("notification_center_open"), false);
+  var notificationCenterEnabled = sanitizeBool(getStoredValue("notification_center_enabled"), true);
+  var notificationSessionSeenKey = "notification_session_seen_v1";
+  var lastNotificationSessionKey = getStoredValue(notificationSessionSeenKey);
   var unreadTitleFlashTimer = null;
   var unreadTitleFlashPhase = false;
   var unreadIconFlashTimer = null;
@@ -214,6 +218,7 @@
           if (WS_SESSION_ID) window.sessionStorage.setItem("selkies_session_id", WS_SESSION_ID);
           if (WS_SESSION_EPOCH) window.sessionStorage.setItem("selkies_session_epoch", String(WS_SESSION_EPOCH));
         } catch (_storeErr) {}
+        recordSessionClientNotification(WS_SESSION_ID, WS_SESSION_EPOCH);
         return true;
       })
       .catch(function () {
@@ -1056,6 +1061,99 @@
     ].join("|");
   }
 
+  function getClientDeviceLabel() {
+    var nav = window.navigator || {};
+    var parts = [];
+    if (nav.platform) parts.push(String(nav.platform));
+    if (nav.userAgent) parts.push(String(nav.userAgent).replace(/\s+/g, " ").slice(0, 96));
+    return parts.join(" / ") || "\u5f53\u524d\u6d4f\u89c8\u5668";
+  }
+
+  function recordSessionClientNotification(sessionId, sessionEpoch) {
+    var sid = String(sessionId || "");
+    if (!sid) return;
+    var sessionKey = sid + "|" + String(sessionEpoch || "");
+    if (sessionKey === lastNotificationSessionKey) return;
+    lastNotificationSessionKey = sessionKey;
+    setStoredValue(notificationSessionSeenKey, sessionKey);
+    addNotificationHistoryItem(
+      {
+        key: "session|" + sessionKey,
+        id: parseTimestamp(sessionEpoch) || Date.now(),
+        ts: Date.now(),
+        app: "client",
+        title: "\u5ba2\u6237\u7aef\u4f1a\u8bdd\u5df2\u8fde\u63a5",
+        body: "\u8bbe\u5907\uff1a" + getClientDeviceLabel() + "\uff1b\u65f6\u95f4\uff1a" + new Date().toLocaleString("zh-CN"),
+        source: "\u4f1a\u8bdd " + sid.slice(0, 8)
+      },
+      5000
+    );
+  }
+
+  function notificationHistorySimilarKey(entry) {
+    var safe = entry || {};
+    return [
+      String(safe.app || ""),
+      String(safe.title || "").replace(/\s+/g, " ").trim(),
+      String(safe.body || "").replace(/\s+/g, " ").trim(),
+      String(safe.source || "").replace(/\s+/g, " ").trim()
+    ].join("|");
+  }
+
+  function pruneNotificationHistoryRecent(now) {
+    var keys = Object.keys(notificationHistoryRecentKeys);
+    if (keys.length < 200) return;
+    for (var i = 0; i < keys.length; i += 1) {
+      if (now - (notificationHistoryRecentKeys[keys[i]] || 0) > 60000) {
+        delete notificationHistoryRecentKeys[keys[i]];
+      }
+    }
+  }
+
+  function addNotificationHistoryItem(entry, dedupeMs) {
+    var safe = entry || {};
+    var now = Date.now();
+    var title = String(safe.title || "").trim();
+    var body = String(safe.body || "").trim();
+    if (!title && !body) return false;
+    var app = String(safe.app || "system").trim() || "system";
+    var source = String(safe.source || "").trim();
+    var ts = parseTimestamp(safe.ts) || now;
+    var similarKey = notificationHistorySimilarKey({
+      app: app,
+      title: title,
+      body: body,
+      source: source
+    });
+    var lastSimilarAt = notificationHistoryRecentKeys[similarKey] || 0;
+    if (dedupeMs && lastSimilarAt && now - lastSimilarAt < dedupeMs) return false;
+    notificationHistoryRecentKeys[similarKey] = now;
+    pruneNotificationHistoryRecent(now);
+
+    var key = String(safe.key || ["notice", app, ts, title, body, source].join("|"));
+    var current = getNotificationHistory();
+    for (var i = 0; i < current.length; i += 1) {
+      if (String(current[i] && current[i].key) === key) return false;
+    }
+    current.unshift({
+      key: key,
+      id: safe.id || ts,
+      ts: ts,
+      app: app,
+      title: title || "\u9875\u9762\u901a\u77e5",
+      body: body,
+      source: source
+    });
+    current.sort(function (a, b) {
+      var bTime = parseTimestamp(b && b.ts) || parseTimestamp(b && b.id);
+      var aTime = parseTimestamp(a && a.ts) || parseTimestamp(a && a.id);
+      return bTime - aTime;
+    });
+    setNotificationHistory(current);
+    renderNotificationCenterHistory();
+    return true;
+  }
+
   function addNotificationHistoryEvents(events) {
     if (!Array.isArray(events) || !events.length) return;
     var current = getNotificationHistory();
@@ -1109,11 +1207,14 @@
     style.id = "selkies-notification-center-style";
     style.textContent =
       "#selkies-notification-center{position:fixed;right:0;top:64px;bottom:44px;z-index:10024;display:flex;align-items:stretch;pointer-events:none}" +
+      "#selkies-notification-center[data-enabled='0']{display:none}" +
       "#selkies-notification-center[data-open='1']{pointer-events:auto}" +
-      "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:10px 0 0 10px;background:#101826;color:#e2e8f0;min-width:34px;height:58px;padding:0 8px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:-8px 0 18px rgba(2,6,23,.18);pointer-events:auto}" +
+      "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(71,85,105,.92);border-right:none;border-radius:8px 0 0 8px;background:rgba(15,23,42,.94);width:10px;min-width:10px;height:76px;padding:0;font-size:0;line-height:0;cursor:pointer;box-shadow:none;pointer-events:auto;transition:right .22s ease,background .18s ease,border-color .18s ease}" +
+      "#selkies-notification-center-toggle::before{content:'';display:block;width:3px;height:44px;margin:15px 0 0 3px;border-radius:999px;background:linear-gradient(180deg,#38bdf8,#f472b6);opacity:.96}" +
+      "#selkies-notification-center-toggle:hover{background:rgba(30,41,59,.96);border-color:#93c5fd}" +
       "#selkies-notification-center[data-open='1'] #selkies-notification-center-toggle{right:320px}" +
-      "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:-18px 0 36px rgba(2,6,23,.28);backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease}" +
-      "#selkies-notification-center[data-open='1'] #selkies-notification-center-panel{transform:translateX(0)}" +
+      "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:none;opacity:0;backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease,opacity .22s ease,box-shadow .22s ease}" +
+      "#selkies-notification-center[data-open='1'] #selkies-notification-center-panel{transform:translateX(0);opacity:1;box-shadow:-18px 0 36px rgba(2,6,23,.28)}" +
       ".selkies-notification-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px 10px;border-bottom:1px solid rgba(148,163,184,.14)}" +
       ".selkies-notification-center-title{font-size:13px;font-weight:800;color:#f8fafc}" +
       ".selkies-notification-center-count{font-size:11px;color:#93c5fd}" +
@@ -1137,12 +1238,16 @@
     if (!document.body) return null;
     ensureNotificationCenterStyle();
     var root = document.getElementById("selkies-notification-center");
-    if (root) return root;
+    if (root) {
+      root.setAttribute("data-enabled", notificationCenterEnabled ? "1" : "0");
+      return root;
+    }
     root = document.createElement("div");
     root.id = "selkies-notification-center";
     root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
+    root.setAttribute("data-enabled", notificationCenterEnabled ? "1" : "0");
     root.innerHTML =
-      '<button type="button" id="selkies-notification-center-toggle" title="\u901a\u77e5\u4e2d\u5fc3">\u901a\u77e5</button>' +
+      '<button type="button" id="selkies-notification-center-toggle" title="\u901a\u77e5\u4e2d\u5fc3" aria-label="\u901a\u77e5\u4e2d\u5fc3"></button>' +
       '<aside id="selkies-notification-center-panel" aria-label="\u901a\u77e5\u4e2d\u5fc3\u5386\u53f2">' +
       '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-count"></div></div>' +
       '<div class="selkies-notification-center-list"></div>' +
@@ -1163,6 +1268,19 @@
     return root;
   }
 
+  function notificationHistoryAppLabel(entry) {
+    var app = String(entry && entry.app || "");
+    if (app === "wechat") return "\u5fae\u4fe1";
+    if (app === "qq") return "QQ";
+    if (app === "clipboard") return "\u526a\u677f";
+    if (app === "stream") return "\u63a8\u6d41";
+    if (app === "client") return "\u5ba2\u6237\u7aef";
+    if (app === "audio") return "\u97f3\u9891";
+    if (app === "tool") return "\u5de5\u5177";
+    if (app === "system") return "\u7cfb\u7edf";
+    return app || "\u9875\u9762";
+  }
+
   function createNotificationCenterItem(entry) {
     var item = document.createElement("div");
     item.className = "selkies-notification-center-item";
@@ -1170,7 +1288,7 @@
     row.className = "selkies-notification-center-row";
     var app = document.createElement("div");
     app.className = "selkies-notification-center-app";
-    app.textContent = entry.app === "wechat" ? "\u5fae\u4fe1" : "QQ";
+    app.textContent = notificationHistoryAppLabel(entry);
     var time = document.createElement("div");
     time.className = "selkies-notification-center-time";
     time.textContent = formatNotificationCenterTime(entry.ts);
@@ -1198,6 +1316,7 @@
     var root = ensureNotificationCenter();
     if (!root) return;
     root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
+    root.setAttribute("data-enabled", notificationCenterEnabled ? "1" : "0");
     var historyItems = getNotificationHistory().slice(0, 100);
     var count = root.querySelector(".selkies-notification-center-count");
     if (count) count.textContent = String(historyItems.length) + "/100";
@@ -1724,6 +1843,36 @@
     return layer;
   }
 
+  function activityNotificationHistoryApp(id, task) {
+    var raw = String(id || "") + " " + String(task && task.title || "") + " " + String(task && task.detail || "");
+    if (/clipboard|\u526a\u8d34\u677f|\u526a\u677f/i.test(raw)) return "clipboard";
+    if (/stream|\u63a8\u6d41|video|pipeline/i.test(raw)) return "stream";
+    if (/audio|\u97f3\u9891|wechat-audio/i.test(raw)) return "audio";
+    if (/session|client|browser|\u5ba2\u6237\u7aef|\u6d4f\u89c8\u5668/i.test(raw)) return "client";
+    if (/setting|tools|repair|dock|bar|\u5de5\u5177|\u4fee\u590d/i.test(raw)) return "tool";
+    return "system";
+  }
+
+  function recordActivityNotificationHistory(id, task) {
+    if (!task || task.skipNotificationHistory) return;
+    var title = String(task.title || "").trim();
+    var detail = String(task.detail || "").trim();
+    if (!title && !detail) return;
+    var now = Date.now();
+    addNotificationHistoryItem(
+      {
+        key: ["activity", String(id || ""), String(task.kind || ""), String(now), String(title), String(detail)].join("|"),
+        id: "activity-" + String(id || "") + "-" + String(now),
+        ts: task.updatedAt || now,
+        app: activityNotificationHistoryApp(id, task),
+        title: title || "\u9875\u9762\u901a\u77e5",
+        body: detail,
+        source: "\u9875\u9762\u901a\u77e5"
+      },
+      5000
+    );
+  }
+
   function setActivityTask(id, taskPatch) {
     if (!id) return;
     var now = Date.now();
@@ -1743,6 +1892,7 @@
       id: id,
       updatedAt: now
     });
+    recordActivityNotificationHistory(id, activityTasks[id]);
     scheduleActivityRender();
   }
 
@@ -3932,6 +4082,7 @@
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
+      '<label class="selkies-tool-row"><span>\u542f\u7528\u53f3\u4fa7\u901a\u77e5\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
@@ -3964,6 +4115,7 @@
       document.head.appendChild(style);
     }
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
+    var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
     var bottomDockPositionSelect = section.querySelector('[data-debug-select="bottom-dock-position"]');
@@ -3971,6 +4123,9 @@
     var idleFocusSelect = section.querySelector('[data-debug-select="idle-focus-seconds"]');
     if (notificationToggle) {
       notificationToggle.checked = !!notificationPassthroughEnabled;
+    }
+    if (notificationCenterToggle) {
+      notificationCenterToggle.checked = !!notificationCenterEnabled;
     }
     if (adaptiveSleepToggle) {
       adaptiveSleepToggle.checked = !!adaptiveSleepEnabled;
@@ -4011,6 +4166,22 @@
           indeterminate: false,
           priority: 70,
           expiresAt: Date.now() + 2600
+        });
+      });
+      section.querySelector('[data-debug-toggle="right-notification-center"]').addEventListener("change", function (event) {
+        notificationCenterEnabled = !!(event && event.target && event.target.checked);
+        setStoredValue("notification_center_enabled", notificationCenterEnabled);
+        var root = ensureNotificationCenter();
+        if (root) root.setAttribute("data-enabled", notificationCenterEnabled ? "1" : "0");
+        renderNotificationCenterHistory();
+        setActivityTask("right-notification-center-setting", {
+          title: notificationCenterEnabled ? "\u5df2\u542f\u7528\u53f3\u4fa7\u901a\u77e5\u680f" : "\u5df2\u5173\u95ed\u53f3\u4fa7\u901a\u77e5\u680f",
+          detail: notificationCenterEnabled ? "\u53f3\u4fa7\u7ad6\u6761\u6309\u94ae\u5df2\u6062\u590d\uff0c\u5386\u53f2\u4ecd\u4fdd\u7559\u6700\u8fd1 100 \u6761\u3002" : "\u901a\u77e5\u5386\u53f2\u4ecd\u4f1a\u8bb0\u5f55\uff0c\u4f46\u53f3\u4fa7\u5165\u53e3\u5df2\u9690\u85cf\u3002",
+          kind: "success",
+          progress: 100,
+          indeterminate: false,
+          priority: 70,
+          expiresAt: Date.now() + 2400
         });
       });
       section.querySelector('[data-debug-select="bottom-dock-position"]').addEventListener("change", function (event) {
@@ -4223,6 +4394,14 @@
     var splitButton = shell.querySelector('[data-dock-action="split-toggle"]');
     if (splitButton) {
       splitButton.setAttribute("data-active", bottomActionSplitOpen ? "1" : "0");
+    }
+    var collapseButton = shell.querySelector('[data-dock-action="dock-collapse"]');
+    if (collapseButton) {
+      collapseButton.textContent = bottomActionDockPosition === "top" ? "\u25b3" : "\u25bd";
+    }
+    var collapsedToggle = shell.querySelector("#selkies-bottom-dock-collapsed-toggle");
+    if (collapsedToggle) {
+      collapsedToggle.textContent = bottomActionDockPosition === "top" ? "\u25bd" : "\u25b3";
     }
   }
 
