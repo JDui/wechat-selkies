@@ -81,6 +81,9 @@
   var BASE_BRAND_TITLE = "AXi-SNS-Box";
   var notificationCursorKey = "notification_cursor_v1";
   var notificationHistoryKey = "notification_history_v1";
+  var NOTIFICATION_HISTORY_LIMIT = 160;
+  var NOTIFICATION_HISTORY_MAX_BYTES = 10 * 1024 * 1024;
+  var NOTIFICATION_MERGE_WINDOW_MS = 8000;
   var notificationCursor = parseTimestamp(getStoredValue(notificationCursorKey));
   var notificationPollTimer = null;
   var notificationHistoryRenderTimer = null;
@@ -89,6 +92,9 @@
   var notificationCenterEnabled = sanitizeBool(getStoredValue("notification_center_enabled"), true);
   var notificationSessionSeenKey = "notification_session_seen_v1";
   var lastNotificationSessionKey = getStoredValue(notificationSessionSeenKey);
+  var notificationBandwidthStateKey = "notification_bandwidth_daily_v1";
+  var notificationBandwidthEventTimer = null;
+  var lastNetworkStatsAt = 0;
   var unreadTitleFlashTimer = null;
   var unreadTitleFlashPhase = false;
   var unreadIconFlashTimer = null;
@@ -290,6 +296,11 @@
       });
       ws.addEventListener("message", function (event) {
         if (!event || typeof event.data !== "string") return;
+        if (event.data.charAt(0) === "{") {
+          try {
+            recordNetworkStatsBandwidth(JSON.parse(event.data));
+          } catch (_statsErr) {}
+        }
         if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
           noteVideoHealthEvent("pipeline-reset");
         }
@@ -1047,7 +1058,37 @@
   }
 
   function setNotificationHistory(items) {
-    setStoredValue(notificationHistoryKey, JSON.stringify((items || []).slice(0, 100)));
+    var trimmed = (items || []).slice(0, NOTIFICATION_HISTORY_LIMIT);
+    var encoded = JSON.stringify(trimmed);
+    while (trimmed.length > 20 && encoded.length > NOTIFICATION_HISTORY_MAX_BYTES) {
+      trimmed.pop();
+      encoded = JSON.stringify(trimmed);
+    }
+    setStoredValue(notificationHistoryKey, encoded);
+  }
+
+  function postNotificationBridgeEvent(entry) {
+    if (!window.fetch || !entry) return;
+    try {
+      window.fetch(notificationApiPath("event"), {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        body: JSON.stringify(entry)
+      }).catch(function () {});
+    } catch (_err) {}
+  }
+
+  function recordNotificationCenterEvent(entry, dedupeMs) {
+    var added = addNotificationHistoryItem(entry, dedupeMs);
+    if (added) {
+      postNotificationBridgeEvent(entry);
+    }
+    return added;
   }
 
   function notificationHistoryEventKey(event, eventId) {
@@ -1076,15 +1117,18 @@
     if (sessionKey === lastNotificationSessionKey) return;
     lastNotificationSessionKey = sessionKey;
     setStoredValue(notificationSessionSeenKey, sessionKey);
-    addNotificationHistoryItem(
+    recordNotificationCenterEvent(
       {
         key: "session|" + sessionKey,
         id: parseTimestamp(sessionEpoch) || Date.now(),
         ts: Date.now(),
         app: "client",
-        title: "\u5ba2\u6237\u7aef\u4f1a\u8bdd\u5df2\u8fde\u63a5",
-        body: "\u8bbe\u5907\uff1a" + getClientDeviceLabel() + "\uff1b\u65f6\u95f4\uff1a" + new Date().toLocaleString("zh-CN"),
-        source: "\u4f1a\u8bdd " + sid.slice(0, 8)
+        title: "\u5ba2\u6237\u7aef\u5df2\u767b\u5165",
+        body: "\u767b\u5165\u8bbe\u5907\uff1a" + getClientDeviceLabel() + "\uff1b\u65f6\u95f4\uff1a" + new Date().toLocaleString("zh-CN"),
+        source: "\u4f1a\u8bdd " + sid.slice(0, 8),
+        device: getClientDeviceLabel(),
+        session_id: sid,
+        session_epoch: sessionEpoch
       },
       5000
     );
@@ -1095,7 +1139,6 @@
     return [
       String(safe.app || ""),
       String(safe.title || "").replace(/\s+/g, " ").trim(),
-      String(safe.body || "").replace(/\s+/g, " ").trim(),
       String(safe.source || "").replace(/\s+/g, " ").trim()
     ].join("|");
   }
@@ -1125,8 +1168,9 @@
       body: body,
       source: source
     });
+    var mergeWindowMs = typeof dedupeMs === "number" ? dedupeMs : NOTIFICATION_MERGE_WINDOW_MS;
     var lastSimilarAt = notificationHistoryRecentKeys[similarKey] || 0;
-    if (dedupeMs && lastSimilarAt && now - lastSimilarAt < dedupeMs) return false;
+    if (mergeWindowMs && lastSimilarAt && now - lastSimilarAt < mergeWindowMs) return false;
     notificationHistoryRecentKeys[similarKey] = now;
     pruneNotificationHistoryRecent(now);
 
@@ -1134,6 +1178,20 @@
     var current = getNotificationHistory();
     for (var i = 0; i < current.length; i += 1) {
       if (String(current[i] && current[i].key) === key) return false;
+      if (
+        mergeWindowMs &&
+        notificationHistorySimilarKey(current[i]) === similarKey &&
+        Math.abs((parseTimestamp(current[i] && current[i].ts) || 0) - ts) < mergeWindowMs
+      ) {
+        current[i] = Object.assign({}, current[i], {
+          ts: ts,
+          body: body || current[i].body || "",
+          source: source || current[i].source || ""
+        });
+        setNotificationHistory(current);
+        renderNotificationCenterHistory();
+        return false;
+      }
     }
     current.unshift({
       key: key,
@@ -1156,35 +1214,29 @@
 
   function addNotificationHistoryEvents(events) {
     if (!Array.isArray(events) || !events.length) return;
-    var current = getNotificationHistory();
     var seen = Object.create(null);
+    var current = getNotificationHistory();
     for (var c = 0; c < current.length; c += 1) {
       if (current[c]) seen[String(current[c].key || notificationHistoryEventKey(current[c], current[c].id))] = true;
     }
     for (var i = 0; i < events.length; i += 1) {
       var event = events[i] || {};
       var app = String(event.app || "");
-      if (app !== "wechat" && app !== "qq") continue;
+      if (["wechat", "qq", "clipboard", "stream", "client", "audio", "tool", "system", "link"].indexOf(app) < 0) continue;
       var eventId = parseTimestamp(event.id) || parseTimestamp(event.ts) || Date.now() + i;
-      var eventKey = notificationHistoryEventKey(event, eventId);
+      var eventKey = String(event.key || notificationHistoryEventKey(event, eventId));
       if (seen[eventKey]) continue;
       seen[eventKey] = true;
-      current.unshift({
+      addNotificationHistoryItem({
         key: eventKey,
         id: eventId,
         ts: parseTimestamp(event.ts) || Date.now(),
         app: app,
-        title: String(event.title || (app === "wechat" ? "\u5fae\u4fe1\u65b0\u6d88\u606f" : "QQ \u65b0\u6d88\u606f")),
+        title: String(event.title || (app === "wechat" ? "\u5fae\u4fe1\u65b0\u6d88\u606f" : app === "qq" ? "QQ \u65b0\u6d88\u606f" : "\u9875\u9762\u901a\u77e5")),
         body: String(event.body || ""),
         source: String(event.source || "")
-      });
+      }, NOTIFICATION_MERGE_WINDOW_MS);
     }
-    current.sort(function (a, b) {
-      var bTime = parseTimestamp(b && b.ts) || parseTimestamp(b && b.id);
-      var aTime = parseTimestamp(a && a.ts) || parseTimestamp(a && a.id);
-      return bTime - aTime;
-    });
-    setNotificationHistory(current);
     renderNotificationCenterHistory();
   }
 
@@ -1201,6 +1253,81 @@
     });
   }
 
+  function todayKey() {
+    var date = new Date();
+    var month = String(date.getMonth() + 1).padStart(2, "0");
+    var day = String(date.getDate()).padStart(2, "0");
+    return date.getFullYear() + "-" + month + "-" + day;
+  }
+
+  function readBandwidthState() {
+    var day = todayKey();
+    var fallback = { day: day, bytes: 0, lastNoticeMb: 0, updatedAt: Date.now() };
+    var raw = getStoredValue(notificationBandwidthStateKey);
+    if (!raw) return fallback;
+    try {
+      var parsed = JSON.parse(raw);
+      if (!parsed || parsed.day !== day) return fallback;
+      parsed.bytes = Math.max(0, Number(parsed.bytes) || 0);
+      parsed.lastNoticeMb = Math.max(0, Number(parsed.lastNoticeMb) || 0);
+      parsed.updatedAt = parseTimestamp(parsed.updatedAt) || Date.now();
+      return parsed;
+    } catch (_err) {
+      return fallback;
+    }
+  }
+
+  function writeBandwidthState(state) {
+    setStoredValue(notificationBandwidthStateKey, JSON.stringify(state || {}));
+  }
+
+  function maybeRecordDailyBandwidthNotice(force) {
+    var state = readBandwidthState();
+    var mb = state.bytes / 1024 / 1024;
+    if (!force && mb < 1) return;
+    if (!force && mb - (state.lastNoticeMb || 0) < 50) return;
+    state.lastNoticeMb = mb;
+    state.updatedAt = Date.now();
+    writeBandwidthState(state);
+    recordNotificationCenterEvent(
+      {
+        key: "bandwidth|" + state.day + "|" + Math.floor(mb),
+        ts: Date.now(),
+        app: "stream",
+        title: "\u4eca\u65e5\u63a8\u6d41\u6d41\u91cf\u7edf\u8ba1",
+        body: "\u5f53\u65e5\u63a8\u6d41\u7cfb\u7edf\u5df2\u4f30\u7b97\u4ea7\u751f " + mb.toFixed(mb >= 10 ? 1 : 2) + " MB \u5e26\u5bbd\u6d88\u8017\u3002",
+        source: "\u7f51\u7edc\u7edf\u8ba1\u91c7\u6837",
+        date: state.day,
+        bytes: Math.round(state.bytes),
+        mb: Number(mb.toFixed(2))
+      },
+      60000
+    );
+  }
+
+  function recordNetworkStatsBandwidth(payload) {
+    if (!payload || payload.type !== "network_stats") return;
+    var mbps = Number(payload.bandwidth_mbps);
+    if (!Number.isFinite(mbps) || mbps <= 0) return;
+    var now = Date.now();
+    var elapsedSeconds = lastNetworkStatsAt ? Math.max(1, Math.min(30, (now - lastNetworkStatsAt) / 1000)) : 5;
+    lastNetworkStatsAt = now;
+    var bytes = (mbps * 1000000 / 8) * elapsedSeconds;
+    if (!Number.isFinite(bytes) || bytes <= 0) return;
+    var state = readBandwidthState();
+    state.bytes = Math.max(0, Number(state.bytes) || 0) + bytes;
+    state.updatedAt = now;
+    writeBandwidthState(state);
+    maybeRecordDailyBandwidthNotice(false);
+  }
+
+  function startBandwidthNoticeTimer() {
+    if (notificationBandwidthEventTimer) return;
+    notificationBandwidthEventTimer = window.setInterval(function () {
+      maybeRecordDailyBandwidthNotice(true);
+    }, 10 * 60 * 1000);
+  }
+
   function ensureNotificationCenterStyle() {
     if (document.getElementById("selkies-notification-center-style")) return;
     var style = document.createElement("style");
@@ -1209,11 +1336,11 @@
       "#selkies-notification-center{position:fixed;right:0;top:64px;bottom:44px;z-index:10024;display:flex;align-items:stretch;pointer-events:none}" +
       "#selkies-notification-center[data-enabled='0']{display:none}" +
       "#selkies-notification-center[data-open='1']{pointer-events:auto}" +
-      "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(71,85,105,.92);border-right:none;border-radius:8px 0 0 8px;background:rgba(15,23,42,.94);width:10px;min-width:10px;height:76px;padding:0;font-size:0;line-height:0;cursor:pointer;box-shadow:none;pointer-events:auto;transition:right .22s ease,background .18s ease,border-color .18s ease}" +
+      "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(148,163,184,.38);border-right:none;border-radius:8px 0 0 8px;background:rgba(15,23,42,.42);width:10px;min-width:10px;height:76px;padding:0;font-size:0;line-height:0;cursor:pointer;box-shadow:none;backdrop-filter:blur(10px);pointer-events:auto;transition:right .22s ease,background .18s ease,border-color .18s ease}" +
       "#selkies-notification-center-toggle::before{content:'';display:block;width:3px;height:44px;margin:15px 0 0 3px;border-radius:999px;background:linear-gradient(180deg,#38bdf8,#f472b6);opacity:.96}" +
-      "#selkies-notification-center-toggle:hover{background:rgba(30,41,59,.96);border-color:#93c5fd}" +
+      "#selkies-notification-center-toggle:hover{background:rgba(30,41,59,.64);border-color:#93c5fd}" +
       "#selkies-notification-center[data-open='1'] #selkies-notification-center-toggle{right:320px}" +
-      "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:none;opacity:0;backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease,opacity .22s ease,box-shadow .22s ease}" +
+      "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:none;opacity:0;backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease,opacity .22s ease}" +
       "#selkies-notification-center[data-open='1'] #selkies-notification-center-panel{transform:translateX(0);opacity:1;box-shadow:-18px 0 36px rgba(2,6,23,.28)}" +
       ".selkies-notification-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px 10px;border-bottom:1px solid rgba(148,163,184,.14)}" +
       ".selkies-notification-center-title{font-size:13px;font-weight:800;color:#f8fafc}" +
@@ -1251,6 +1378,7 @@
       '<aside id="selkies-notification-center-panel" aria-label="\u901a\u77e5\u4e2d\u5fc3\u5386\u53f2">' +
       '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-count"></div></div>' +
       '<div class="selkies-notification-center-list"></div>' +
+      '<div class="selkies-notification-center-links"></div>' +
       '<div class="selkies-notification-center-footer"><button type="button" class="selkies-notification-center-clear">\u4e00\u952e\u6e05\u7406</button></div>' +
       "</aside>";
     document.body.appendChild(root);
@@ -1277,6 +1405,7 @@
     if (app === "client") return "\u5ba2\u6237\u7aef";
     if (app === "audio") return "\u97f3\u9891";
     if (app === "tool") return "\u5de5\u5177";
+    if (app === "link") return "\u94fe\u63a5";
     if (app === "system") return "\u7cfb\u7edf";
     return app || "\u9875\u9762";
   }
@@ -1317,9 +1446,9 @@
     if (!root) return;
     root.setAttribute("data-open", notificationCenterOpen ? "1" : "0");
     root.setAttribute("data-enabled", notificationCenterEnabled ? "1" : "0");
-    var historyItems = getNotificationHistory().slice(0, 100);
+    var historyItems = getNotificationHistory().slice(0, NOTIFICATION_HISTORY_LIMIT);
     var count = root.querySelector(".selkies-notification-center-count");
-    if (count) count.textContent = String(historyItems.length) + "/100";
+    if (count) count.textContent = String(historyItems.length) + "/" + String(NOTIFICATION_HISTORY_LIMIT);
     var list = root.querySelector(".selkies-notification-center-list");
     if (!list) return;
     list.innerHTML = "";
@@ -1328,11 +1457,13 @@
       empty.className = "selkies-notification-center-empty";
       empty.textContent = "\u6682\u65f6\u8fd8\u6ca1\u6709\u901a\u77e5\u5386\u53f2\u3002";
       list.appendChild(empty);
+      renderLocalLinkHistory();
       return;
     }
     for (var i = 0; i < historyItems.length; i += 1) {
       list.appendChild(createNotificationCenterItem(historyItems[i]));
     }
+    renderLocalLinkHistory();
   }
 
   function startNotificationHistoryCenter() {
@@ -1627,6 +1758,30 @@
     }
     var digits = idx === 0 ? 0 : value >= 10 ? 1 : 2;
     return value.toFixed(digits) + " " + units[idx];
+  }
+
+  function summarizeClipboardContent(text) {
+    var safe = String(text || "").replace(/\s+/g, " ").trim();
+    if (!safe) return "\u7a7a\u526a\u8d34\u677f";
+    if (isImageClipboardStatusText(safe)) return "\u56fe\u7247\u5185\u5bb9";
+    if (safe.length > 120) return safe.slice(0, 120) + "...";
+    return safe;
+  }
+
+  function recordClipboardReplacement(direction, text, source) {
+    var summary = summarizeClipboardContent(text);
+    var ts = Date.now();
+    recordNotificationCenterEvent(
+      {
+        key: "clipboard|" + String(direction || "update") + "|" + ts + "|" + summary,
+        ts: ts,
+        app: "clipboard",
+        title: "\u526a\u8d34\u677f\u5df2\u66ff\u6362",
+        body: "\u65b9\u5411\uff1a" + String(direction || "\u672a\u77e5") + "\uff1b\u65b0\u5185\u5bb9\uff1a" + summary,
+        source: source || "\u526a\u8d34\u677f\u540c\u6b65"
+      },
+      1200
+    );
   }
 
   function storagePrefix() {
@@ -2930,6 +3085,7 @@
         } else {
           writePayloadToClientClipboard({ type: "text", text: incomingText })
             .then(function () {
+              recordClipboardReplacement("\u8fdc\u7aef -> \u5ba2\u6237\u7aef", incomingText, pullSource.indexOf("shortcut") === 0 ? "\u5feb\u6377\u952e\u6536\u53d6" : "\u624b\u52a8\u6536\u526a\u677f");
               setActivityTask(pullTaskId, {
                 title: pullSource.indexOf("shortcut") === 0 ? "\u590d\u5236\u5185\u5bb9\u5df2\u6536\u5230\u672c\u673a" : "\u5df2\u8986\u76d6\u672c\u673a\u526a\u8d34\u677f",
                 detail: "\u5df2\u7528 Selkies \u4f1a\u8bdd\u7684\u526a\u8d34\u677f\u5185\u5bb9\u66f4\u65b0\u5f53\u524d\u5ba2\u6237\u7aef\u7cfb\u7edf\u526a\u8d34\u677f\u3002",
@@ -2958,6 +3114,7 @@
             });
         }
       } else if (hasIncomingText) {
+        recordClipboardReplacement("\u8fdc\u7aef -> \u5ba2\u6237\u7aef", incomingText, "\u8fdc\u7aef\u526a\u8d34\u677f\u81ea\u52a8\u53d8\u5316");
         setActivityTask("clipboard-auto-remote", {
           title: "\u68c0\u6d4b\u5230\u8fdc\u7aef\u526a\u8d34\u677f\u53d8\u5316",
           detail: isImageClipboardStatusText(incomingText)
@@ -3949,30 +4106,6 @@
     }
   }
 
-  function ensureRepairToolsSection() {
-    var section = document.getElementById("selkies-repair-tools-section");
-    if (section) return section;
-
-    section = document.createElement("div");
-    section.id = "selkies-repair-tools-section";
-    section.className = "selkies-link-sidebar";
-    section.innerHTML =
-      '<details class="selkies-link-details" open>' +
-      '<summary class="selkies-link-summary">' +
-      '<span class="selkies-link-sidebar-title">\u8f93\u5165\u4e0e\u526a\u8d34\u677f\u4fee\u590d</span>' +
-      '<span class="selkies-link-summary-meta">\u4e2d\u6587\u8f93\u5165 / \u540c\u6b65</span>' +
-      "</summary>" +
-      '<div class="selkies-link-details-body">' +
-      '<div class="selkies-repair-tools-body">' +
-      '<button type="button" class="selkies-repair-btn" data-repair-action="ime-clipboard-light">\u8f7b\u4fee\u590d\u8f93\u5165\u4e0e\u526a\u8d34\u677f</button>' +
-      '<button type="button" class="selkies-repair-btn danger" data-repair-action="ime-clipboard-heavy">\u91cd\u4fee\u590d\u63a8\u6d41\u4e0e X11</button>' +
-      '<div class="selkies-repair-note">\u7528\u4e8e\u5904\u7406\u4e2d\u6587\u8f93\u5165\u5361\u4f4f\u3001Ctrl+V \u4e0d\u540c\u6b65\u3001\u526a\u8d34\u677f\u72b6\u6001\u4e0d\u66f4\u65b0\u3002\u9001/\u6536\u526a\u677f\u5df2\u79fb\u5230\u5e95\u90e8\u5de5\u5177\u6761\u3002</div>' +
-      "</div>" +
-      "</div>" +
-      "</details>";
-    return section;
-  }
-
   function repairImeAndClipboardLight() {
     noteUiInteraction();
     resetClientClipboardRuntime();
@@ -4028,44 +4161,6 @@
     });
   }
 
-  function renderRepairToolsSection() {
-    var host = findLocalLinkSidebarHost();
-    if (!host) return;
-    ensureLocalLinkUiStyle();
-    var section = ensureRepairToolsSection();
-    var linkSection = document.getElementById("selkies-link-history-section");
-    if (linkSection && linkSection.parentElement === host) {
-      if (section.parentElement !== host || linkSection.nextElementSibling !== section) {
-        host.insertBefore(section, linkSection.nextElementSibling);
-      }
-    } else if (section.parentElement !== host) {
-      host.appendChild(section);
-    }
-    if (!document.getElementById("selkies-repair-tools-style")) {
-      var style = document.createElement("style");
-      style.id = "selkies-repair-tools-style";
-      style.textContent =
-        ".selkies-repair-tools-body{display:flex;flex-direction:column;gap:10px}" +
-        ".selkies-repair-btn{appearance:none;border:1px solid #166534;background:linear-gradient(180deg,#166534,#14532d);color:#ecfdf5;" +
-        "border-radius:12px;padding:11px 12px;font-size:12px;font-weight:700;cursor:pointer;text-align:center}" +
-        ".selkies-repair-btn:hover{filter:brightness(1.06)}" +
-        ".selkies-repair-btn:active{transform:translateY(1px)}" +
-        ".selkies-repair-btn.secondary{border-color:#334155;background:linear-gradient(180deg,#172554,#111827);color:#e2e8f0}" +
-        ".selkies-repair-btn.danger{border-color:#7f1d1d;background:linear-gradient(180deg,#991b1b,#7f1d1d);color:#fee2e2}" +
-        ".selkies-repair-note{font-size:10px;line-height:1.5;color:#94a3b8}";
-      document.head.appendChild(style);
-    }
-    if (!section.dataset.bound) {
-      section.dataset.bound = "1";
-      section.querySelector("[data-repair-action='ime-clipboard-light']").addEventListener("click", function () {
-        repairImeAndClipboardLight();
-      });
-      section.querySelector("[data-repair-action='ime-clipboard-heavy']").addEventListener("click", function () {
-        repairImeAndClipboardHeavy();
-      });
-    }
-  }
-
   function ensureDebugToolsSection() {
     var section = document.getElementById("selkies-debug-tools-section");
     if (section) return section;
@@ -4082,11 +4177,12 @@
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
-      '<label class="selkies-tool-row"><span>\u542f\u7528\u53f3\u4fa7\u901a\u77e5\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
+      '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
+      '<button type="button" class="selkies-repair-btn danger" data-debug-action="repair-stream">\u21bb \u91cd\u4fee\u590d\u63a8\u6d41</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
       '<div class="selkies-repair-note">\u4e24\u79cd\u68c0\u6d4b\u6309\u94ae\u90fd\u4f1a\u5728 5 \u79d2\u5012\u8ba1\u65f6\u540e\u89e6\u53d1\u3002</div>' +
@@ -4108,6 +4204,13 @@
       var style = document.createElement("style");
       style.id = "selkies-toolbox-style";
       style.textContent =
+        ".selkies-repair-tools-body{display:flex;flex-direction:column;gap:10px}" +
+        ".selkies-repair-btn{appearance:none;border:1px solid #166534;background:linear-gradient(180deg,#166534,#14532d);color:#ecfdf5;border-radius:10px;padding:9px 10px;font-size:12px;font-weight:800;cursor:pointer;text-align:center}" +
+        ".selkies-repair-btn:hover{filter:brightness(1.06)}" +
+        ".selkies-repair-btn:active{transform:translateY(1px)}" +
+        ".selkies-repair-btn.secondary{border-color:#334155;background:linear-gradient(180deg,#172554,#111827);color:#e2e8f0}" +
+        ".selkies-repair-btn.danger{border-color:#7f1d1d;background:linear-gradient(180deg,#dc2626,#991b1b);color:#fee2e2}" +
+        ".selkies-repair-note{font-size:10px;line-height:1.5;color:#94a3b8}" +
         ".selkies-tool-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 0;font-size:12px;color:#e2e8f0}" +
         ".selkies-tool-row input[type='checkbox']{accent-color:#38bdf8}" +
         ".selkies-tool-row[data-hidden='1']{display:none}" +
@@ -4150,6 +4253,9 @@
       });
       section.querySelector("[data-debug-action='wechat-audio-test']").addEventListener("click", function () {
         triggerWechatAudioNotificationTest();
+      });
+      section.querySelector("[data-debug-action='repair-stream']").addEventListener("click", function () {
+        repairImeAndClipboardHeavy();
       });
       section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]').addEventListener("change", function (event) {
         bottomActionClipboardButtonsEnabled = !!(event && event.target && event.target.checked);
@@ -4344,11 +4450,11 @@
       "transition:opacity .18s ease,transform .18s ease,visibility .18s ease}" +
       "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-split-popover{top:calc(100% + 2px);bottom:auto;transform:translateX(-50%) translateY(-8px) scale(.96)}" +
       "#selkies-bottom-action-dock-shell[data-split-open='1'] #selkies-bottom-split-popover{opacity:1;pointer-events:auto;visibility:visible;transform:translateX(-50%) translateY(0) scale(1)}" +
-      "#selkies-bottom-action-dock{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:0;height:24px;box-sizing:border-box;overflow:hidden;" +
+      "#selkies-bottom-action-dock{display:grid;grid-template-columns:repeat(5,minmax(48px,1fr)) 22px;gap:0;padding:0;height:24px;box-sizing:border-box;overflow:hidden;" +
       "border:1px solid rgba(51,65,85,.92);border-bottom:none;border-radius:10px 10px 0 0;background:rgba(8,15,28,.96);backdrop-filter:blur(16px);" +
       "box-shadow:0 -6px 12px rgba(2,6,23,.12);transform-origin:center bottom;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
       "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock{border-top:none;border-bottom:1px solid rgba(51,65,85,.92);border-radius:0 0 10px 10px;box-shadow:0 6px 12px rgba(2,6,23,.12);transform-origin:center top}" +
-      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(4,minmax(0,1fr))}" +
+      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(3,minmax(48px,1fr)) 22px}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock{opacity:0;transform:translateY(10px) scale(.94);filter:blur(1px);pointer-events:none}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-split-popover{opacity:0;pointer-events:none;visibility:hidden}" +
       "#selkies-bottom-dock-collapsed-toggle{position:absolute;left:50%;bottom:0;appearance:none;border:1px solid rgba(71,85,105,.92);border-bottom:none;background:#101826;color:#e2e8f0;border-radius:10px 10px 0 0;min-width:30px;height:24px;box-sizing:border-box;padding:0 8px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 -6px 12px rgba(2,6,23,.12);opacity:0;transform:translateX(-50%) translateY(8px) scale(.92);pointer-events:none;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
@@ -4364,7 +4470,7 @@
       ".selkies-bottom-dock-btn[data-tone='wechat']{background:#123321;border-color:#16a34a;color:#dcfce7}" +
       ".selkies-bottom-dock-btn[data-tone='qq']{background:#10273d;border-color:#38bdf8;color:#e0f2fe}" +
       ".selkies-bottom-dock-btn[data-tone='split']{background:#151d2b;border-color:#475569;color:#f8fafc;min-width:72px}" +
-      ".selkies-bottom-dock-btn[data-tone='collapse']{background:#101826;border-color:#64748b;color:#cbd5e1;min-width:30px;padding:0 4px}" +
+      ".selkies-bottom-dock-btn[data-tone='collapse']{background:#101826;border-color:#64748b;color:#cbd5e1;min-width:22px;width:22px;padding:0 1px;font-size:10px}" +
       "#selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:9px}" +
       "#selkies-bottom-action-dock .selkies-bottom-dock-btn:last-child{border-top-right-radius:9px}" +
       "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:0;border-bottom-left-radius:9px}" +
@@ -4379,8 +4485,8 @@
       ".selkies-bottom-split-btn:hover{filter:brightness(1.08);border-color:#60a5fa}" +
       ".selkies-bottom-split-btn:active{transform:translateY(1px)}" +
       "@keyframes selkies-unread-pulse{0%{box-shadow:0 0 0 0 rgba(248,250,252,.0)}50%{box-shadow:0 0 0 2px rgba(248,250,252,.24),0 0 18px rgba(59,130,246,.24)}100%{box-shadow:0 0 0 0 rgba(248,250,252,.0)}}" +
-      "@media (max-width:900px){#selkies-bottom-action-dock{gap:0;padding:0;height:24px}.selkies-bottom-dock-btn{min-width:44px;height:100%;padding:0 5px;font-size:9px}.selkies-bottom-dock-btn[data-tone='split']{min-width:66px}.selkies-bottom-dock-btn[data-tone='collapse']{min-width:28px;padding:0 3px}}" +
-      "@media (max-width:640px){#selkies-bottom-action-dock-shell{width:min(96vw,392px)}#selkies-bottom-action-dock{width:100%;grid-template-columns:repeat(6,minmax(0,1fr))}#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(4,minmax(0,1fr))}.selkies-bottom-dock-btn{min-width:0;padding:0 2px}}";
+      "@media (max-width:900px){#selkies-bottom-action-dock{gap:0;padding:0;height:24px}.selkies-bottom-dock-btn{min-width:44px;height:100%;padding:0 5px;font-size:9px}.selkies-bottom-dock-btn[data-tone='split']{min-width:66px}.selkies-bottom-dock-btn[data-tone='collapse']{min-width:20px;width:20px;padding:0 1px}}" +
+      "@media (max-width:640px){#selkies-bottom-action-dock-shell{width:min(96vw,392px)}#selkies-bottom-action-dock{width:100%;grid-template-columns:repeat(5,minmax(0,1fr)) 20px}#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(3,minmax(0,1fr)) 20px}.selkies-bottom-dock-btn{min-width:0;padding:0 2px}.selkies-bottom-dock-btn[data-tone='collapse']{padding:0;width:20px}}";
     document.head.appendChild(style);
   }
 
@@ -4649,10 +4755,8 @@
     if (dynamicLatencyMountTimer) return;
     renderDynamicLatencySection();
     startLocalLinkHistoryMount();
-    renderRepairToolsSection();
     renderDebugToolsSection();
     dynamicLatencyMountTimer = window.setInterval(renderDynamicLatencySection, 6000);
-    window.setInterval(renderRepairToolsSection, 6000);
     window.setInterval(renderDebugToolsSection, 6000);
   }
 
@@ -4939,6 +5043,11 @@
       sent = !!(await window.__selkiesSendClipboardPayload(payload));
     }
     if (sent) {
+      recordClipboardReplacement(
+        "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
+        payload.type === "text" ? payload.text || "" : "\u56fe\u7247\u5185\u5bb9",
+        "\u624b\u52a8\u9001\u526a\u677f"
+      );
       setActivityTask("clipboard-force-client", {
         title: "\u5df2\u5f3a\u5236\u8986\u76d6\u8fdc\u7aef\u526a\u8d34\u677f",
         detail: "\u5f53\u524d\u5ba2\u6237\u7aef\u7684\u526a\u8d34\u677f\u5185\u5bb9\u5df2\u4f18\u5148\u5199\u5165 Selkies \u4f1a\u8bdd\u3002",
@@ -5217,7 +5326,8 @@
 
   function renderLocalLinkHistory() {
     var section = ensureLocalLinkHistorySection();
-    var host = findLocalLinkSidebarHost();
+    var root = document.getElementById("selkies-notification-center") || ensureNotificationCenter();
+    var host = root && root.querySelector(".selkies-notification-center-links");
     if (host && section.parentElement !== host) {
       host.appendChild(section);
     }
@@ -5266,6 +5376,18 @@
         ts: parseTimestamp(event.ts) || Date.now()
       };
       addLocalLinkHistoryEntry(normalizedEvent);
+      recordNotificationCenterEvent(
+        {
+          key: "link|" + eventId + "|" + safeUrl,
+          ts: normalizedEvent.ts,
+          app: "link",
+          title: "\u94fe\u63a5\u8df3\u8f6c\u8bf7\u6c42",
+          body: safeUrl,
+          source: normalizedEvent.source,
+          url: safeUrl
+        },
+        NOTIFICATION_MERGE_WINDOW_MS
+      );
       showLocalLinkPrompt(normalizedEvent);
     }
     setStoredValue(localLinkCursorKey, localLinkCursor);
@@ -5548,6 +5670,7 @@
     startIdleCleanupWatcher();
     startBottomActionDock();
     startNotificationHistoryCenter();
+    startBandwidthNoticeTimer();
     startNotificationEventPoller();
     bindSidebarAutoCollapse();
     bindSidebarKeyboardShortcut();

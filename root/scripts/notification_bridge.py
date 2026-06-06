@@ -52,6 +52,7 @@ MODE_STATE_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_MODE_PATH", "/conf
 DUNST_CONFIG_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_DUNST_CONFIG_PATH", "/config/.config/dunst/dunstrc"))
 DUNST_DEFAULT_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_DUNST_DEFAULT_PATH", "/defaults/dunstrc"))
 RAW_LOG_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_RAW_LOG_PATH", "/config/logs/notification-bridge-raw.log"))
+RAW_LOG_MAX_BYTES = parse_int_env("NOTIFICATION_BRIDGE_RAW_LOG_MAX_BYTES", 10 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024)
 AWAKE_STATE_PATH = pathlib.Path(os.getenv("SELKIES_AWAKE_STATE_PATH", "/tmp/selkies-client-awake.json"))
 IDLE_DEFOCUS_SECONDS = parse_int_env("NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS", 600, 0, 1800)
 WECHAT_AUDIO_ENABLED = os.getenv("NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED", "true").strip().lower() in {
@@ -120,6 +121,9 @@ RAW_LOG_LOCK = threading.Lock()
 FRONTEND_ACTIVITY_LOCK = threading.Lock()
 LAST_FRONTEND_INTERACTION_AT = 0.0
 RAW_LOG_DISABLED = False
+RECENT_EVENT_LOCK = threading.Lock()
+RECENT_EVENT_KEYS = {}
+EVENT_MERGE_WINDOW_SECONDS = 8.0
 
 
 def normalize_text(value):
@@ -168,6 +172,38 @@ def json_safe(value):
     if isinstance(value, (list, tuple, set)):
         return [json_safe(item) for item in value]
     return normalize_text(value)
+
+
+def clamp_text(value, max_len=2048):
+    text = normalize_text(value)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+def trim_raw_log_unlocked(incoming_bytes):
+    try:
+        current_size = RAW_LOG_PATH.stat().st_size if RAW_LOG_PATH.exists() else 0
+    except Exception:
+        return
+    incoming_size = len(incoming_bytes)
+    if incoming_size >= RAW_LOG_MAX_BYTES:
+        try:
+            RAW_LOG_PATH.write_bytes(incoming_bytes[-RAW_LOG_MAX_BYTES:])
+        except Exception:
+            pass
+        return
+    if current_size + incoming_size <= RAW_LOG_MAX_BYTES:
+        return
+    keep_size = max(0, RAW_LOG_MAX_BYTES - incoming_size)
+    try:
+        with RAW_LOG_PATH.open("rb") as handle:
+            handle.seek(max(0, current_size - keep_size))
+            tail = handle.read(keep_size)
+        with RAW_LOG_PATH.open("wb") as handle:
+            handle.write(tail)
+    except Exception:
+        return
 
 
 def detect_app(app_name, summary, body, icon_name):
@@ -393,6 +429,18 @@ def title_signal_text(app, title):
 
 def enqueue_notification_event(app, title, body, source, extra=None):
     now = int(time.time() * 1000)
+    merge_key = "|".join([normalize_text(app), normalize_text(title), normalize_text(source)])
+    now_seconds = time.time()
+    with RECENT_EVENT_LOCK:
+        last_seen_at = RECENT_EVENT_KEYS.get(merge_key, 0.0)
+        if last_seen_at and now_seconds - last_seen_at < EVENT_MERGE_WINDOW_SECONDS:
+            return
+        RECENT_EVENT_KEYS[merge_key] = now_seconds
+        if len(RECENT_EVENT_KEYS) > 512:
+            cutoff = now_seconds - 60.0
+            for key, seen_at in list(RECENT_EVENT_KEYS.items()):
+                if seen_at < cutoff:
+                    RECENT_EVENT_KEYS.pop(key, None)
     payload = {
         "ts": now,
         "app": app,
@@ -416,6 +464,21 @@ def enqueue_notification_event(app, title, body, source, extra=None):
     if extra:
         raw_payload.update(extra)
     append_raw_log(raw_payload)
+
+
+def enqueue_custom_event(payload):
+    safe = payload or {}
+    app = lower_text(safe.get("app")) or "system"
+    if app not in {"wechat", "qq", "clipboard", "stream", "client", "audio", "tool", "system", "link"}:
+        app = "system"
+    title = clamp_text(safe.get("title"), 512)
+    body = clamp_text(safe.get("body"), 4096)
+    source = clamp_text(safe.get("source") or "frontend", 256)
+    extra = {}
+    for key in ("key", "device", "session_id", "session_epoch", "url", "date", "bytes", "mb", "kind"):
+        if key in safe:
+            extra[key] = json_safe(safe.get(key))
+    enqueue_notification_event(app, title, body, source, extra)
 
 
 def read_awake_state():
@@ -821,6 +884,7 @@ def append_raw_log(payload):
             return
         try:
             RAW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            trim_raw_log_unlocked(line.encode("utf-8"))
             with RAW_LOG_PATH.open("a", encoding="utf-8") as handle:
                 handle.write(line)
         except Exception as exc:
@@ -912,6 +976,11 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             ts_value = payload.get("ts") or payload.get("interaction_at") or payload.get("last_interaction_at")
             recorded_at = set_frontend_interaction_at(ts_value or time.time())
             self._send_json(200, {"ok": True, "interaction_at": recorded_at})
+            return
+
+        if parsed.path == "/event":
+            enqueue_custom_event(payload)
+            self._send_json(200, {"ok": True})
             return
 
         if parsed.path == "/debug/wechat-audio-test":
