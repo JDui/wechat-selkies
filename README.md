@@ -31,17 +31,18 @@
 - **按需剪贴板同步**：不再监听本机剪贴板；`Ctrl+C` / `Ctrl+X` 会先让远端应用复制/剪切，再收取远端剪贴板，`Ctrl+V` 会先把本机剪贴板写入远端再粘贴。远端剪贴板若由应用自身发生变化，也会自动收剪板，并在底部活动提示中显示进度、成功、无变化或失败状态。
 - **链接本地打开**：微信 / QQ 内点击链接时，浏览器侧显示确认卡片，可用本机浏览器打开并保留历史。
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
-- **不活跃限帧**：浏览器长时间无鼠标键盘交互后，可把发送给客户端的帧率降到最低 `1 FPS`，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
+- **通知中心**：右侧可收纳通知中心集中显示微信、QQ、剪板、系统、工具和链接事件；推流流量统计只保留在顶部带宽摘要，不再刷屏进入历史列表，同类系统级通知会在 1 分钟内合并为最新一条。
+- **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **自适应休眠**：当没有浏览器客户端在线接收视频流时，后台停止 Selkies 音视频管线计算，直到客户端重新开始接收流量后自动恢复。
 
 ## 快速开始
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.29.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.36.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.29.tar
+docker load -i wechat-selkies-1.36.tar
 ```
 
 启动：
@@ -56,7 +57,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.29
+  wechat-selkies:1.36
 ```
 
 访问：
@@ -77,7 +78,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.29
+    image: wechat-selkies:1.36
     container_name: wechat-selkies
     init: true
     ports:
@@ -97,11 +98,12 @@ services:
       - SELKIES_SESSION_MODE=pin-takeover
       - CUSTOM_WS_PORT=8081
       - WATCHDOG_AUDIO=true
-      - SELKIES_VIDEO_CORRUPTION_WATCHDOG=true
+      - SELKIES_VIDEO_CORRUPTION_WATCHDOG=false
       - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
       - SELKIES_DEFAULT_ENCODER=x264enc
       - SELKIES_DISABLE_GAMEPAD=true
-      - SELKIES_DYNAMIC_LOW_LATENCY=true
+      - SELKIES_DYNAMIC_THROTTLE=true
+      - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
       - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
       - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
@@ -133,7 +135,7 @@ services:
 | `SELKIES_SESSION_MODE` | `pin-takeover` | PIN 接管会话模式 |
 | `SELKIES_SESSION_STATE_PATH` | `/run/selkies-active-session.json` | 当前活动会话状态文件 |
 | `SELKIES_SESSION_AUTH_PORT` | `38082` | 会话校验桥接服务端口 |
-| `SELKIES_VIDEO_CORRUPTION_WATCHDOG` | `true` | 启用视频乱块 / 卡流 watchdog |
+| `SELKIES_VIDEO_CORRUPTION_WATCHDOG` | `false` | 启用视频乱块 / 卡流 watchdog；默认关闭，避免推流恢复通知打扰 |
 | `SELKIES_VIDEO_SOFT_RECOVER_LIMIT` | `2` | 软恢复失败次数超过后才重修复 X11 |
 | `SELKIES_VIDEO_RECOVER_COOLDOWN_MS` | `120000` | 视频恢复冷却时间 |
 | `SELKIES_ENABLE_BINARY_CLIPBOARD` | `true` | 启用二进制剪贴板 |
@@ -146,12 +148,12 @@ services:
 | `SELKIES_DEFAULT_USE_CPU` | `false` | 优先尝试硬件编码，失败时回退 CPU |
 | `SELKIES_DEFAULT_H264_STREAMING_MODE` | `true` | 默认开启 H264 streaming mode |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | 默认 H264 CRF |
-| `SELKIES_DYNAMIC_LOW_LATENCY` | `true` | 启用不活跃限帧 |
-| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `15000` | 最后一次交互后多久进入不活跃限帧 |
-| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | 不活跃发送帧率上限，可设置为 `1` 到 `120` |
-| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | 不活跃限帧期间使用的 H264 CRF |
-| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 不活跃采样 / 带宽缩放下限 |
-| `SELKIES_DYNAMIC_LOW_LATENCY_DISABLE_PAINT_OVER` | `true` | 不活跃限帧期间关闭 paint-over 质量模式 |
+| `SELKIES_DYNAMIC_THROTTLE` | `true` | 启用动态节流；`SELKIES_DYNAMIC_LOW_LATENCY` 仍作为兼容别名 |
+| `SELKIES_DYNAMIC_THROTTLE_MODE` | `idle-low-occupancy` | 动态节流模式：`idle-low-bandwidth`、`idle-low-framerate` 或 `idle-low-occupancy` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `15000` | 最后一次交互后多久进入动态节流 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | 低帧率模式发送帧率上限，可设置为 `1` 到 `120` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | 低带宽侧的 H264 CRF 默认值 |
+| `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 低带宽采样 / 带宽缩放下限 |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 没有客户端在线接收视频流多久后进入自适应休眠 |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 长时间等待视频流时触发恢复 |
@@ -187,10 +189,17 @@ services:
 
 页面中仍保留手动按钮“重修复推流与 X11”。
 
-## 不活跃限帧与自适应休眠
+## 通知中心
 
-- 不活跃限帧用于“网页还开着但暂时不操作”的场景。它按时间间隔限制发送给浏览器的帧率，最低可到 `1 FPS`，主要降低浏览器解码 / 渲染负载和 NAS 出站带宽。
-- 不活跃限帧对 JPEG 使用发送端节流；对 H.264 会在进入 / 退出不活跃时重启采集应用低帧率配置，避免丢弃依赖帧导致坏块或解码器回退。
+- 右侧通知中心集中收纳微信、QQ、剪板、系统、工具、客户端和链接事件，并保留顶部未读/历史数量。
+- 顶部带宽摘要仍显示当前推流上传/下载速率和 24 小时估算流量，但“今日推流流量统计”不会再进入通知历史。
+- 剪板、系统、工具、音频、客户端、链接等同类抬头通知会在 1 分钟内合并为最新信息，倒计时以最后一条出现时间重新计算。
+- 收纳按钮位于右侧上方三分之一处，列表滚动条与通知中心深色界面保持统一。
+
+## 动态节流与自适应休眠
+
+- 动态节流用于“网页还开着但暂时不操作”的场景。它可选择低带宽、低帧率或低占用模式，主要降低浏览器解码 / 渲染负载和 NAS 出站带宽。
+- 动态节流对 JPEG 使用发送端节流；对 H.264 会在进入 / 退出不活跃时重启采集应用低帧率配置，避免丢弃依赖帧导致坏块或解码器回退。
 - 自适应休眠用于“没有客户端在线接收视频流”的场景。后台会停止音视频管线计算，把 NAS 端占用降到更低；客户端重新开始接收流量后自动唤醒。
 - 自适应休眠不再按前端页面是否失焦、隐藏或熄屏判断，而是按是否存在在线且正在接收视频的客户端判断。
 
@@ -205,13 +214,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.29 .
+docker build -t wechat-selkies:1.36 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.29.tar wechat-selkies:1.29
+docker save -o wechat-selkies-1.36.tar wechat-selkies:1.36
 ```
 
 ## 故障排查

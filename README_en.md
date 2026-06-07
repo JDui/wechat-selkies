@@ -42,6 +42,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **Improved Image Copy/Paste**: Browser `Ctrl+V` image paste to remote clipboard with optional auto-paste into chat input.
 - **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
 - **Dynamic Throttle and Adaptive Sleep**: Idle browser sessions can switch to low bandwidth, low framerate, or low occupancy modes, while disconnected/non-receiving sessions can stop streaming work on the server.
+- **Notification Center**: A collapsible right-side center collects message, clipboard, system, tool, link, and client events while keeping stream bandwidth summaries out of the history list.
 - **New QQ Support Enhancements**: Build-time latest Linux QQ URL resolution, hang detection, and auto-restart.
 - **Open Links Locally**: Links triggered inside QQ/WeChat now show a confirmation card first, then open in the local browser and are saved in jump history.
 
@@ -67,6 +68,13 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - When enabled, the browser delivers queued notifications during idle time and syncs them with unread title flashing, favicon changes, and bottom bar button alerts.
 - The `Miaomiao Toolbox` sidebar section exposes the passthrough toggle, browser notification tests, and QQ idle defocus timing.
 - The result is much closer to a native local-app reminder flow while still preserving the original in-container notification path.
+
+### Notification Center
+
+- A right-side collapsible notification center stores recent WeChat, QQ, clipboard, system, tool, client, and local-link events.
+- Stream bandwidth remains visible in the header as current speed and 24-hour estimated traffic, but periodic stream traffic summaries no longer fill the notification history.
+- Clipboard, system, tool, audio, client, and link entries merge by heading within a rolling one-minute window; the newest event replaces the older details and resets the timer.
+- The collapse handle now sits around the upper third of the right edge, and the notification list uses a consistent dark scrollbar style.
 
 ### Dynamic Throttle
 
@@ -195,6 +203,7 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - SELKIES_STREAM_STALL_THRESHOLD_MS=18000
           - SELKIES_STREAM_STALL_RESTART_LIMIT=2
           - SELKIES_STREAM_RECOVER_COOLDOWN_MS=120000
+          - SELKIES_VIDEO_CORRUPTION_WATCHDOG=false
           - SELKIES_LOCAL_LINK_OPEN=true
           - SELKIES_LOCAL_LINK_POLL_INTERVAL_MS=800
           - LOCAL_LINK_BRIDGE_PORT=38080
@@ -293,6 +302,7 @@ Configure the following environment variables in `docker-compose.yml`:
 | `SELKIES_STREAM_STALL_THRESHOLD_MS` | `18000` | Threshold in milliseconds for stalled frame progress before staged self-healing starts |
 | `SELKIES_STREAM_STALL_RESTART_LIMIT` | `2` | Number of staged stream restart attempts before falling back to a page reload |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | Auto-recovery cooldown in milliseconds to avoid refresh loops |
+| `SELKIES_VIDEO_CORRUPTION_WATCHDOG` | `false` | Enable the video corruption/stall watchdog; disabled by default to avoid noisy stream recovery notices |
 | `SELKIES_LOCAL_LINK_OPEN` | `true` | Enable local link confirmation flow and jump history for QQ/WeChat links |
 | `SELKIES_LOCAL_LINK_POLL_INTERVAL_MS` | `800` | Frontend polling interval for local-link events (milliseconds) |
 | `LOCAL_LINK_BRIDGE_PORT` | `38080` | In-container local-link bridge service port (must match nginx route) |
