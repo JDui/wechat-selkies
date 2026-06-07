@@ -84,6 +84,7 @@
   var NOTIFICATION_HISTORY_LIMIT = 160;
   var NOTIFICATION_HISTORY_MAX_BYTES = 10 * 1024 * 1024;
   var NOTIFICATION_MERGE_WINDOW_MS = 8000;
+  var NOTIFICATION_HEADER_MERGE_WINDOW_MS = 60000;
   var notificationCursor = parseTimestamp(getStoredValue(notificationCursorKey));
   var notificationPollTimer = null;
   var notificationHistoryRenderTimer = null;
@@ -1058,14 +1059,19 @@
     if (!raw) return [];
     try {
       var parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(function (item) {
+        return !isStreamNotificationEntry(item);
+      });
     } catch (_err) {
       return [];
     }
   }
 
   function setNotificationHistory(items) {
-    var trimmed = (items || []).slice(0, NOTIFICATION_HISTORY_LIMIT);
+    var trimmed = (items || []).filter(function (item) {
+      return !isStreamNotificationEntry(item);
+    }).slice(0, NOTIFICATION_HISTORY_LIMIT);
     var encoded = JSON.stringify(trimmed);
     while (trimmed.length > 20 && encoded.length > NOTIFICATION_HISTORY_MAX_BYTES) {
       trimmed.pop();
@@ -1091,6 +1097,7 @@
   }
 
   function recordNotificationCenterEvent(entry, dedupeMs) {
+    if (isStreamNotificationEntry(entry)) return false;
     var added = addNotificationHistoryItem(entry, dedupeMs);
     if (added) {
       postNotificationBridgeEvent(entry);
@@ -1149,6 +1156,40 @@
     ].join("|");
   }
 
+  function notificationHistoryHeaderKey(entry) {
+    var app = String(entry && entry.app || "system").trim() || "system";
+    return app;
+  }
+
+  function shouldMergeNotificationByHeader(entry) {
+    var app = notificationHistoryHeaderKey(entry);
+    return ["clipboard", "system", "tool", "audio", "client", "link"].indexOf(app) >= 0;
+  }
+
+  function isStreamNotificationEntry(entry) {
+    var safe = entry || {};
+    var app = String(safe.app || "").toLowerCase();
+    var key = String(safe.key || "").toLowerCase();
+    var title = String(safe.title || "");
+    var source = String(safe.source || "");
+    return app === "stream" ||
+      key.indexOf("bandwidth|") === 0 ||
+      title.indexOf("\u4eca\u65e5\u63a8\u6d41\u6d41\u91cf\u7edf\u8ba1") >= 0 ||
+      source.indexOf("\u7f51\u7edc\u7edf\u8ba1\u91c7\u6837") >= 0;
+  }
+
+  function updateNotificationHistoryItem(currentItem, safe, key, ts, app, title, body, source) {
+    return Object.assign({}, currentItem || {}, {
+      key: key || (currentItem && currentItem.key),
+      id: safe.id || ts,
+      ts: ts,
+      app: app,
+      title: title || (currentItem && currentItem.title) || "\u9875\u9762\u901a\u77e5",
+      body: body || "",
+      source: source || ""
+    });
+  }
+
   function pruneNotificationHistoryRecent(now) {
     var keys = Object.keys(notificationHistoryRecentKeys);
     if (keys.length < 200) return;
@@ -1161,6 +1202,7 @@
 
   function addNotificationHistoryItem(entry, dedupeMs) {
     var safe = entry || {};
+    if (isStreamNotificationEntry(safe)) return false;
     var now = Date.now();
     var title = String(safe.title || "").trim();
     var body = String(safe.body || "").trim();
@@ -1176,17 +1218,24 @@
     });
     var mergeWindowMs = typeof dedupeMs === "number" ? dedupeMs : NOTIFICATION_MERGE_WINDOW_MS;
     var key = String(safe.key || ["notice", app, ts, title, body, source].join("|"));
+    var headerKey = notificationHistoryHeaderKey({ app: app });
+    var mergeByHeader = shouldMergeNotificationByHeader({ app: app });
     var current = getNotificationHistory();
     for (var i = 0; i < current.length; i += 1) {
       if (String(current[i] && current[i].key) === key) {
-        current[i] = Object.assign({}, current[i], {
-          id: safe.id || ts,
-          ts: ts,
-          app: app,
-          title: title || current[i].title || "\u9875\u9762\u901a\u77e5",
-          body: body,
-          source: source
-        });
+        current[i] = updateNotificationHistoryItem(current[i], safe, key, ts, app, title, body, source);
+        setNotificationHistory(current);
+        notificationHistoryRecentKeys[similarKey] = now;
+        pruneNotificationHistoryRecent(now);
+        renderNotificationCenterHistory();
+        return true;
+      }
+      if (
+        mergeByHeader &&
+        notificationHistoryHeaderKey(current[i]) === headerKey &&
+        Math.abs((parseTimestamp(current[i] && current[i].ts) || 0) - ts) < NOTIFICATION_HEADER_MERGE_WINDOW_MS
+      ) {
+        current[i] = updateNotificationHistoryItem(current[i], safe, key, ts, app, title, body, source);
         setNotificationHistory(current);
         notificationHistoryRecentKeys[similarKey] = now;
         pruneNotificationHistoryRecent(now);
@@ -1198,13 +1247,7 @@
         notificationHistorySimilarKey(current[i]) === similarKey &&
         Math.abs((parseTimestamp(current[i] && current[i].ts) || 0) - ts) < mergeWindowMs
       ) {
-        current[i] = Object.assign({}, current[i], {
-          id: safe.id || ts,
-          ts: ts,
-          title: title || current[i].title || "\u9875\u9762\u901a\u77e5",
-          body: body || current[i].body || "",
-          source: source || current[i].source || ""
-        });
+        current[i] = updateNotificationHistoryItem(current[i], safe, key, ts, app, title || current[i].title, body || current[i].body, source || current[i].source);
         setNotificationHistory(current);
         notificationHistoryRecentKeys[similarKey] = now;
         pruneNotificationHistoryRecent(now);
@@ -1239,6 +1282,7 @@
     for (var i = 0; i < events.length; i += 1) {
       var event = events[i] || {};
       var app = String(event.app || "");
+      if (app === "stream" || isStreamNotificationEntry(event)) continue;
       if (["wechat", "qq", "clipboard", "stream", "client", "audio", "tool", "system", "link"].indexOf(app) < 0) continue;
       var eventId = parseTimestamp(event.id) || parseTimestamp(event.ts) || Date.now() + i;
       var eventKey = String(event.key || notificationHistoryEventKey(event, eventId));
@@ -1435,7 +1479,7 @@
       "#selkies-notification-center{position:fixed;right:0;top:64px;bottom:44px;z-index:10024;display:flex;align-items:stretch;pointer-events:none}" +
       "#selkies-notification-center[data-enabled='0']{display:none}" +
       "#selkies-notification-center[data-open='1']{pointer-events:auto}" +
-      "#selkies-notification-center-toggle{position:absolute;right:0;top:50%;transform:translateY(-50%);appearance:none;border:1px solid rgba(148,163,184,.38);border-right:none;border-radius:8px 0 0 8px;background:rgba(15,23,42,.42);width:10px;min-width:10px;height:76px;padding:0;font-size:0;line-height:0;cursor:pointer;box-shadow:none;backdrop-filter:blur(10px);pointer-events:auto;transition:right .22s ease,background .18s ease,border-color .18s ease}" +
+      "#selkies-notification-center-toggle{position:absolute;right:0;top:33.333%;transform:translateY(-50%);appearance:none;border:1px solid rgba(148,163,184,.38);border-right:none;border-radius:8px 0 0 8px;background:rgba(15,23,42,.42);width:10px;min-width:10px;height:76px;padding:0;font-size:0;line-height:0;cursor:pointer;box-shadow:none;backdrop-filter:blur(10px);pointer-events:auto;transition:right .22s ease,background .18s ease,border-color .18s ease}" +
       "#selkies-notification-center-toggle:hover{background:rgba(30,41,59,.64);border-color:#93c5fd}" +
       "#selkies-notification-center[data-open='1'] #selkies-notification-center-toggle{right:320px}" +
       "#selkies-notification-center-panel{width:320px;max-width:calc(100vw - 42px);height:100%;display:flex;flex-direction:column;background:rgba(8,15,28,.96);border:1px solid rgba(51,65,85,.92);border-right:none;border-radius:12px 0 0 12px;box-shadow:none;opacity:0;backdrop-filter:blur(16px);transform:translateX(100%);transition:transform .22s ease,opacity .22s ease}" +
@@ -1448,7 +1492,11 @@
       ".selkies-notification-center-bandwidth [data-bandwidth='sep']{color:#475569}" +
       ".selkies-notification-center-bandwidth [data-bandwidth='total']{color:#cbd5e1}" +
       ".selkies-notification-center-count{font-size:11px;color:#93c5fd}" +
-      ".selkies-notification-center-list{flex:1;overflow:auto;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px}" +
+      ".selkies-notification-center-list{flex:1;overflow:auto;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;scrollbar-color:#64748b rgba(15,23,42,.55);scrollbar-gutter:stable}" +
+      ".selkies-notification-center-list::-webkit-scrollbar{width:9px;height:9px}" +
+      ".selkies-notification-center-list::-webkit-scrollbar-track{background:rgba(15,23,42,.55);border-radius:999px}" +
+      ".selkies-notification-center-list::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#64748b,#475569);border:2px solid rgba(15,23,42,.85);border-radius:999px}" +
+      ".selkies-notification-center-list::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,#94a3b8,#64748b)}" +
       ".selkies-notification-center-empty{font-size:12px;line-height:1.6;color:#94a3b8;padding:12px 4px}" +
       ".selkies-notification-center-item{border:1px solid rgba(71,85,105,.9);border-radius:8px;background:#0b1220;padding:9px 10px;display:flex;flex-direction:column;gap:5px}" +
       ".selkies-notification-center-row{display:flex;align-items:center;justify-content:space-between;gap:8px}" +
