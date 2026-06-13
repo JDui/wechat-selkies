@@ -90,7 +90,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - When no client is receiving video for the configured idle window, Selkies audio/video work is stopped to reduce server-side CPU usage.
 - Streaming wakes automatically when a browser client starts receiving video again.
 - This is separate from Dynamic Throttle: throttling mainly reduces browser decode load and outgoing bandwidth while the page is still connected; adaptive sleep is the deeper server-side idle mode.
-- With `SELKIES_CONTAINER_SLEEP=true` and a `PASSWORD` set, the container can go deeper: nginx, PIN auth, and the sleep manager stay awake, while desktop/app processes are frozen with `SIGSTOP`. Entering the PIN wakes them with `SIGCONT` before a new session is issued.
+- With `SELKIES_CONTAINER_SLEEP=true` and a `PASSWORD` set, the container can go deeper: nginx, PIN auth, and the sleep manager stay awake, while desktop/app processes are frozen with `SIGSTOP`. In this state CPU, network, encoder, and GPU activity are expected to drop close to zero, with only a tiny PIN gate remaining alive; memory stays allocated so wakeup remains fast. Entering the PIN wakes the paused processes with `SIGCONT` before a new session is issued.
 
 ## Screenshots
 ![WeChat Screenshot](./docs/images/wechat-selkies-1.jpg)
@@ -342,7 +342,7 @@ Notes:
 - When enabled, the container stops Selkies audio/video streaming after no browser client is online and receiving video for the configured idle window.
 - Streaming wakes automatically when a browser client starts receiving video again.
 - Keeping a browser tab open but still receiving video does not enter adaptive sleep; use Dynamic Throttle for that case.
-- PIN-gated in-container sleep is the lowest-idle-cost mode. While sleeping, WeChat/QQ are paused and will not receive messages until the next successful PIN wake.
+- PIN-gated in-container sleep is the lowest-idle-cost mode. While sleeping, WeChat/QQ are paused and will not receive messages until the next successful PIN wake; idle CPU and network usage should be nearly zero apart from nginx/auth/sleep-manager.
 
 #### Encoder Mode Badge and VAAPI Fallback
 

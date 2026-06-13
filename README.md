@@ -33,7 +33,7 @@
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
 - **通知中心**：右侧可收纳通知中心集中显示微信、QQ、剪板、系统、工具和链接事件；推流流量统计只保留在顶部带宽摘要，不再刷屏进入历史列表，同类系统级通知会在 1 分钟内合并为最新一条。
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
-- **自适应休眠**：当没有浏览器客户端在线接收视频流时，后台停止 Selkies 音视频管线计算，直到客户端重新开始接收流量后自动恢复。
+- **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
 
 ## 快速开始
 
@@ -78,7 +78,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.36
+    image: wechat-selkies:1.39
     container_name: wechat-selkies
     init: true
     ports:
@@ -156,6 +156,9 @@ services:
 | `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 低带宽采样 / 带宽缩放下限 |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 没有客户端在线接收视频流多久后进入自适应休眠 |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |
+| `SELKIES_CONTAINER_SLEEP` | `false` | 启用 PIN 驱动的容器内部超低占用休眠；compose 示例中已开启，但只有设置 `PASSWORD` 后才会实际生效 |
+| `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | 没有 awake 浏览器客户端多久后暂停微信 / QQ / 桌面 / 推流等重进程 |
+| `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | 容器启动后多久以内不进入内部休眠，避免刚启动就睡眠 |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 长时间等待视频流时触发恢复 |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | 页面级恢复冷却时间 |
 | `SELKIES_LOCAL_LINK_OPEN` | `true` | 启用链接本地打开确认 |
@@ -202,6 +205,8 @@ services:
 - 动态节流对 JPEG 使用发送端节流；对 H.264 会在进入 / 退出不活跃时重启采集应用低帧率配置，避免丢弃依赖帧导致坏块或解码器回退。
 - 自适应休眠用于“没有客户端在线接收视频流”的场景。后台会停止音视频管线计算，把 NAS 端占用降到更低；客户端重新开始接收流量后自动唤醒。
 - 自适应休眠不再按前端页面是否失焦、隐藏或熄屏判断，而是按是否存在在线且正在接收视频的客户端判断。
+- `SELKIES_CONTAINER_SLEEP=true` 是更深一层的超低占用休眠：休眠时只保留 PIN 页面、鉴权桥和 sleep-manager，微信 / QQ / 桌面 / Selkies 推流等重进程会被 `SIGSTOP` 暂停。此时 CPU、网络、编码器和 GPU 活跃占用通常接近 0，但内存不会释放；输入 PIN 后通过 `SIGCONT` 唤醒并恢复会话。
+- 休眠期间微信 / QQ 也会暂停，因此不会实时收消息；这是为最低闲置开销做出的取舍。
 
 ## 侧边栏和快捷键
 
