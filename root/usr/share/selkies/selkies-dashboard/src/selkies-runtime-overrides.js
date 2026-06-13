@@ -22,6 +22,11 @@
   var VIDEO_CORRUPTION_WATCHDOG = sanitizeBool(runtime.videoCorruptionWatchdog, true);
   var VIDEO_SOFT_RECOVER_LIMIT = sanitizeInt(runtime.videoSoftRecoverLimit, 2, 1, 5);
   var VIDEO_RECOVER_COOLDOWN_MS = sanitizeInt(runtime.videoRecoverCooldownMs, 120000, 30000, 600000);
+  var PAGE_STALL_WATCHDOG = sanitizeBool(runtime.pageStallWatchdog, true);
+  var PAGE_STALL_THRESHOLD_MS = sanitizeInt(runtime.pageStallThresholdMs, 45000, 10000, 300000);
+  var PAGE_STALL_RELOAD_THRESHOLD_MS = sanitizeInt(runtime.pageStallReloadThresholdMs, 90000, 30000, 600000);
+  var PAGE_STALL_COOLDOWN_MS = sanitizeInt(runtime.pageStallCooldownMs, 300000, 60000, 1800000);
+  var PAGE_STALL_LOOP_LAG_MS = sanitizeInt(runtime.pageStallLoopLagMs, 12000, 3000, 120000);
   var WS_SESSION_ID = "";
   var WS_SESSION_EPOCH = 0;
   var sessionMonitorTimer = null;
@@ -65,6 +70,9 @@
   var streamRecoveryInFlight = false;
   var streamRecoveryNoticeTimer = null;
   var frameTrackerBindTimer = null;
+  var pageStallWatchdogTimer = null;
+  var lastPageWatchdogTickAt = Date.now();
+  var pageStallSoftRecoverAt = 0;
   var highLoadReleaseTimer = null;
   var streamRestartVerifyTimer = null;
   var highLoadStateMap = Object.create(null);
@@ -2042,9 +2050,9 @@
     var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 15000, 300, 30000);
     var dynamicThrottleMode = sanitizeThrottleMode(runtime.dynamicThrottleMode || runtime.dynamicLowLatencyMode);
     var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 8, 1, 120);
-    var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 35, 5, 50);
-    var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 87, 10, 100);
-    var dynamicThrottleStrength = deriveThrottleStrength(dynamicLatencyCrf, dynamicLatencySample);
+    var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 33, 5, 50);
+    var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 91, 10, 100);
+    var dynamicThrottleStrength = 10;
 
     setStoredDefault("framerate", frameRate);
     setStoredValue("isGamepadEnabled", false);
@@ -2096,10 +2104,27 @@
     setStoredValue(migrationKey, "1");
   }
 
+  function migrateVideoDefaultsOnce() {
+    var paintMigrationKey = "static_area_optimization_default_off_v1";
+    if (getStoredValue(paintMigrationKey) === null) {
+      setStoredValue("use_paint_over_quality", false);
+      setStoredValue(paintMigrationKey, "1");
+    }
+
+    var throttleMigrationKey = "dynamic_throttle_strength_default_10_v1";
+    if (getStoredValue(throttleMigrationKey) === null) {
+      setStoredValue("dynamic_throttle_strength", 10);
+      setStoredValue("dynamic_low_latency_h264_crf", strengthToCrf(10));
+      setStoredValue("dynamic_low_latency_sample_percent", strengthToSamplePercent(10));
+      setStoredValue(throttleMigrationKey, "1");
+    }
+  }
+
   function primeRuntimeStorageDefaults() {
     initUseCpuHint();
     applyRuntimeDefaults();
     migrateUseCpuPreferenceOnce();
+    migrateVideoDefaultsOnce();
   }
 
   function ensureActivityStyle() {
@@ -2818,6 +2843,81 @@
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) {
         waitingSinceMs = 0;
+      }
+    });
+  }
+
+  function getLastPageStallReloadAt() {
+    return parseTimestamp(getStoredValue("page_stall_reload_at"));
+  }
+
+  function markPageStallReloadAt(tsMs) {
+    setStoredValue("page_stall_reload_at", String(tsMs));
+  }
+
+  function runSilentStreamSoftRecover(source) {
+    var now = Date.now();
+    if (streamRecoveryInFlight) return false;
+    if (now - pageStallSoftRecoverAt < Math.min(60000, PAGE_STALL_THRESHOLD_MS)) return false;
+    pageStallSoftRecoverAt = now;
+    waitingSinceMs = 0;
+    sendRawDataCommand("RESET_IO_MODULES");
+    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+    markRecoverTimestamp(now);
+    return true;
+  }
+
+  function maybeReloadForPageStall(stalledForMs, source) {
+    if (stalledForMs < PAGE_STALL_RELOAD_THRESHOLD_MS) return false;
+    var now = Date.now();
+    if (now - getLastPageStallReloadAt() < PAGE_STALL_COOLDOWN_MS) return false;
+    markPageStallReloadAt(now);
+    try {
+      window.location.reload();
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function checkPageStallHealth() {
+    if (!PAGE_STALL_WATCHDOG) return;
+    var now = Date.now();
+    var expectedLag = now - lastPageWatchdogTickAt - 5000;
+    lastPageWatchdogTickAt = now;
+    if (document.hidden) return;
+    if (isTransportBusy()) return;
+    if (!hasOpenDataSocket()) return;
+
+    var streamStalled = isStreamLikelyStalled();
+    if (streamStalled && !waitingSinceMs) {
+      waitingSinceMs = now;
+    }
+    var streamStalledFor = streamStalled && waitingSinceMs ? now - waitingSinceMs : 0;
+    var frameStalledFor = lastFrameProgressAt && hasVisibleVideoStream() ? now - lastFrameProgressAt : 0;
+    var loopWasBlocked = expectedLag >= PAGE_STALL_LOOP_LAG_MS;
+    var shouldRecover =
+      streamStalledFor >= PAGE_STALL_THRESHOLD_MS ||
+      (frameStalledFor >= PAGE_STALL_THRESHOLD_MS && lastVideoPipelineActive) ||
+      (loopWasBlocked && hasVisibleStreamSurface());
+    if (!shouldRecover) return;
+
+    runSilentStreamSoftRecover(loopWasBlocked ? "event-loop-lag" : "stream-stall");
+    maybeReloadForPageStall(Math.max(frameStalledFor, streamStalledFor), "stream-stall");
+  }
+
+  function startPageStallWatchdog() {
+    if (!PAGE_STALL_WATCHDOG || pageStallWatchdogTimer) return;
+    lastPageWatchdogTickAt = Date.now();
+    pageStallWatchdogTimer = window.setInterval(checkPageStallHealth, 5000);
+    window.addEventListener("focus", function () {
+      lastPageWatchdogTickAt = Date.now();
+      window.setTimeout(checkPageStallHealth, 1200);
+    });
+    document.addEventListener("visibilitychange", function () {
+      lastPageWatchdogTickAt = Date.now();
+      if (!document.hidden) {
+        window.setTimeout(checkPageStallHealth, 1200);
       }
     });
   }
@@ -3892,16 +3992,6 @@
       var container = node.closest("details,section,article,li,div");
       if (!container || container === sidebarHost) continue;
       if (container.getBoundingClientRect().height < 18) continue;
-      if (!sidebarHost.querySelector(".selkies-sidebar-stream-repair")) {
-        var repairButton = ensureSidebarRepairButton(sidebarHost);
-        if (repairButton) {
-          try {
-            sidebarHost.insertBefore(repairButton, container);
-          } catch (_insertErr) {
-            sidebarHost.appendChild(repairButton);
-          }
-        }
-      }
       container.style.display = "none";
       container.setAttribute("data-selkies-sidebar-section-hidden", "1");
     }
@@ -4398,7 +4488,6 @@
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
-      '<button type="button" class="selkies-repair-btn danger" data-debug-action="repair-stream">\u21bb \u91cd\u4fee\u590d\u63a8\u6d41</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
       '<div class="selkies-repair-note">\u4e24\u79cd\u68c0\u6d4b\u6309\u94ae\u90fd\u4f1a\u5728 5 \u79d2\u5012\u8ba1\u65f6\u540e\u89e6\u53d1\u3002</div>' +
@@ -4469,9 +4558,6 @@
       });
       section.querySelector("[data-debug-action='wechat-audio-test']").addEventListener("click", function () {
         triggerWechatAudioNotificationTest();
-      });
-      section.querySelector("[data-debug-action='repair-stream']").addEventListener("click", function () {
-        repairImeAndClipboardHeavy();
       });
       section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]').addEventListener("change", function (event) {
         bottomActionClipboardButtonsEnabled = !!(event && event.target && event.target.checked);
@@ -5454,6 +5540,8 @@
     var candidates = getSidebarCandidates();
     for (var i = 0; i < candidates.length; i += 1) {
       var candidate = candidates[i];
+      if (!candidate || (candidate.closest && candidate.closest("#selkies-notification-center,#selkies-local-link-prompt,#selkies-bottom-action-dock-shell"))) continue;
+      if (candidate.id && /^selkies-/.test(String(candidate.id))) continue;
       if (!isElementVisible(candidate)) continue;
       var rect = candidate.getBoundingClientRect();
       if (rect.width < 220 || rect.width > 560 || rect.height < 240) continue;
@@ -5874,6 +5962,7 @@
     }, 5000);
     bindServerSettingsModeHint();
     bindStreamRecoveryWatchdog();
+    startPageStallWatchdog();
     bindActivityWatchers();
     bindFileTransferActivity();
     installFileTransferTransportInterceptor();

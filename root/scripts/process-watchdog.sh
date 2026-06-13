@@ -31,12 +31,12 @@ log() {
 
 setup_state_dir() {
     local dir="${WATCHDOG_STATE_DIR:-/config/state/watchdog}"
-    if mkdir -p "$dir" 2>/dev/null; then
+    if mkdir -p "$dir" 2>/dev/null && [ -w "$dir" ]; then
         printf '%s\n' "$dir"
         return
     fi
     dir="/run/wechat-selkies-watchdog"
-    if mkdir -p "$dir" 2>/dev/null; then
+    if mkdir -p "$dir" 2>/dev/null && [ -w "$dir" ]; then
         printf '%s\n' "$dir"
         return
     fi
@@ -69,6 +69,8 @@ safe_restart() {
     nohup bash -lc "$cmd" >/dev/null 2>&1 &
 }
 
+chmod 1777 /tmp 2>/dev/null || true
+
 interval="$(validate_interval "${WATCHDOG_INTERVAL:-20}")"
 qq_fail_threshold="$(validate_threshold "${QQ_WATCHDOG_FAIL_THRESHOLD:-3}")"
 x11_fail_threshold="$(validate_threshold "${X11_WATCHDOG_FAIL_THRESHOLD:-2}")"
@@ -76,8 +78,6 @@ watchdog_state_dir="$(setup_state_dir)"
 qq_fail_counter_file="${watchdog_state_dir}/watchdog-qq-fail.count"
 x11_fail_counter_file="${watchdog_state_dir}/watchdog-x11-fail.count"
 lock_file="${watchdog_state_dir}/wechat-selkies-watchdog.lock"
-
-chmod 1777 /tmp 2>/dev/null || true
 
 exec 9>"$lock_file"
 if ! flock -n 9; then

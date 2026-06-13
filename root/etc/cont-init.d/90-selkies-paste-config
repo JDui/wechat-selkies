@@ -18,8 +18,8 @@ DEFAULT_DYNAMIC_LOW_LATENCY_RAW="${SELKIES_DYNAMIC_THROTTLE:-${SELKIES_DYNAMIC_L
 DEFAULT_DYNAMIC_LOW_LATENCY_HOLD_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS:-15000}"
 DEFAULT_DYNAMIC_THROTTLE_MODE_RAW="${SELKIES_DYNAMIC_THROTTLE_MODE:-idle-low-occupancy}"
 DEFAULT_DYNAMIC_LOW_LATENCY_FPS_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_FPS:-8}"
-DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF:-35}"
-DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT:-87}"
+DEFAULT_DYNAMIC_LOW_LATENCY_CRF_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF:-33}"
+DEFAULT_DYNAMIC_LOW_LATENCY_SAMPLE_RAW="${SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT:-91}"
 DEFAULT_STREAM_WAIT_THRESHOLD_RAW="${SELKIES_STREAM_WAIT_THRESHOLD_MS:-35000}"
 DEFAULT_STREAM_STALL_THRESHOLD_RAW="${SELKIES_STREAM_STALL_THRESHOLD_MS:-18000}"
 DEFAULT_STREAM_STALL_RESTART_LIMIT_RAW="${SELKIES_STREAM_STALL_RESTART_LIMIT:-2}"
@@ -27,6 +27,10 @@ DEFAULT_STREAM_RECOVER_COOLDOWN_RAW="${SELKIES_STREAM_RECOVER_COOLDOWN_MS:-12000
 DEFAULT_VIDEO_CORRUPTION_WATCHDOG_RAW="${SELKIES_VIDEO_CORRUPTION_WATCHDOG:-true}"
 DEFAULT_VIDEO_SOFT_RECOVER_LIMIT_RAW="${SELKIES_VIDEO_SOFT_RECOVER_LIMIT:-2}"
 DEFAULT_VIDEO_RECOVER_COOLDOWN_RAW="${SELKIES_VIDEO_RECOVER_COOLDOWN_MS:-120000}"
+DEFAULT_PAGE_STALL_WATCHDOG_RAW="${SELKIES_PAGE_STALL_WATCHDOG:-true}"
+DEFAULT_PAGE_STALL_THRESHOLD_RAW="${SELKIES_PAGE_STALL_THRESHOLD_MS:-45000}"
+DEFAULT_PAGE_STALL_RELOAD_THRESHOLD_RAW="${SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS:-90000}"
+DEFAULT_PAGE_STALL_COOLDOWN_RAW="${SELKIES_PAGE_STALL_COOLDOWN_MS:-300000}"
 DEFAULT_IDLE_CLEANUP_MINUTES_RAW="${SELKIES_IDLE_CLEANUP_MINUTES:-20}"
 LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
 LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
@@ -154,6 +158,27 @@ if ! [[ "$default_video_recover_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_video
   default_video_recover_cooldown_ms="120000"
 fi
 
+default_page_stall_watchdog_js="true"
+case "${DEFAULT_PAGE_STALL_WATCHDOG_RAW,,}" in
+  false|0|no|off) default_page_stall_watchdog_js="false" ;;
+  *) default_page_stall_watchdog_js="true" ;;
+esac
+
+default_page_stall_threshold_ms="${DEFAULT_PAGE_STALL_THRESHOLD_RAW}"
+if ! [[ "$default_page_stall_threshold_ms" =~ ^[0-9]+$ ]] || [ "$default_page_stall_threshold_ms" -lt 10000 ] || [ "$default_page_stall_threshold_ms" -gt 300000 ]; then
+  default_page_stall_threshold_ms="45000"
+fi
+
+default_page_stall_reload_threshold_ms="${DEFAULT_PAGE_STALL_RELOAD_THRESHOLD_RAW}"
+if ! [[ "$default_page_stall_reload_threshold_ms" =~ ^[0-9]+$ ]] || [ "$default_page_stall_reload_threshold_ms" -lt 30000 ] || [ "$default_page_stall_reload_threshold_ms" -gt 600000 ]; then
+  default_page_stall_reload_threshold_ms="90000"
+fi
+
+default_page_stall_cooldown_ms="${DEFAULT_PAGE_STALL_COOLDOWN_RAW}"
+if ! [[ "$default_page_stall_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_page_stall_cooldown_ms" -lt 60000 ] || [ "$default_page_stall_cooldown_ms" -gt 1800000 ]; then
+  default_page_stall_cooldown_ms="300000"
+fi
+
 default_idle_cleanup_minutes="${DEFAULT_IDLE_CLEANUP_MINUTES_RAW}"
 if ! [[ "$default_idle_cleanup_minutes" =~ ^[0-9]+$ ]] || [ "$default_idle_cleanup_minutes" -lt 5 ] || [ "$default_idle_cleanup_minutes" -gt 240 ]; then
   default_idle_cleanup_minutes="20"
@@ -220,6 +245,10 @@ window.__SELKIES_RUNTIME__ = {
   videoCorruptionWatchdog: ${default_video_corruption_watchdog_js},
   videoSoftRecoverLimit: ${default_video_soft_recover_limit},
   videoRecoverCooldownMs: ${default_video_recover_cooldown_ms},
+  pageStallWatchdog: ${default_page_stall_watchdog_js},
+  pageStallThresholdMs: ${default_page_stall_threshold_ms},
+  pageStallReloadThresholdMs: ${default_page_stall_reload_threshold_ms},
+  pageStallCooldownMs: ${default_page_stall_cooldown_ms},
   idleCleanupMinutes: ${default_idle_cleanup_minutes},
   localLinkOpenEnabled: ${local_link_open_js},
   localLinkPollIntervalMs: ${local_link_poll_interval_ms},

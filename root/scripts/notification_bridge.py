@@ -914,6 +914,9 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
     server_version = "NotificationBridge/1.0"
 
     def log_message(self, fmt, *args):
+        parsed = urlparse(getattr(self, "path", "") or "")
+        if parsed.path in {"/health", "/pull", "/activity", "/active-app", "/state"}:
+            return
         print(
             "%s - - [%s] %s"
             % (self.client_address[0], self.log_date_time_string(), fmt % args),
@@ -1172,6 +1175,7 @@ def main():
     audio_thread = threading.Thread(target=monitor_wechat_audio_events, daemon=True)
     audio_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), NotificationBridgeHandler)
+    server.daemon_threads = True
     server.serve_forever()
 
 

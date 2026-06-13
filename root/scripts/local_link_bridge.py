@@ -80,6 +80,9 @@ class LocalLinkBridgeHandler(BaseHTTPRequestHandler):
     server_version = "LocalLinkBridge/1.0"
 
     def log_message(self, fmt, *args):
+        parsed = urlparse(getattr(self, "path", "") or "")
+        if parsed.path in {"/health", "/pull"}:
+            return
         message = "%s - - [%s] %s" % (
             self.client_address[0],
             self.log_date_time_string(),
@@ -159,6 +162,7 @@ def main():
         flush=True,
     )
     server = ThreadingHTTPServer((host, port), LocalLinkBridgeHandler)
+    server.daemon_threads = True
     server.serve_forever()
 
 
