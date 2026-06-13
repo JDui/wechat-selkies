@@ -142,10 +142,121 @@
   var debugWechatAudioTargetAt = 0;
   var debugWechatAudioTimeout = null;
   var debugWechatAudioInterval = null;
+  var nativeSelkiesControlGuardTimer = null;
+  var nativePaintOverToggleClickAt = 0;
   var modifierGestureState = {
     clientToRemote: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null },
     remoteToClient: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null }
   };
+
+  function isForcedSelkiesOffKey(name) {
+    return /(^|_)(use_paint_over_quality|gamepad_enabled|isGamepadEnabled|ui_sidebar_show_gamepads)(_display2)?$/.test(String(name || ""));
+  }
+
+  function nativeSelkiesStoragePrefix() {
+    return window.location.href.split("#")[0].replace(/[^a-zA-Z0-9.-_]/g, "_");
+  }
+
+  function nativeSelkiesStorageKey(name, displaySuffix) {
+    return nativeSelkiesStoragePrefix() + "_" + String(name || "") + (displaySuffix ? "_display2" : "");
+  }
+
+  function setForcedSelkiesOffValue(name, displaySuffix) {
+    try {
+      window.localStorage.setItem(nativeSelkiesStorageKey(name, displaySuffix), "false");
+    } catch (_err) {}
+  }
+
+  function primeNativeSelkiesForcedDefaults() {
+    ["use_paint_over_quality", "gamepad_enabled", "isGamepadEnabled", "ui_sidebar_show_gamepads"].forEach(function (name) {
+      setForcedSelkiesOffValue(name, false);
+    });
+    setForcedSelkiesOffValue("use_paint_over_quality", true);
+  }
+
+  function sanitizeSettingsPayload(settings) {
+    if (!settings || typeof settings !== "object") return settings;
+    var safe = Object.assign({}, settings);
+    safe.use_paint_over_quality = false;
+    safe.gamepad_enabled = false;
+    safe.isGamepadEnabled = false;
+    safe.ui_sidebar_show_gamepads = false;
+    return safe;
+  }
+
+  function sanitizeServerSettingDefinitions(payload) {
+    if (!payload || typeof payload !== "object") return payload;
+    var safe = Object.assign({}, payload);
+    ["use_paint_over_quality", "gamepad_enabled", "ui_sidebar_show_gamepads"].forEach(function (name) {
+      if (safe[name] && typeof safe[name] === "object") {
+        safe[name] = Object.assign({}, safe[name], { value: false, default: false });
+      }
+    });
+    return safe;
+  }
+
+  function sanitizeWindowMessage(message) {
+    if (!message || typeof message !== "object") return message;
+    if (message.type === "settings" && message.settings) {
+      return Object.assign({}, message, { settings: sanitizeSettingsPayload(message.settings) });
+    }
+    if (message.type === "gamepadControl") {
+      return Object.assign({}, message, { enabled: false });
+    }
+    if (message.type === "serverSettings" && message.payload) {
+      return Object.assign({}, message, { payload: sanitizeServerSettingDefinitions(message.payload) });
+    }
+    return message;
+  }
+
+  function sanitizeOutgoingWebSocketPayload(data) {
+    if (typeof data !== "string" || data.indexOf("SETTINGS,") !== 0) return data;
+    try {
+      var payload = JSON.parse(data.slice("SETTINGS,".length));
+      return "SETTINGS," + JSON.stringify(sanitizeSettingsPayload(payload));
+    } catch (_err) {
+      return data;
+    }
+  }
+
+  function installForcedSelkiesDefaultsGuard() {
+    if (window.__selkiesForcedDefaultsGuardInstalled) return;
+    window.__selkiesForcedDefaultsGuardInstalled = true;
+    primeNativeSelkiesForcedDefaults();
+
+    try {
+      var nativeSetItem = window.Storage && window.Storage.prototype && window.Storage.prototype.setItem;
+      if (nativeSetItem && !nativeSetItem.__selkiesForcedDefaultsWrapped) {
+        var wrappedSetItem = function (name, value) {
+          return nativeSetItem.call(this, name, isForcedSelkiesOffKey(name) ? "false" : value);
+        };
+        wrappedSetItem.__selkiesForcedDefaultsWrapped = true;
+        window.Storage.prototype.setItem = wrappedSetItem;
+      }
+      var nativeRemoveItem = window.Storage && window.Storage.prototype && window.Storage.prototype.removeItem;
+      if (nativeSetItem && nativeRemoveItem && !nativeRemoveItem.__selkiesForcedDefaultsWrapped) {
+        var wrappedRemoveItem = function (name) {
+          if (isForcedSelkiesOffKey(name)) {
+            return nativeSetItem.call(this, name, "false");
+          }
+          return nativeRemoveItem.call(this, name);
+        };
+        wrappedRemoveItem.__selkiesForcedDefaultsWrapped = true;
+        window.Storage.prototype.removeItem = wrappedRemoveItem;
+      }
+    } catch (_storageErr) {}
+
+    try {
+      var nativePostMessage = window.postMessage;
+      if (nativePostMessage && !nativePostMessage.__selkiesForcedDefaultsWrapped) {
+        var wrappedPostMessage = function (message, targetOrigin, transfer) {
+          return nativePostMessage.call(this, sanitizeWindowMessage(message), targetOrigin, transfer);
+        };
+        wrappedPostMessage.__selkiesForcedDefaultsWrapped = true;
+        window.postMessage = wrappedPostMessage;
+      }
+    } catch (_postErr) {}
+  }
 
   function stopFrontendShortcutEvent(event) {
     if (!event) return;
@@ -302,6 +413,17 @@
         typeof protocols === "undefined"
           ? new NativeWebSocket(wsUrl)
           : new NativeWebSocket(wsUrl, protocols);
+
+      try {
+        var nativeSend = ws.send;
+        if (nativeSend && !nativeSend.__selkiesForcedSettingsWrapped) {
+          var wrappedSend = function (data) {
+            return nativeSend.call(ws, sanitizeOutgoingWebSocketPayload(data));
+          };
+          wrappedSend.__selkiesForcedSettingsWrapped = true;
+          ws.send = wrappedSend;
+        }
+      } catch (_sendErr) {}
 
       ws.addEventListener("message", function (event) {
         if (!event || event.data !== "FORCE_PIN_LOGIN") return;
@@ -2044,7 +2166,7 @@
     var binaryClipboard = sanitizeBool(runtime.defaultBinaryClipboard, true);
     var defaultUseCpu = sanitizeBool(runtime.defaultUseCpu, false);
     var defaultStreamingMode = sanitizeBool(runtime.defaultH264StreamingMode, true);
-    var defaultPaintOver = sanitizeBool(runtime.defaultUsePaintOverQuality, false);
+    var defaultPaintOver = false;
     var defaultH264Crf = sanitizeInt(runtime.defaultH264Crf, 30, 5, 50);
     var dynamicLatencyEnabled = sanitizeBool(runtime.dynamicLowLatencyEnabled, true);
     var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 15000, 300, 30000);
@@ -2054,6 +2176,7 @@
     var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 91, 10, 100);
     var dynamicThrottleStrength = 10;
 
+    primeNativeSelkiesForcedDefaults();
     setStoredDefault("framerate", frameRate);
     setStoredValue("isGamepadEnabled", false);
     setStoredValue("gamepad_enabled", false);
@@ -2105,6 +2228,7 @@
   }
 
   function migrateVideoDefaultsOnce() {
+    primeNativeSelkiesForcedDefaults();
     var paintMigrationKey = "static_area_optimization_default_off_v1";
     if (getStoredValue(paintMigrationKey) === null) {
       setStoredValue("use_paint_over_quality", false);
@@ -3887,37 +4011,146 @@
     document.addEventListener("keyup", handleKeyup, true);
   }
 
-  function ensureSidebarRepairButtonStyle() {
-    if (document.getElementById("selkies-sidebar-repair-button-style")) return;
+  function ensureForcedSelkiesControlStyle() {
+    if (!document.head || document.getElementById("selkies-forced-control-style")) return;
     var style = document.createElement("style");
-    style.id = "selkies-sidebar-repair-button-style";
+    style.id = "selkies-forced-control-style";
     style.textContent =
-      ".selkies-sidebar-stream-repair{margin:10px 0;display:flex}" +
-      ".selkies-sidebar-stream-repair button{appearance:none;width:100%;min-height:32px;border:1px solid #7f1d1d;border-radius:8px;background:linear-gradient(180deg,#dc2626,#991b1b);color:#fee2e2;font-size:12px;font-weight:800;cursor:pointer}" +
-      ".selkies-sidebar-stream-repair button:hover{filter:brightness(1.06)}" +
-      ".selkies-sidebar-stream-repair button:active{transform:translateY(1px)}";
+      "#touch-gamepad-host,[data-selkies-native-gamepad-hidden='1']{display:none!important}";
     document.head.appendChild(style);
   }
 
-  function ensureSidebarRepairButton(sidebarHost) {
-    if (!sidebarHost) return null;
-    ensureSidebarRepairButtonStyle();
-    var holder = sidebarHost.querySelector(".selkies-sidebar-stream-repair");
-    if (holder) return holder;
-    holder = document.createElement("div");
-    holder.className = "selkies-sidebar-stream-repair";
-    holder.innerHTML = '<button type="button">\u21bb \u91cd\u4fee\u590d\u63a8\u6d41</button>';
-    var button = holder.querySelector("button");
-    if (button) {
-      button.addEventListener("click", function (event) {
-        try {
-          event.preventDefault();
-          event.stopPropagation();
-        } catch (_err) {}
-        repairImeAndClipboardHeavy();
-      });
+  function controlDescriptorText(node) {
+    if (!node || typeof node.getAttribute !== "function") return "";
+    var className = typeof node.className === "string" ? node.className : "";
+    return [
+      node.id,
+      className,
+      node.getAttribute("title"),
+      node.getAttribute("aria-label"),
+      node.getAttribute("name"),
+      node.getAttribute("value"),
+      node.innerText || node.textContent
+    ]
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function isNativeGamepadControlText(text) {
+    var safe = String(text || "").toLowerCase();
+    return safe.indexOf("gamepad") >= 0 || safe.indexOf("\u624b\u67c4") >= 0;
+  }
+
+  function findNativeGamepadHideTarget(node) {
+    if (!node || node === document.body || node === document.documentElement) return null;
+    if (node.id === "touch-gamepad-host") return node;
+    var target = typeof node.closest === "function"
+      ? node.closest("button,[role='button'],label,li,details,section,article")
+      : null;
+    if (target && target !== document.body && target !== document.documentElement) return target;
+
+    var parent = node;
+    for (var depth = 0; parent && depth < 4; depth += 1) {
+      if (parent === document.body || parent === document.documentElement) break;
+      var rect = typeof parent.getBoundingClientRect === "function"
+        ? parent.getBoundingClientRect()
+        : { height: 0 };
+      if (rect.height > 0 && rect.height < 180 && controlDescriptorText(parent).length < 180) {
+        return parent;
+      }
+      parent = parent.parentElement;
     }
-    return holder;
+    return node;
+  }
+
+  function hideNativeSelkiesGamepadControls() {
+    if (!document.body) return;
+    ensureForcedSelkiesControlStyle();
+
+    var host = document.getElementById("touch-gamepad-host");
+    if (host) {
+      host.innerHTML = "";
+      host.style.display = "none";
+      host.setAttribute("data-selkies-native-gamepad-hidden", "1");
+    }
+
+    var nodes = document.querySelectorAll(
+      "button,[role='button'],input,label,summary,a,[title],[aria-label]," +
+        "[id*='gamepad'],[id*='Gamepad'],[class*='gamepad'],[class*='Gamepad']"
+    );
+    for (var i = 0; i < nodes.length; i += 1) {
+      var node = nodes[i];
+      if (!node || node.getAttribute("data-selkies-native-gamepad-hidden") === "1") continue;
+      if (!isNativeGamepadControlText(controlDescriptorText(node))) continue;
+      var target = findNativeGamepadHideTarget(node);
+      if (!target) continue;
+      if (target !== node && target.getAttribute("data-selkies-native-gamepad-hidden") === "1") continue;
+      target.style.display = "none";
+      target.setAttribute("data-selkies-native-gamepad-hidden", "1");
+      if ("checked" in node) {
+        try {
+          node.checked = false;
+        } catch (_checkedErr) {}
+      }
+    }
+  }
+
+  function isToggleElementOn(node) {
+    if (!node) return false;
+    if ("checked" in node && node.checked === true) return true;
+    var ariaPressed = node.getAttribute("aria-pressed");
+    var ariaChecked = node.getAttribute("aria-checked");
+    var dataState = node.getAttribute("data-state");
+    return ariaPressed === "true" || ariaChecked === "true" || dataState === "checked" || dataState === "on";
+  }
+
+  function reflectToggleElementOff(node) {
+    if (!node) return;
+    if ("checked" in node) {
+      try {
+        node.checked = false;
+      } catch (_checkedErr) {}
+    }
+    node.setAttribute("aria-pressed", "false");
+    node.setAttribute("aria-checked", "false");
+    if (node.getAttribute("data-state") === "checked" || node.getAttribute("data-state") === "on") {
+      node.setAttribute("data-state", "off");
+    }
+    if (node.classList) {
+      node.classList.remove("active", "checked", "enabled", "on");
+    }
+  }
+
+  function forceNativePaintOverQualityToggleOff() {
+    primeNativeSelkiesForcedDefaults();
+    var toggle = document.getElementById("usePaintOverQualityToggle");
+    if (!toggle) return;
+    var active = isToggleElementOn(toggle);
+    reflectToggleElementOff(toggle);
+    if (!active || typeof toggle.click !== "function") return;
+    var now = Date.now();
+    if (now - nativePaintOverToggleClickAt < 1500) return;
+    nativePaintOverToggleClickAt = now;
+    try {
+      toggle.click();
+    } catch (_clickErr) {}
+  }
+
+  function enforceNativeSelkiesControls() {
+    installForcedSelkiesDefaultsGuard();
+    primeNativeSelkiesForcedDefaults();
+    hideNativeSelkiesGamepadControls();
+    forceNativePaintOverQualityToggleOff();
+  }
+
+  function startNativeSelkiesControlGuard() {
+    enforceNativeSelkiesControls();
+    window.setTimeout(enforceNativeSelkiesControls, 300);
+    window.setTimeout(enforceNativeSelkiesControls, 1200);
+    if (nativeSelkiesControlGuardTimer) return;
+    nativeSelkiesControlGuardTimer = window.setInterval(enforceNativeSelkiesControls, 2500);
   }
 
   function maybeHideGameModeCloseButton(node, text) {
@@ -5873,6 +6106,10 @@
     window.addEventListener("message", function (event) {
       var data = event && event.data;
       if (!data || typeof data !== "object") return;
+      if (data.type === "serverSettings" && data.payload) {
+        data.payload = sanitizeServerSettingDefinitions(data.payload);
+        primeNativeSelkiesForcedDefaults();
+      }
       if (!GAMEPAD_UI_ENABLED && data.payload && Object.prototype.hasOwnProperty.call(data.payload, "gamepad_enabled")) {
         setStoredValue("gamepad_enabled", false);
         setStoredValue("isGamepadEnabled", false);
@@ -5938,6 +6175,7 @@
 
   function boot() {
     injectBadgeStyle();
+    installForcedSelkiesDefaultsGuard();
     primeRuntimeStorageDefaults();
     handleEncoderModeSideEffects(findEncoderSelect());
     scheduleBadgeRefresh(0);
@@ -5981,9 +6219,11 @@
     bindSidebarKeyboardShortcut();
     startLocalLinkEventPoller();
     startRemovedSidebarSectionGuard();
+    startNativeSelkiesControlGuard();
     syncStreamActivity();
   }
 
+  installForcedSelkiesDefaultsGuard();
   primeRuntimeStorageDefaults();
   if (enforcePinOnBrowserReload()) {
     return;
