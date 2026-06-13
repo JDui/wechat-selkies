@@ -113,6 +113,24 @@ start_session_auth_bridge() {
   nohup python3 -u /scripts/session_auth_bridge.py >>"$SESSION_AUTH_LOG_PATH" 2>&1 &
 }
 
+start_container_sleep_manager() {
+  case "${SELKIES_CONTAINER_SLEEP:-false}" in
+    true|TRUE|1|yes|YES|on|ON) ;;
+    *) return ;;
+  esac
+  case "${SELKIES_CONTAINER_SLEEP_REQUIRE_PIN:-true}" in
+    false|FALSE|0|no|NO|off|OFF) ;;
+    *) [ -n "${PASSWORD:-}" ] || return ;;
+  esac
+  if pgrep -f "/scripts/container_sleep_manager.py" >/dev/null 2>&1; then
+    return
+  fi
+  CONTAINER_SLEEP_LOG_PATH="${SELKIES_CONTAINER_SLEEP_LOG_PATH:-/config/logs/container-sleep-manager.log}"
+  install -d -o abc -g abc -m 775 "$(dirname "$CONTAINER_SLEEP_LOG_PATH")"
+  nohup python3 -u /scripts/container_sleep_manager.py >>"$CONTAINER_SLEEP_LOG_PATH" 2>&1 &
+}
+
+start_container_sleep_manager
 start_session_auth_bridge
 
 cat > /usr/share/selkies/www/password-login.html <<EOF
@@ -296,6 +314,11 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
           headers: { "X-PIN": pin, "X-Requested-With": "XMLHttpRequest" },
           credentials: "same-origin"
         });
+        if (resp.status === 503) {
+          errEl.textContent = "系统正在唤醒或唤醒失败，请稍后重试";
+          pinInput.focus();
+          return;
+        }
         if (!resp.ok) {
           errEl.textContent = "PIN 不正确，请重试";
           pinInput.focus();

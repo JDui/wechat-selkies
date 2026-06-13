@@ -114,6 +114,14 @@ while true; do
         safe_restart "session-auth-bridge" "python3 -u /scripts/session_auth_bridge.py >>\"${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}\" 2>&1"
     fi
 
+    if is_true "${SELKIES_CONTAINER_SLEEP:-false}"; then
+        if ! is_true "${SELKIES_CONTAINER_SLEEP_REQUIRE_PIN:-true}" || [ -n "${PASSWORD:-}" ]; then
+            if ! pgrep -f "/scripts/container_sleep_manager.py" >/dev/null 2>&1; then
+                safe_restart "container-sleep-manager" "python3 -u /scripts/container_sleep_manager.py >>\"${SELKIES_CONTAINER_SLEEP_LOG_PATH:-/config/logs/container-sleep-manager.log}\" 2>&1"
+            fi
+        fi
+    fi
+
     if is_true "${WATCHDOG_AUDIO:-true}"; then
         audio_user="${AUDIO_SERVICE_USER:-abc}"
         audio_uid="$(id -u "$audio_user" 2>/dev/null || echo "${PUID:-1000}")"

@@ -90,6 +90,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - When no client is receiving video for the configured idle window, Selkies audio/video work is stopped to reduce server-side CPU usage.
 - Streaming wakes automatically when a browser client starts receiving video again.
 - This is separate from Dynamic Throttle: throttling mainly reduces browser decode load and outgoing bandwidth while the page is still connected; adaptive sleep is the deeper server-side idle mode.
+- With `SELKIES_CONTAINER_SLEEP=true` and a `PASSWORD` set, the container can go deeper: nginx, PIN auth, and the sleep manager stay awake, while desktop/app processes are frozen with `SIGSTOP`. Entering the PIN wakes them with `SIGCONT` before a new session is issued.
 
 ## Screenshots
 ![WeChat Screenshot](./docs/images/wechat-selkies-1.jpg)
@@ -273,6 +274,9 @@ Configure the following environment variables in `docker-compose.yml`:
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | Seconds without an online client receiving video before adaptive sleep stops audio/video streaming |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | Adaptive sleep monitor polling interval |
+| `SELKIES_CONTAINER_SLEEP` | `false` | Enable PIN-gated in-container sleep; compose enables it by default, but it only starts when `PASSWORD` is set |
+| `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | Seconds without an awake browser client before freezing desktop/app processes inside the container |
+| `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | Startup grace period before in-container sleep can engage |
 | `QQ_NICE_LEVEL` | `-2` | Nice level for QQ process (-20 to 19) |
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | Enable QQ hang detection (process alive but window unresponsive) |
 | `QQ_WATCHDOG_FAIL_THRESHOLD` | `3` | Restart QQ after this many consecutive healthcheck failures |
@@ -338,6 +342,7 @@ Notes:
 - When enabled, the container stops Selkies audio/video streaming after no browser client is online and receiving video for the configured idle window.
 - Streaming wakes automatically when a browser client starts receiving video again.
 - Keeping a browser tab open but still receiving video does not enter adaptive sleep; use Dynamic Throttle for that case.
+- PIN-gated in-container sleep is the lowest-idle-cost mode. While sleeping, WeChat/QQ are paused and will not receive messages until the next successful PIN wake.
 
 #### Encoder Mode Badge and VAAPI Fallback
 

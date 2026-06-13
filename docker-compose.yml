@@ -50,6 +50,11 @@ services:
       - SELKIES_SESSION_MODE=pin-takeover
       - SELKIES_SESSION_STATE_PATH=/run/selkies-active-session.json
       - SELKIES_SESSION_AUTH_PORT=38082
+      - SELKIES_CONTAINER_SLEEP=true
+      - SELKIES_CONTAINER_SLEEP_REQUIRE_PIN=true
+      - SELKIES_CONTAINER_SLEEP_PORT=38083
+      - SELKIES_CONTAINER_SLEEP_IDLE_SECONDS=180
+      - SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS=180
       - CUSTOM_WS_PORT=8081
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60

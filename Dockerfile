@@ -134,6 +134,13 @@ ENV SELKIES_SESSION_MODE="pin-takeover"
 ENV SELKIES_SESSION_STATE_PATH="/run/selkies-active-session.json"
 ENV SELKIES_SESSION_AUTH_PORT="38082"
 ENV SELKIES_SESSION_COOKIE_NAME="selkies_session"
+ENV SELKIES_CONTAINER_SLEEP="false"
+ENV SELKIES_CONTAINER_SLEEP_REQUIRE_PIN="true"
+ENV SELKIES_CONTAINER_SLEEP_PORT="38083"
+ENV SELKIES_CONTAINER_SLEEP_STATE_PATH="/run/selkies-container-sleep.json"
+ENV SELKIES_CONTAINER_SLEEP_IDLE_SECONDS="180"
+ENV SELKIES_CONTAINER_SLEEP_CHECK_SECONDS="5"
+ENV SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS="180"
 ENV CUSTOM_WS_PORT="8081"
 ENV SELKIES_AUDIO_READY_TIMEOUT_SECONDS="15"
 ENV SELKIES_PACTL_TIMEOUT_SECONDS="5"
@@ -218,6 +225,7 @@ RUN sed -i 's/\r$//' \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
+    /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
     /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \
@@ -247,6 +255,7 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
+    /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
     /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \

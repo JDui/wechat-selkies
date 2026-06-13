@@ -6,6 +6,8 @@ import json
 import os
 import secrets
 import time
+import urllib.error
+import urllib.request
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -18,6 +20,16 @@ SESSION_MODE = os.environ.get("SELKIES_SESSION_MODE", "pin-takeover")
 STATE_PATH = Path(os.environ.get("SELKIES_SESSION_STATE_PATH", "/run/selkies-active-session.json"))
 COOKIE_NAME = os.environ.get("SELKIES_SESSION_COOKIE_NAME", "selkies_session")
 COOKIE_PATH = os.environ.get("SELKIES_SESSION_COOKIE_PATH", os.environ.get("SUBFOLDER", "/") or "/")
+SLEEP_MANAGER_PORT = int(os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", "38083"))
+SLEEP_MANAGER_URL = f"http://127.0.0.1:{SLEEP_MANAGER_PORT}"
+SLEEP_WAKE_TIMEOUT_SECONDS = float(os.environ.get("SELKIES_CONTAINER_SLEEP_WAKE_TIMEOUT_SECONDS", "45") or "45")
+SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+SLEEP_STATE_PATH = Path(os.environ.get("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-container-sleep.json"))
 
 
 def normalize_cookie_path(path):
@@ -106,6 +118,47 @@ def parse_session_identity_from_url(raw_url):
     return parse_session_identity_from_query(urlparse(raw_url or "").query)
 
 
+def sleep_manager_json(path, method="GET", timeout=1.0):
+    req = urllib.request.Request(f"{SLEEP_MANAGER_URL}{path}", method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            return resp.status, json.loads(body or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
+        except Exception:
+            payload = {}
+        return exc.code, payload
+    except Exception:
+        return 0, {}
+
+
+def is_container_sleeping():
+    status, payload = sleep_manager_json("/status", timeout=0.6)
+    if status == 200:
+        return bool(payload.get("sleeping"))
+    if not SLEEP_ENABLED:
+        return False
+    try:
+        state = json.loads(SLEEP_STATE_PATH.read_text(encoding="utf-8"))
+        return bool(isinstance(state, dict) and state.get("sleeping"))
+    except Exception:
+        return False
+
+
+def wake_container_for_pin():
+    if not is_container_sleeping():
+        return True
+    deadline = time.time() + max(1.0, SLEEP_WAKE_TIMEOUT_SECONDS)
+    while time.time() < deadline:
+        status, payload = sleep_manager_json("/wake", method="POST", timeout=10.0)
+        if status == 200 and payload.get("ok") and not payload.get("sleeping"):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def request_has_valid_session(handler):
     token = parse_cookie(handler.headers.get("Cookie"))
     if is_valid_token(token):
@@ -179,6 +232,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not PASSWORD:
                 self.send_empty(HTTPStatus.NO_CONTENT)
                 return
+            if is_container_sleeping():
+                self.send_empty(HTTPStatus.IM_A_TEAPOT)
+                return
             if not request_has_valid_session(self):
                 self.send_empty(HTTPStatus.UNAUTHORIZED)
                 return
@@ -192,6 +248,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "stale": True})
                 return
             state = read_state()
+            sleeping = is_container_sleeping()
             self.send_json(
                 HTTPStatus.OK,
                 {
@@ -200,6 +257,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "session_id": state.get("session_id", ""),
                     "session_epoch": state.get("session_epoch", 0),
                     "mode": state.get("mode", SESSION_MODE),
+                    "sleeping": sleeping,
                 },
             )
             return
@@ -214,6 +272,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pin = self.headers.get("X-PIN", "")
             if not hmac.compare_digest(pin, PASSWORD):
                 self.send_empty(HTTPStatus.UNAUTHORIZED)
+                return
+            if not wake_container_for_pin():
+                self.send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "wakeup_failed": True},
+                )
                 return
             token, state = new_session()
             self.send_json(
