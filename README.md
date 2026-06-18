@@ -39,10 +39,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.36.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.40.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.36.tar
+docker load -i wechat-selkies-1.40.tar
 ```
 
 启动：
@@ -57,7 +57,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.36
+  wechat-selkies:1.40
 ```
 
 访问：
@@ -78,7 +78,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.39
+    image: wechat-selkies:1.40
     container_name: wechat-selkies
     init: true
     ports:
@@ -154,10 +154,10 @@ services:
 | `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | 低帧率模式发送帧率上限，可设置为 `1` 到 `120` |
 | `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | 低带宽侧的 H264 CRF 默认值 |
 | `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 低带宽采样 / 带宽缩放下限 |
-| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 没有客户端在线接收视频流多久后进入自适应休眠 |
+| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 自适应休眠默认待机秒数；界面可选 `60`、`900`、`1800`、`2700`、`3600` |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |
 | `SELKIES_CONTAINER_SLEEP` | `false` | 启用 PIN 驱动的容器内部超低占用休眠；compose 示例中已开启，但只有设置 `PASSWORD` 后才会实际生效 |
-| `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | 没有 awake 浏览器客户端多久后暂停微信 / QQ / 桌面 / 推流等重进程 |
+| `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | 旧版兜底值；启用自适应休眠后以界面选择的待机时间为准 |
 | `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | 容器启动后多久以内不进入内部休眠，避免刚启动就睡眠 |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 长时间等待视频流时触发恢复 |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | 页面级恢复冷却时间 |
@@ -203,9 +203,10 @@ services:
 
 - 动态节流用于“网页还开着但暂时不操作”的场景。它可选择低带宽、低帧率或低占用模式，主要降低浏览器解码 / 渲染负载和 NAS 出站带宽。
 - 动态节流对 JPEG 使用发送端节流；对 H.264 会在进入 / 退出不活跃时重启采集应用低帧率配置，避免丢弃依赖帧导致坏块或解码器回退。
-- 自适应休眠用于“没有客户端在线接收视频流”的场景。后台会停止音视频管线计算，把 NAS 端占用降到更低；客户端重新开始接收流量后自动唤醒。
-- 自适应休眠不再按前端页面是否失焦、隐藏或熄屏判断，而是按是否存在在线且正在接收视频的客户端判断。
-- `SELKIES_CONTAINER_SLEEP=true` 是更深一层的超低占用休眠：休眠时只保留 PIN 页面、鉴权桥和 sleep-manager，微信 / QQ / 桌面 / Selkies 推流等重进程会被 `SIGSTOP` 暂停。此时 CPU、网络、编码器和 GPU 活跃占用通常接近 0，但内存不会释放；输入 PIN 后通过 `SIGCONT` 唤醒并恢复会话。
+- 自适应休眠按所有客户端的键鼠交互判断，可选择 1、15、30、45、60 分钟待机时间。
+- 达到待机时间后会推送 60 秒全屏逐渐变暗的确认遮罩；鼠标点击或任意按键会解除遮罩并重置倒计时。
+- 超过 60 秒仍无交互时，`SELKIES_CONTAINER_SLEEP=true` 会进入更深一层的超低占用休眠：只保留 PIN 页面、鉴权桥和 sleep-manager，微信 / QQ / 桌面 / Selkies 推流等重进程会被 `SIGSTOP` 暂停。此时 CPU、网络、编码器和 GPU 活跃占用通常接近 0，但内存不会释放；输入 PIN 后通过 `SIGCONT` 唤醒并恢复会话。
+- PIN 页面只有在容器确实休眠时才会在背景显示“容器等待唤醒”。
 - 休眠期间微信 / QQ 也会暂停，因此不会实时收消息；这是为最低闲置开销做出的取舍。
 
 ## 侧边栏和快捷键
@@ -219,13 +220,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.36 .
+docker build -t wechat-selkies:1.40 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.36.tar wechat-selkies:1.36
+docker save -o wechat-selkies-1.40.tar wechat-selkies:1.40
 ```
 
 ## 故障排查

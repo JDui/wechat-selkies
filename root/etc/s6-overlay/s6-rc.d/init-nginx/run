@@ -12,6 +12,7 @@ CWS="${CUSTOM_WS_PORT:-8081}"
 CLINK="${LOCAL_LINK_BRIDGE_PORT:-38080}"
 CNOTIFY="${NOTIFICATION_BRIDGE_PORT:-38081}"
 CAUTH="${SELKIES_SESSION_AUTH_PORT:-38082}"
+CSLEEP="${SELKIES_CONTAINER_SLEEP_PORT:-38083}"
 SFOLDER="${SUBFOLDER:-/}"
 FILE_MANAGER_PATH="${FILE_MANAGER_PATH:-$HOME/Desktop}"
 DASHBOARD="${DASHBOARD:-selkies-dashboard}"
@@ -81,6 +82,7 @@ sed -i "s/CWS/$CWS/g" "${NGINX_CONFIG}"
 sed -i "s/CLINK/$CLINK/g" "${NGINX_CONFIG}"
 sed -i "s/CNOTIFY/$CNOTIFY/g" "${NGINX_CONFIG}"
 sed -i "s/CAUTH/$CAUTH/g" "${NGINX_CONFIG}"
+sed -i "s/CSLEEP/$CSLEEP/g" "${NGINX_CONFIG}"
 sed -i "s|SUBFOLDER|$SFOLDER|g" "${NGINX_CONFIG}"
 sed -i "s|REPLACE_DOWNLOADS_PATH|$FILE_MANAGER_PATH|g" "${NGINX_CONFIG}"
 s6-setuidgid abc mkdir -p "${FILE_MANAGER_PATH}"
@@ -192,6 +194,7 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
     }
     .card {
       position: relative;
+      z-index: 2;
       width: min(92vw, 400px);
       padding: 28px 26px 24px;
       border-radius: 22px;
@@ -279,6 +282,21 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
       text-align: center;
       letter-spacing: .04em;
     }
+    .sleep-hint {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 13vh;
+      z-index: 1;
+      pointer-events: none;
+      text-align: center;
+      color: rgba(226, 232, 240, .48);
+      font-size: clamp(18px, 3vw, 34px);
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-shadow: 0 10px 32px rgba(2, 6, 23, .56);
+    }
+    .sleep-hint[hidden] { display: none; }
     @keyframes pinCardIn {
       from { opacity: 0; transform: translateY(12px) scale(.97); }
       to { opacity: 1; transform: translateY(0) scale(1); }
@@ -286,6 +304,7 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
   </style>
 </head>
 <body>
+  <div class="sleep-hint" id="sleepHint" hidden>容器等待唤醒</div>
     <form class="card" id="pinForm" autocomplete="off">
     <div class="brand"><span class="brand-dot"></span><span>${TITLE:-Selkies}</span></div>
     <h1>输入 PIN 码以校验权限</h1>
@@ -298,8 +317,33 @@ cat > /usr/share/selkies/www/password-login.html <<EOF
     const pinForm = document.getElementById("pinForm");
     const pinInput = document.getElementById("pin");
     const errEl = document.getElementById("err");
+    const sleepHint = document.getElementById("sleepHint");
     const pinApi = "${PW_PREFIX}auth/pin";
     const appPath = "${PW_PREFIX}";
+    const sleepStatusApi = "${PW_PREFIX}api/container-sleep/status";
+
+    async function refreshSleepHint() {
+      if (!sleepHint) return;
+      try {
+        const resp = await fetch(sleepStatusApi, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "X-Requested-With": "XMLHttpRequest" }
+        });
+        if (!resp.ok) {
+          sleepHint.hidden = true;
+          return;
+        }
+        const payload = await resp.json();
+        sleepHint.hidden = !(payload && payload.sleeping);
+      } catch (_) {
+        sleepHint.hidden = true;
+      }
+    }
+    refreshSleepHint();
+    setInterval(refreshSleepHint, 2000);
+
     pinForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       errEl.textContent = "";

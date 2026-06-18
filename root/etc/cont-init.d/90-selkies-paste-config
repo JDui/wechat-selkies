@@ -32,6 +32,7 @@ DEFAULT_PAGE_STALL_THRESHOLD_RAW="${SELKIES_PAGE_STALL_THRESHOLD_MS:-45000}"
 DEFAULT_PAGE_STALL_RELOAD_THRESHOLD_RAW="${SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS:-90000}"
 DEFAULT_PAGE_STALL_COOLDOWN_RAW="${SELKIES_PAGE_STALL_COOLDOWN_MS:-300000}"
 DEFAULT_IDLE_CLEANUP_MINUTES_RAW="${SELKIES_IDLE_CLEANUP_MINUTES:-20}"
+DEFAULT_ADAPTIVE_SLEEP_IDLE_RAW="${SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS:-60}"
 LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
 LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
 DRI_NODE_PATH="${DRI_NODE:-/dev/dri/renderD128}"
@@ -184,6 +185,12 @@ if ! [[ "$default_idle_cleanup_minutes" =~ ^[0-9]+$ ]] || [ "$default_idle_clean
   default_idle_cleanup_minutes="20"
 fi
 
+default_adaptive_sleep_idle_seconds="${DEFAULT_ADAPTIVE_SLEEP_IDLE_RAW}"
+case "$default_adaptive_sleep_idle_seconds" in
+  60|900|1800|2700|3600) ;;
+  *) default_adaptive_sleep_idle_seconds="60" ;;
+esac
+
 local_link_open_js="true"
 case "${LOCAL_LINK_OPEN_RAW,,}" in
   false|0|no|off) local_link_open_js="false" ;;
@@ -250,6 +257,7 @@ window.__SELKIES_RUNTIME__ = {
   pageStallReloadThresholdMs: ${default_page_stall_reload_threshold_ms},
   pageStallCooldownMs: ${default_page_stall_cooldown_ms},
   idleCleanupMinutes: ${default_idle_cleanup_minutes},
+  adaptiveSleepIdleSeconds: ${default_adaptive_sleep_idle_seconds},
   localLinkOpenEnabled: ${local_link_open_js},
   localLinkPollIntervalMs: ${local_link_poll_interval_ms},
   defaultGamepadEnabled: ${default_gamepad_js},

@@ -54,7 +54,16 @@ DUNST_DEFAULT_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_DUNST_DEFAULT_P
 RAW_LOG_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_RAW_LOG_PATH", "/config/logs/notification-bridge-raw.log"))
 RAW_LOG_MAX_BYTES = parse_int_env("NOTIFICATION_BRIDGE_RAW_LOG_MAX_BYTES", 10 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024)
 AWAKE_STATE_PATH = pathlib.Path(os.getenv("SELKIES_AWAKE_STATE_PATH", "/tmp/selkies-client-awake.json"))
+FRONTEND_ACTIVITY_STATE_PATH = pathlib.Path(
+    os.getenv("SELKIES_FRONTEND_ACTIVITY_STATE_PATH", "/tmp/selkies-frontend-activity.json")
+)
 IDLE_DEFOCUS_SECONDS = parse_int_env("NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS", 600, 0, 1800)
+ADAPTIVE_SLEEP_IDLE_OPTIONS = {60, 900, 1800, 2700, 3600}
+ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = parse_int_env(
+    "SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", 60, 60, 3600
+)
+if ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
+    ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = 60
 WECHAT_AUDIO_ENABLED = os.getenv("NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED", "true").strip().lower() in {
     "1",
     "true",
@@ -169,6 +178,16 @@ def sanitize_idle_focus_seconds(value):
         seconds = IDLE_DEFOCUS_SECONDS
     if seconds not in IDLE_FOCUS_OPTIONS:
         seconds = IDLE_DEFOCUS_SECONDS
+    return seconds
+
+
+def sanitize_adaptive_sleep_idle_seconds(value):
+    try:
+        seconds = int(str(value).strip())
+    except Exception:
+        seconds = ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS
+    if seconds not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
+        seconds = ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS
     return seconds
 
 
@@ -526,6 +545,17 @@ def set_frontend_interaction_at(raw_ts):
     with FRONTEND_ACTIVITY_LOCK:
         global LAST_FRONTEND_INTERACTION_AT
         LAST_FRONTEND_INTERACTION_AT = value
+    try:
+        FRONTEND_ACTIVITY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": time.time(),
+            "last_interaction_at": value,
+        }
+        tmp = FRONTEND_ACTIVITY_STATE_PATH.with_suffix(FRONTEND_ACTIVITY_STATE_PATH.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(FRONTEND_ACTIVITY_STATE_PATH)
+    except Exception:
+        pass
     return value
 
 
@@ -817,6 +847,7 @@ def default_mode_state():
         "mode": "internal",
         "idle_focus_seconds": IDLE_DEFOCUS_SECONDS,
         "adaptive_sleep_enabled": False,
+        "adaptive_sleep_idle_seconds": ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS,
     }
 
 
@@ -834,6 +865,9 @@ def _read_mode_state_unlocked():
         payload.get("adaptive_sleep_enabled", state["adaptive_sleep_enabled"]),
         state["adaptive_sleep_enabled"],
     )
+    state["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(
+        payload.get("adaptive_sleep_idle_seconds", state["adaptive_sleep_idle_seconds"])
+    )
     return state
 
 
@@ -842,7 +876,7 @@ def read_mode_state():
         return dict(_read_mode_state_unlocked())
 
 
-def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=None):
+def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=None, adaptive_sleep_idle_seconds=None):
     with MODE_LOCK:
         state = _read_mode_state_unlocked()
         if mode is not None:
@@ -851,6 +885,8 @@ def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=
             state["idle_focus_seconds"] = sanitize_idle_focus_seconds(idle_focus_seconds)
         if adaptive_sleep_enabled is not None:
             state["adaptive_sleep_enabled"] = sanitize_bool(adaptive_sleep_enabled, state["adaptive_sleep_enabled"])
+        if adaptive_sleep_idle_seconds is not None:
+            state["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(adaptive_sleep_idle_seconds)
         MODE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = MODE_STATE_PATH.with_suffix(MODE_STATE_PATH.suffix + ".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
@@ -889,6 +925,9 @@ def current_state_payload():
         "mode": state["mode"],
         "idle_focus_seconds": int(state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0),
         "adaptive_sleep_enabled": bool(state.get("adaptive_sleep_enabled", False)),
+        "adaptive_sleep_idle_seconds": sanitize_adaptive_sleep_idle_seconds(
+            state.get("adaptive_sleep_idle_seconds", ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS)
+        ),
     }
 
 
@@ -1021,12 +1060,17 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             updated_state = write_mode_state(idle_focus_seconds=payload.get("idle_focus_seconds"))
         if "adaptive_sleep_enabled" in payload:
             updated_state = write_mode_state(adaptive_sleep_enabled=payload.get("adaptive_sleep_enabled"))
+        if "adaptive_sleep_idle_seconds" in payload:
+            updated_state = write_mode_state(adaptive_sleep_idle_seconds=payload.get("adaptive_sleep_idle_seconds"))
 
         response = current_state_payload()
         if updated_state is not None:
             response["mode"] = updated_state["mode"]
             response["idle_focus_seconds"] = int(updated_state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0)
             response["adaptive_sleep_enabled"] = bool(updated_state.get("adaptive_sleep_enabled", False))
+            response["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(
+                updated_state.get("adaptive_sleep_idle_seconds", ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS)
+            )
         self._send_json(200, response)
 
 

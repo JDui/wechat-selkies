@@ -25,6 +25,10 @@ REQUIRE_PIN = os.environ.get("SELKIES_CONTAINER_SLEEP_REQUIRE_PIN", "true").stri
 )
 PASSWORD = os.environ.get("PASSWORD", "")
 AWAKE_STATE_PATH = Path(os.environ.get("SELKIES_AWAKE_STATE_PATH", "/tmp/selkies-client-awake.json"))
+FRONTEND_ACTIVITY_STATE_PATH = Path(
+    os.environ.get("SELKIES_FRONTEND_ACTIVITY_STATE_PATH", "/tmp/selkies-frontend-activity.json")
+)
+MODE_STATE_PATH = Path(os.environ.get("NOTIFICATION_BRIDGE_MODE_PATH", "/config/state/notification-bridge.json"))
 STATE_PATH = Path(os.environ.get("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-container-sleep.json"))
 IDLE_SECONDS = max(15, int(os.environ.get("SELKIES_CONTAINER_SLEEP_IDLE_SECONDS", "180") or "180"))
 CHECK_SECONDS = max(2, int(os.environ.get("SELKIES_CONTAINER_SLEEP_CHECK_SECONDS", "5") or "5"))
@@ -32,6 +36,8 @@ STARTUP_GRACE_SECONDS = max(
     15, int(os.environ.get("SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS", "180") or "180")
 )
 WAKE_VERIFY_SECONDS = max(1, int(os.environ.get("SELKIES_CONTAINER_SLEEP_WAKE_VERIFY_SECONDS", "8") or "8"))
+WARNING_SECONDS = max(15, min(300, int(os.environ.get("SELKIES_CONTAINER_SLEEP_WARNING_SECONDS", "60") or "60")))
+ADAPTIVE_SLEEP_IDLE_OPTIONS = {60, 900, 1800, 2700, 3600}
 LOG_PREFIX = "[container-sleep]"
 
 PROTECTED_CMD_PATTERNS = (
@@ -71,12 +77,80 @@ def is_feature_enabled():
     return True
 
 
+def normalize_timestamp(value, default=0.0):
+    try:
+        ts = float(value)
+    except Exception:
+        return default
+    if ts > 10_000_000_000:
+        ts = ts / 1000.0
+    if ts < 0:
+        return default
+    return ts
+
+
+def sanitize_adaptive_sleep_idle_seconds(value):
+    try:
+        seconds = int(str(value).strip())
+    except Exception:
+        seconds = int(os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "60") or "60")
+    if seconds not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
+        seconds = 60
+    return seconds
+
+
+def mode_bool(value, fallback=False):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return fallback
+
+
 def read_json(path, default=None):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else (default or {})
     except Exception:
         return default or {}
+
+
+def read_sleep_mode_config():
+    payload = read_json(MODE_STATE_PATH, {})
+    return {
+        "adaptive_sleep_enabled": mode_bool(payload.get("adaptive_sleep_enabled"), False),
+        "adaptive_sleep_idle_seconds": sanitize_adaptive_sleep_idle_seconds(
+            payload.get("adaptive_sleep_idle_seconds", os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "60"))
+        ),
+    }
+
+
+def write_frontend_activity(ts=None):
+    timestamp = normalize_timestamp(ts, time.time()) or time.time()
+    try:
+        FRONTEND_ACTIVITY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": time.time(),
+            "last_interaction_at": timestamp,
+        }
+        tmp_path = FRONTEND_ACTIVITY_STATE_PATH.with_suffix(FRONTEND_ACTIVITY_STATE_PATH.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        tmp_path.replace(FRONTEND_ACTIVITY_STATE_PATH)
+    except Exception as exc:
+        log(f"failed to persist frontend activity: {exc}")
+    return timestamp
+
+
+def latest_frontend_interaction_at():
+    payload = read_json(FRONTEND_ACTIVITY_STATE_PATH, {})
+    candidates = [
+        normalize_timestamp(payload.get("last_interaction_at"), 0.0),
+        normalize_timestamp(payload.get("interaction_at"), 0.0),
+    ]
+    return max(candidates)
 
 
 def write_state(payload):
@@ -94,12 +168,85 @@ def read_state():
             "enabled": is_feature_enabled(),
             "updated_at": time.time(),
             "frozen_pids": [],
+            "pending_sleep": False,
         }
     state["enabled"] = is_feature_enabled()
     state.setdefault("sleeping", False)
     state.setdefault("frozen_pids", [])
     state.setdefault("updated_at", time.time())
+    state.setdefault("pending_sleep", False)
     return state
+
+
+def clear_pending_sleep(reason="interaction"):
+    state = read_state()
+    if not state.get("pending_sleep"):
+        return state
+    state.update(
+        {
+            "pending_sleep": False,
+            "pending_cleared_reason": reason,
+            "pending_cleared_at": time.time(),
+            "warning_started_at": 0.0,
+            "warning_deadline_at": 0.0,
+            "updated_at": time.time(),
+        }
+    )
+    write_state(state)
+    log(f"cleared sleep warning reason={reason}")
+    return state
+
+
+def begin_pending_sleep(idle_seconds, last_interaction_at):
+    now = time.time()
+    state = read_state()
+    state.update(
+        {
+            "enabled": is_feature_enabled(),
+            "sleeping": False,
+            "pending_sleep": True,
+            "warning_started_at": now,
+            "warning_deadline_at": now + WARNING_SECONDS,
+            "warning_seconds": WARNING_SECONDS,
+            "idle_seconds": int(idle_seconds),
+            "last_interaction_at": float(last_interaction_at or 0.0),
+            "updated_at": now,
+        }
+    )
+    write_state(state)
+    log(f"started sleep warning idle_seconds={idle_seconds} warning_seconds={WARNING_SECONDS}")
+    return state
+
+
+def status_payload():
+    now = time.time()
+    state = read_state()
+    config = read_sleep_mode_config()
+    last_interaction_at = latest_frontend_interaction_at()
+    idle_seconds = int(config["adaptive_sleep_idle_seconds"])
+    reference_at = max(last_interaction_at, started_at)
+    idle_for = max(0.0, now - reference_at)
+    warning_deadline_at = normalize_timestamp(state.get("warning_deadline_at"), 0.0)
+    pending_sleep = bool(state.get("pending_sleep")) and not bool(state.get("sleeping"))
+    warning_remaining = max(0.0, warning_deadline_at - now) if pending_sleep else 0.0
+    payload = dict(state)
+    payload.update(
+        {
+            "ok": True,
+            "feature_enabled": is_feature_enabled(),
+            "adaptive_sleep_enabled": bool(config["adaptive_sleep_enabled"]),
+            "adaptive_sleep_idle_seconds": idle_seconds,
+            "idle_seconds": idle_seconds,
+            "warning_seconds": WARNING_SECONDS,
+            "last_interaction_at": last_interaction_at,
+            "idle_for_seconds": idle_for,
+            "idle_remaining_seconds": max(0.0, idle_seconds - idle_for),
+            "pending_sleep": pending_sleep,
+            "warning_remaining_seconds": warning_remaining,
+            "updated_at": now,
+        }
+    )
+    return payload
 
 
 def proc_cmdline(pid):
@@ -202,6 +349,7 @@ def enter_sleep(reason="idle"):
         payload = {
             "enabled": True,
             "sleeping": True,
+            "pending_sleep": False,
             "reason": reason,
             "entered_at": time.time(),
             "updated_at": time.time(),
@@ -224,6 +372,7 @@ def leave_sleep(reason="pin"):
         payload = {
             "enabled": is_feature_enabled(),
             "sleeping": False,
+            "pending_sleep": False,
             "reason": reason,
             "left_at": time.time(),
             "updated_at": time.time(),
@@ -255,24 +404,46 @@ def monitor_loop():
     while True:
         time.sleep(CHECK_SECONDS)
         try:
-            if not is_feature_enabled():
+            config = read_sleep_mode_config()
+            adaptive_enabled = bool(config["adaptive_sleep_enabled"])
+            idle_seconds = int(config["adaptive_sleep_idle_seconds"])
+            if not is_feature_enabled() or not adaptive_enabled:
                 if read_state().get("sleeping"):
                     leave_sleep("disabled")
+                clear_pending_sleep("disabled")
                 idle_since = 0.0
                 continue
-            if read_state().get("sleeping"):
+            state = read_state()
+            if state.get("sleeping"):
                 continue
             if time.time() - started_at < STARTUP_GRACE_SECONDS:
+                clear_pending_sleep("startup grace")
                 idle_since = 0.0
                 continue
-            if awake_clients_active():
+
+            now = time.time()
+            last_interaction_at = latest_frontend_interaction_at()
+            reference_at = max(last_interaction_at, started_at)
+            pending_started_at = normalize_timestamp(state.get("warning_started_at"), 0.0)
+            if state.get("pending_sleep") and last_interaction_at > pending_started_at:
+                clear_pending_sleep("client interaction")
                 idle_since = 0.0
                 continue
-            if idle_since <= 0:
-                idle_since = time.time()
+
+            idle_for = now - reference_at
+            if idle_for < idle_seconds:
+                clear_pending_sleep("client interaction")
+                idle_since = 0.0
                 continue
-            if time.time() - idle_since >= IDLE_SECONDS:
-                enter_sleep("no awake clients")
+
+            if not state.get("pending_sleep"):
+                begin_pending_sleep(idle_seconds, last_interaction_at)
+                idle_since = now
+                continue
+
+            deadline_at = normalize_timestamp(state.get("warning_deadline_at"), 0.0)
+            if deadline_at > 0 and now >= deadline_at:
+                enter_sleep("idle interaction timeout")
         except Exception as exc:
             log(f"monitor error: {exc}")
 
@@ -295,15 +466,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/health", "/status"):
-            state = read_state()
-            state["ok"] = True
-            state["feature_enabled"] = is_feature_enabled()
-            self.send_json(HTTPStatus.OK, state)
+            self.send_json(HTTPStatus.OK, status_payload())
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"ok": False})
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/activity":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            payload = {}
+            if length > 0:
+                try:
+                    body = self.rfile.read(min(length, 32768))
+                    payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
+                except Exception:
+                    payload = {}
+            recorded_at = write_frontend_activity(
+                payload.get("ts") or payload.get("interaction_at") or payload.get("last_interaction_at") or time.time()
+            )
+            clear_pending_sleep("client interaction")
+            response = status_payload()
+            response["recorded_interaction_at"] = recorded_at
+            self.send_json(HTTPStatus.OK, response)
+            return
         if path == "/wake":
             leave_sleep("pin")
             deadline = time.time() + WAKE_VERIFY_SECONDS

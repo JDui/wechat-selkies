@@ -126,6 +126,14 @@
   var wechatUnread = false;
   var notificationPassthroughEnabled = sanitizeBool(getStoredValue("notification_passthrough_enabled"), false);
   var adaptiveSleepEnabled = sanitizeBool(getStoredValue("adaptive_sleep_enabled"), false);
+  var adaptiveSleepIdleSeconds = sanitizeAdaptiveSleepIdleSeconds(
+    getStoredValue("adaptive_sleep_idle_seconds") || runtime.adaptiveSleepIdleSeconds || 60
+  );
+  var adaptiveSleepStatusTimer = null;
+  var adaptiveSleepOverlayTimer = null;
+  var adaptiveSleepOverlayVisible = false;
+  var adaptiveSleepLastStatus = null;
+  var adaptiveSleepLastActivityPostAt = 0;
   var qqIdleBlurSeconds = sanitizeInt(getStoredValue("qq_idle_blur_seconds"), 600, 0, 1800);
   var lastNotificationActivityReportAt = 0;
   var bottomActionDockTimer = null;
@@ -145,7 +153,6 @@
   var nativeSelkiesControlGuardTimer = null;
   var nativePaintOverToggleClickAt = 0;
   var modifierGestureState = {
-    clientToRemote: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null },
     remoteToClient: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null }
   };
 
@@ -714,6 +721,7 @@
   function noteFrontendInteraction() {
     lastFrontendInteractionAt = Date.now();
     reportFrontendInteractionState(false);
+    postContainerSleepActivity(false);
     if (passthroughIdleTimer) {
       window.clearTimeout(passthroughIdleTimer);
       passthroughIdleTimer = null;
@@ -798,6 +806,203 @@
       },
       body: JSON.stringify({ ts: now })
     }).catch(function () {});
+  }
+
+  function containerSleepApiPath(pathSuffix) {
+    var base = appBasePath();
+    if (!base.endsWith("/")) {
+      base += "/";
+    }
+    return base + "api/container-sleep/" + String(pathSuffix || "").replace(/^\/+/, "");
+  }
+
+  function postContainerSleepActivity(force) {
+    if (!window.fetch) return;
+    var now = Date.now();
+    if (!force && now - adaptiveSleepLastActivityPostAt < 900) return;
+    adaptiveSleepLastActivityPostAt = now;
+    window.fetch(containerSleepApiPath("activity"), {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      },
+      body: JSON.stringify({ ts: now })
+    }).catch(function () {});
+  }
+
+  function loadContainerSleepStatus() {
+    if (!window.fetch) return Promise.resolve(null);
+    return window
+      .fetch(containerSleepApiPath("status"), {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "X-Requested-With": "XMLHttpRequest" }
+      })
+      .then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function requestContainerSleepNow() {
+    if (!window.fetch) return Promise.resolve(false);
+    return window
+      .fetch(containerSleepApiPath("sleep"), {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "X-Requested-With": "XMLHttpRequest" }
+      })
+      .then(function (response) {
+        return response.ok;
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  function formatAdaptiveSleepRemaining(seconds) {
+    var safe = Math.max(0, Math.ceil(Number(seconds) || 0));
+    var mins = Math.floor(safe / 60);
+    var secs = safe % 60;
+    if (mins > 0) {
+      return mins + ":" + String(secs).padStart(2, "0");
+    }
+    return String(secs) + "s";
+  }
+
+  function ensureAdaptiveSleepOverlayStyle() {
+    if (document.getElementById("selkies-adaptive-sleep-style")) return;
+    var style = document.createElement("style");
+    style.id = "selkies-adaptive-sleep-style";
+    style.textContent =
+      "#selkies-adaptive-sleep-overlay{position:fixed;inset:0;z-index:10080;display:flex;align-items:center;justify-content:center;" +
+      "background:rgba(2,6,23,.28);opacity:0;pointer-events:none;transition:opacity .28s ease,background-color .6s linear;color:#e5eefb;" +
+      "font-family:\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}" +
+      "#selkies-adaptive-sleep-overlay[data-open='1']{opacity:1;pointer-events:auto}" +
+      "#selkies-adaptive-sleep-panel{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;padding:0 24px;max-width:min(92vw,620px)}" +
+      "#selkies-adaptive-sleep-count{font-size:clamp(48px,12vw,112px);line-height:1;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:0;color:#f8fafc;text-shadow:0 16px 48px rgba(0,0,0,.45)}" +
+      "#selkies-adaptive-sleep-title{font-size:clamp(18px,3vw,28px);font-weight:800;letter-spacing:0;color:#e0f2fe}" +
+      "#selkies-adaptive-sleep-detail{font-size:clamp(13px,2vw,16px);line-height:1.7;color:#cbd5e1;max-width:560px}" +
+      "#selkies-adaptive-sleep-bar{width:min(72vw,420px);height:5px;border-radius:999px;background:rgba(148,163,184,.28);overflow:hidden}" +
+      "#selkies-adaptive-sleep-bar span{display:block;height:100%;width:0;background:#38bdf8;border-radius:inherit;transition:width .4s linear}";
+    document.head.appendChild(style);
+  }
+
+  function ensureAdaptiveSleepOverlay() {
+    ensureAdaptiveSleepOverlayStyle();
+    var overlay = document.getElementById("selkies-adaptive-sleep-overlay");
+    if (overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.id = "selkies-adaptive-sleep-overlay";
+    overlay.setAttribute("data-open", "0");
+    overlay.innerHTML =
+      '<div id="selkies-adaptive-sleep-panel">' +
+      '<div id="selkies-adaptive-sleep-count">60s</div>' +
+      '<div id="selkies-adaptive-sleep-title">\u5bb9\u5668\u5373\u5c06\u4f11\u7720</div>' +
+      '<div id="selkies-adaptive-sleep-detail">\u70b9\u51fb\u9f20\u6807\u6216\u6309\u4efb\u610f\u952e\u53ef\u53d6\u6d88\u4f11\u7720\u5e76\u91cd\u7f6e\u5f85\u673a\u5012\u8ba1\u65f6\u3002</div>' +
+      '<div id="selkies-adaptive-sleep-bar"><span></span></div>' +
+      "</div>";
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function renderAdaptiveSleepOverlay() {
+    if (!adaptiveSleepOverlayVisible || !adaptiveSleepLastStatus) return;
+    var overlay = ensureAdaptiveSleepOverlay();
+    var deadlineAt = Number(adaptiveSleepLastStatus.warning_deadline_at || 0) * 1000;
+    var warningSeconds = Math.max(1, Number(adaptiveSleepLastStatus.warning_seconds || 60));
+    var remainingSeconds = Math.max(0, (deadlineAt - Date.now()) / 1000);
+    var progress = clamp(((warningSeconds - remainingSeconds) / warningSeconds) * 100, 0, 100);
+    var alpha = 0.28 + (0.58 * progress / 100);
+    var count = overlay.querySelector("#selkies-adaptive-sleep-count");
+    var bar = overlay.querySelector("#selkies-adaptive-sleep-bar span");
+    if (count) count.textContent = formatAdaptiveSleepRemaining(remainingSeconds);
+    if (bar) bar.style.width = String(progress) + "%";
+    overlay.style.backgroundColor = "rgba(2, 6, 23, " + alpha.toFixed(3) + ")";
+    if (remainingSeconds <= 0 && overlay.dataset.sleepRequested !== "1") {
+      overlay.dataset.sleepRequested = "1";
+      requestContainerSleepNow().finally(function () {
+        forcePinLogin();
+      });
+    }
+  }
+
+  function showAdaptiveSleepOverlay(status) {
+    adaptiveSleepLastStatus = status || adaptiveSleepLastStatus || {};
+    adaptiveSleepOverlayVisible = true;
+    var overlay = ensureAdaptiveSleepOverlay();
+    overlay.dataset.sleepRequested = "0";
+    overlay.setAttribute("data-open", "1");
+    renderAdaptiveSleepOverlay();
+    if (!adaptiveSleepOverlayTimer) {
+      adaptiveSleepOverlayTimer = window.setInterval(renderAdaptiveSleepOverlay, 500);
+    }
+  }
+
+  function hideAdaptiveSleepOverlay() {
+    adaptiveSleepOverlayVisible = false;
+    adaptiveSleepLastStatus = null;
+    var overlay = document.getElementById("selkies-adaptive-sleep-overlay");
+    if (overlay) {
+      overlay.setAttribute("data-open", "0");
+      overlay.dataset.sleepRequested = "0";
+    }
+    if (adaptiveSleepOverlayTimer) {
+      window.clearInterval(adaptiveSleepOverlayTimer);
+      adaptiveSleepOverlayTimer = null;
+    }
+  }
+
+  function cancelAdaptiveSleepWarning(event) {
+    if (!adaptiveSleepOverlayVisible) return;
+    stopFrontendShortcutEvent(event);
+    noteFrontendInteraction();
+    reportFrontendInteractionState(true);
+    postContainerSleepActivity(true);
+    hideAdaptiveSleepOverlay();
+    window.setTimeout(pollAdaptiveSleepStatus, 400);
+  }
+
+  function applyAdaptiveSleepStatus(status) {
+    if (!status || !status.ok) {
+      hideAdaptiveSleepOverlay();
+      return;
+    }
+    if (status.sleeping) {
+      hideAdaptiveSleepOverlay();
+      forcePinLogin();
+      return;
+    }
+    if (!status.adaptive_sleep_enabled || !status.pending_sleep) {
+      hideAdaptiveSleepOverlay();
+      return;
+    }
+    showAdaptiveSleepOverlay(status);
+  }
+
+  function pollAdaptiveSleepStatus() {
+    loadContainerSleepStatus().then(applyAdaptiveSleepStatus);
+  }
+
+  function startAdaptiveSleepStatusWatcher() {
+    if (adaptiveSleepStatusTimer) return;
+    reportFrontendInteractionState(true);
+    postContainerSleepActivity(true);
+    pollAdaptiveSleepStatus();
+    adaptiveSleepStatusTimer = window.setInterval(pollAdaptiveSleepStatus, 2000);
+    document.addEventListener("pointerdown", cancelAdaptiveSleepWarning, true);
+    document.addEventListener("keydown", cancelAdaptiveSleepWarning, true);
+    window.addEventListener("beforeunload", function () {
+      hideAdaptiveSleepOverlay();
+    });
   }
 
   function getUnreadTitleText() {
@@ -1132,6 +1337,8 @@
     setStoredValue("notification_passthrough_enabled", notificationPassthroughEnabled);
     adaptiveSleepEnabled = sanitizeBool(payload.adaptive_sleep_enabled, adaptiveSleepEnabled);
     setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
+    adaptiveSleepIdleSeconds = sanitizeAdaptiveSleepIdleSeconds(payload.adaptive_sleep_idle_seconds || adaptiveSleepIdleSeconds);
+    setStoredValue("adaptive_sleep_idle_seconds", adaptiveSleepIdleSeconds);
     qqIdleBlurSeconds = sanitizeInt(payload.idle_focus_seconds, qqIdleBlurSeconds, 0, 1800);
     if ([0, 60, 300, 600, 1800].indexOf(qqIdleBlurSeconds) < 0) {
       qqIdleBlurSeconds = 600;
@@ -2011,6 +2218,12 @@
     if (!Number.isFinite(n)) return fallbackValue;
     if (n < minValue || n > maxValue) return fallbackValue;
     return n;
+  }
+
+  function sanitizeAdaptiveSleepIdleSeconds(value) {
+    var n = parseInt(String(value), 10);
+    if ([60, 900, 1800, 2700, 3600].indexOf(n) >= 0) return n;
+    return 60;
   }
 
   function sanitizeDockPosition(value) {
@@ -3768,10 +3981,6 @@
   }
 
   function markModifierGestureChorded() {
-    if (modifierGestureState.clientToRemote.down) {
-      modifierGestureState.clientToRemote.chorded = true;
-      clearModifierHold(modifierGestureState.clientToRemote);
-    }
     if (modifierGestureState.remoteToClient.down) {
       modifierGestureState.remoteToClient.chorded = true;
       clearModifierHold(modifierGestureState.remoteToClient);
@@ -3939,10 +4148,6 @@
     }
 
     function markActiveModifierGesturesChorded() {
-      if (modifierGestureState.clientToRemote.down) {
-        modifierGestureState.clientToRemote.chorded = true;
-        clearModifierHold(modifierGestureState.clientToRemote);
-      }
       if (modifierGestureState.remoteToClient.down) {
         modifierGestureState.remoteToClient.chorded = true;
         clearModifierHold(modifierGestureState.remoteToClient);
@@ -4718,6 +4923,7 @@
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
       '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
+      '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
@@ -4758,6 +4964,7 @@
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
     var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
+    var adaptiveSleepIdleSelect = section.querySelector('[data-debug-select="adaptive-sleep-idle-seconds"]');
     var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
     var bottomDockPositionSelect = section.querySelector('[data-debug-select="bottom-dock-position"]');
     var idleFocusRow = section.querySelector('[data-debug-row="idle-focus-seconds"]');
@@ -4770,6 +4977,10 @@
     }
     if (adaptiveSleepToggle) {
       adaptiveSleepToggle.checked = !!adaptiveSleepEnabled;
+    }
+    if (adaptiveSleepIdleSelect) {
+      adaptiveSleepIdleSelect.value = String(adaptiveSleepIdleSeconds);
+      adaptiveSleepIdleSelect.disabled = !adaptiveSleepEnabled;
     }
     if (bottomClipboardToggle) {
       bottomClipboardToggle.checked = !!bottomActionClipboardButtonsEnabled;
@@ -4850,8 +5061,8 @@
             setActivityTask("adaptive-sleep-setting", {
               title: nextValue ? "\u5df2\u5f00\u542f\u81ea\u9002\u5e94\u4f11\u7720" : "\u5df2\u5173\u95ed\u81ea\u9002\u5e94\u4f11\u7720",
               detail: nextValue
-                ? "\u6ca1\u6709\u6fc0\u6d3b\u4f7f\u7528\u7684\u5ba2\u6237\u7aef\u65f6\uff0c\u5bb9\u5668\u4f1a\u81ea\u52a8\u505c\u6b62\u97f3\u89c6\u9891\u63a8\u6d41\uff1b\u5ba2\u6237\u7aef\u56de\u5230\u524d\u53f0\u540e\u81ea\u52a8\u6062\u590d\u3002"
-                : "\u97f3\u89c6\u9891\u63a8\u6d41\u4e0d\u518d\u6839\u636e\u5ba2\u6237\u7aef\u6d3b\u8dc3\u72b6\u6001\u81ea\u52a8\u4f11\u7720\u3002",
+                ? "\u8fbe\u5230\u5f85\u673a\u65f6\u95f4\u540e\u4f1a\u5148\u663e\u793a 60 \u79d2\u4f11\u7720\u786e\u8ba4\u906e\u7f69\uff0c\u65e0\u4ea4\u4e92\u518d\u8fdb\u5165\u5bb9\u5668\u4f11\u7720\u3002"
+                : "\u5bb9\u5668\u4e0d\u518d\u6839\u636e\u5ba2\u6237\u7aef\u952e\u9f20\u7a7a\u95f2\u8fdb\u5165\u4f11\u7720\u3002",
               kind: "success",
               progress: 100,
               indeterminate: false,
@@ -4867,6 +5078,38 @@
             setActivityTask("adaptive-sleep-setting", {
               title: "\u81ea\u9002\u5e94\u4f11\u7720\u8bbe\u7f6e\u5931\u8d25",
               detail: "\u672a\u80fd\u66f4\u65b0\u540e\u7aef\u4f11\u7720\u72b6\u6001\uff0c\u8bbe\u7f6e\u5df2\u56de\u9000\u3002",
+              kind: "error",
+              progress: null,
+              indeterminate: true,
+              priority: 82,
+              expiresAt: Date.now() + 3600
+            });
+          });
+      });
+      section.querySelector('[data-debug-select="adaptive-sleep-idle-seconds"]').addEventListener("change", function (event) {
+        var target = event && event.target;
+        var nextValue = sanitizeAdaptiveSleepIdleSeconds(target && target.value);
+        updateNotificationBridgeState({ adaptive_sleep_idle_seconds: nextValue })
+          .then(function () {
+            adaptiveSleepIdleSeconds = nextValue;
+            setStoredValue("adaptive_sleep_idle_seconds", adaptiveSleepIdleSeconds);
+            postContainerSleepActivity(true);
+            setActivityTask("adaptive-sleep-idle-setting", {
+              title: "\u5df2\u66f4\u65b0\u81ea\u9002\u5e94\u4f11\u7720\u5f85\u673a\u65f6\u95f4",
+              detail: "\u65e0\u952e\u9f20\u4ea4\u4e92 " + (nextValue === 60 ? "1" : String(nextValue / 60)) + " \u5206\u949f\u540e\u8fdb\u5165 60 \u79d2\u4f11\u7720\u786e\u8ba4\u3002",
+              kind: "success",
+              progress: 100,
+              indeterminate: false,
+              priority: 72,
+              expiresAt: Date.now() + 3200
+            });
+            renderDebugToolsSection();
+          })
+          .catch(function () {
+            if (target) target.value = String(adaptiveSleepIdleSeconds);
+            setActivityTask("adaptive-sleep-idle-setting", {
+              title: "\u5f85\u673a\u65f6\u95f4\u8bbe\u7f6e\u5931\u8d25",
+              detail: "\u672a\u80fd\u66f4\u65b0\u540e\u7aef\u7684\u4f11\u7720\u5012\u8ba1\u65f6\u914d\u7f6e\u3002",
               kind: "error",
               progress: null,
               indeterminate: true,
@@ -5109,7 +5352,7 @@
     if (!action) return;
     if (action === "client-to-remote") {
       setBottomActionSplitOpen(false);
-      forceClipboardClientToRemote();
+      handleRemotePasteShortcut();
       return;
     }
     if (action === "remote-to-client") {
@@ -5195,7 +5438,7 @@
       '<button type="button" class="selkies-bottom-split-btn" data-dock-action="split-fullscreen">\u5168\u90e8\u5168\u5c4f</button>' +
       "</div>" +
       '<div id="selkies-bottom-action-dock">' +
-      '<button type="button" class="selkies-bottom-dock-btn" data-tone="send" data-dock-action="client-to-remote">\u9001\u526a\u677f</button>' +
+      '<button type="button" class="selkies-bottom-dock-btn" data-tone="send" data-dock-action="client-to-remote">\u7c98\u8d34</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="wechat" data-dock-action="wechat-focus">\u5fae\u4fe1</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="split" data-dock-action="split-toggle">\u5206\u5c4f</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="qq" data-dock-action="qq-focus">QQ</button>' +
@@ -5536,77 +5779,6 @@
     return null;
   }
 
-  async function forceClipboardClientToRemote() {
-    noteUiInteraction();
-    resetClientClipboardRuntime();
-    setActivityTask("clipboard-force-client", {
-      title: "\u6b63\u5728\u53d1\u9001\u672c\u673a\u526a\u8d34\u677f",
-      detail: "\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u5ba2\u6237\u7aef\u526a\u8d34\u677f\uff0c\u51c6\u5907\u8986\u76d6 Selkies \u8fdc\u7aef\u4f1a\u8bdd\u3002",
-      phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
-      kind: "info",
-      progress: null,
-      indeterminate: true,
-      priority: 76,
-      expiresAt: Date.now() + 5200
-    });
-    var payload = await readClientClipboardPayload();
-    if (!payload) {
-      setActivityTask("clipboard-force-client", {
-        title: "\u65e0\u6cd5\u8bfb\u53d6\u672c\u673a\u526a\u8d34\u677f",
-        detail: "\u672a\u8bfb\u53d6\u5230\u5f53\u524d\u5ba2\u6237\u7aef\u7684\u526a\u8d34\u677f\u5185\u5bb9\uff0c\u672a\u6267\u884c\u8986\u76d6\u3002",
-        phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
-        kind: "warning",
-        progress: null,
-        indeterminate: true,
-        priority: 76,
-        expiresAt: Date.now() + 2600
-      });
-      return;
-    }
-    setHighLoadState(true, "clipboard force push");
-    scheduleHighLoadRelease("clipboard force push", 6000);
-    var sent = false;
-    if (window.selkiesSendClipboard && typeof window.selkiesSendClipboard === "function") {
-      if (payload.type === "text") {
-        await window.selkiesSendClipboard(payload.text || "", "text/plain");
-        sent = true;
-      } else if (payload.type === "image" && payload.buffer && payload.mime) {
-        await window.selkiesSendClipboard(payload.buffer, payload.mime);
-        sent = true;
-      }
-    } else if (typeof window.__selkiesSendClipboardPayload === "function") {
-      sent = !!(await window.__selkiesSendClipboardPayload(payload));
-    }
-    if (sent) {
-      recordClipboardReplacement(
-        "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
-        payload.type === "text" ? payload.text || "" : "\u56fe\u7247\u5185\u5bb9",
-        "\u624b\u52a8\u9001\u526a\u677f"
-      );
-      setActivityTask("clipboard-force-client", {
-        title: "\u5df2\u5f3a\u5236\u8986\u76d6\u8fdc\u7aef\u526a\u8d34\u677f",
-        detail: "\u5f53\u524d\u5ba2\u6237\u7aef\u7684\u526a\u8d34\u677f\u5185\u5bb9\u5df2\u4f18\u5148\u5199\u5165 Selkies \u4f1a\u8bdd\u3002",
-        phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
-        kind: "success",
-        progress: 100,
-        indeterminate: false,
-        priority: 76,
-        expiresAt: Date.now() + 2600
-      });
-    } else {
-      setActivityTask("clipboard-force-client", {
-        title: "\u5f3a\u5236\u8986\u76d6\u5931\u8d25",
-        detail: "\u5f53\u524d\u5ba2\u6237\u7aef\u526a\u8d34\u677f\u672a\u80fd\u5199\u5165\u8fdc\u7aef\u4f1a\u8bdd\u3002",
-        phase: "\u5ba2\u6237\u7aef -> \u8fdc\u7aef",
-        kind: "error",
-        progress: null,
-        indeterminate: true,
-        priority: 86,
-        expiresAt: Date.now() + 2600
-      });
-    }
-  }
-
   function forceClipboardRemoteToClient() {
     noteUiInteraction();
     resetClientClipboardRuntime();
@@ -5620,7 +5792,7 @@
   function getModifierGestureBucket(event) {
     var key = String((event && event.key) || "");
     var code = String((event && event.code) || "");
-    if (key === "Control" || key === "Meta" || code === "ControlLeft" || code === "ControlRight" || code === "MetaLeft" || code === "MetaRight") return modifierGestureState.clientToRemote;
+    if (key === "Control" || key === "Meta" || code === "ControlLeft" || code === "ControlRight" || code === "MetaLeft" || code === "MetaRight") return null;
     if (key === "Alt" || key === "Option" || code === "AltLeft" || code === "AltRight") return modifierGestureState.remoteToClient;
     return null;
   }
@@ -5638,9 +5810,7 @@
     bucket.lastTriggerAt = now;
     bucket.lastTapAt = 0;
     clearModifierHold(bucket);
-    if (bucket === modifierGestureState.clientToRemote) {
-      forceClipboardClientToRemote();
-    } else if (bucket === modifierGestureState.remoteToClient) {
+    if (bucket === modifierGestureState.remoteToClient) {
       forceClipboardRemoteToClient();
     }
   }
@@ -6210,6 +6380,7 @@
     bindImeFocusRecovery();
     startSessionMonitor();
     startClientAwakeHeartbeat();
+    startAdaptiveSleepStatusWatcher();
     startIdleCleanupWatcher();
     startBottomActionDock();
     startNotificationHistoryCenter();
