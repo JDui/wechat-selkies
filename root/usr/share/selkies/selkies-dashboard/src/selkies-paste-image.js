@@ -91,51 +91,58 @@
   }
 
   async function readClipboardPayload() {
-    if (!window.isSecureContext || !navigator.clipboard) {
-      showToast("Clipboard access requires HTTPS and permissions.", "warn");
-      return null;
-    }
+    const readNow = async () => {
+      if (!window.isSecureContext || !navigator.clipboard) {
+        showToast("Clipboard access requires HTTPS and permissions.", "warn");
+        return null;
+      }
 
-    if (navigator.clipboard.read) {
-      try {
-        const items = await navigator.clipboard.read();
-        if (!items || items.length === 0) return null;
-        for (const item of items) {
-          const imageType = item.types.find((t) => t.startsWith("image/"));
-          if (imageType) {
-            const blob = await item.getType(imageType);
-            return {
-              type: "image",
-              mime: imageType,
-              size: blob.size,
-              buffer: await blob.arrayBuffer()
-            };
+      if (navigator.clipboard.read) {
+        try {
+          const items = await navigator.clipboard.read();
+          if (!items || items.length === 0) return null;
+          for (const item of items) {
+            const imageType = item.types.find((t) => t.startsWith("image/"));
+            if (imageType) {
+              const blob = await item.getType(imageType);
+              return {
+                type: "image",
+                mime: imageType,
+                size: blob.size,
+                buffer: await blob.arrayBuffer()
+              };
+            }
           }
+          if (items[0] && items[0].types.includes("text/plain")) {
+            const text = await (await items[0].getType("text/plain")).text();
+            if (!text) return null;
+            return { type: "text", text };
+          }
+        } catch (err) {
+          showToast("Clipboard read failed. Check browser permissions.", "warn");
+          return null;
         }
-        if (items[0] && items[0].types.includes("text/plain")) {
-          const text = await (await items[0].getType("text/plain")).text();
+      }
+
+      if (navigator.clipboard.readText) {
+        try {
+          const text = await navigator.clipboard.readText();
           if (!text) return null;
           return { type: "text", text };
+        } catch (err) {
+          showToast("Clipboard readText failed. Check browser permissions.", "warn");
+          return null;
         }
-      } catch (err) {
-        showToast("Clipboard read failed. Check browser permissions.", "warn");
-        return null;
       }
-    }
 
-    if (navigator.clipboard.readText) {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (!text) return null;
-        return { type: "text", text };
-      } catch (err) {
-        showToast("Clipboard readText failed. Check browser permissions.", "warn");
-        return null;
-      }
-    }
+      showToast("Clipboard API not available in this browser.", "warn");
+      return null;
+    };
 
-    showToast("Clipboard API not available in this browser.", "warn");
-    return null;
+    if (typeof window.__selkiesWithClientClipboardRead === "function") {
+      return window.__selkiesWithClientClipboardRead(readNow);
+    }
+    return readNow();
   }
 
   async function sendClipboardPayload(payload, options) {
@@ -146,7 +153,8 @@
       return false;
     }
 
-    if (payload.type === "image") {
+    const sendNow = async () => {
+      if (payload.type === "image") {
       const fingerprint = [payload.mime, payload.size, String(payload.buffer.byteLength || payload.size || 0)].join(":");
       if (!skipDuplicateCheck && isDuplicatePasteFingerprint(fingerprint)) {
         return false;
@@ -167,9 +175,9 @@
       emitClipboardTransferState("end", "Image clipboard sent.");
       showToast("Image sent to remote clipboard.", "success");
       return true;
-    }
+      }
 
-    if (payload.type === "text") {
+      if (payload.type === "text") {
       const fingerprint = ["text/plain", String((payload.text || "").length), String(payload.text || "").slice(0, 48)].join(":");
       if (!skipDuplicateCheck && isDuplicatePasteFingerprint(fingerprint)) {
         return false;
@@ -177,9 +185,15 @@
       rememberPasteFingerprint(fingerprint);
       await window.selkiesSendClipboard(payload.text, "text/plain");
       return true;
-    }
+      }
 
-    return false;
+      return false;
+    };
+
+    if (typeof window.__selkiesWithClientClipboardWrite === "function") {
+      return window.__selkiesWithClientClipboardWrite(sendNow);
+    }
+    return sendNow();
   }
 
   function extractImageFromClipboardData(clipboardData) {
@@ -226,7 +240,11 @@
       }
       emitClipboardTransferState("start", "Reading image clipboard and sending to remote session.");
       imageInfo.blob.arrayBuffer().then((buffer) => {
-        return window.selkiesSendClipboard(buffer, imageInfo.mime);
+        const sendNow = () => window.selkiesSendClipboard(buffer, imageInfo.mime);
+        if (typeof window.__selkiesWithClientClipboardWrite === "function") {
+          return window.__selkiesWithClientClipboardWrite(sendNow);
+        }
+        return sendNow();
       }).then(() => {
         emitClipboardTransferState("end", "Image clipboard sent.");
         showToast("Image sent to remote clipboard.", "success");

@@ -39,10 +39,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.40.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.41.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.40.tar
+docker load -i wechat-selkies-1.41.tar
 ```
 
 启动：
@@ -57,7 +57,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.40
+  wechat-selkies:1.41
 ```
 
 访问：
@@ -78,7 +78,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.40
+    image: wechat-selkies:1.41
     container_name: wechat-selkies
     init: true
     ports:
@@ -106,7 +106,7 @@ services:
       - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
       - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
       - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
-      - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
+      - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
     mem_reservation: "2g"
     mem_limit: "8g"
@@ -154,7 +154,7 @@ services:
 | `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | 低帧率模式发送帧率上限，可设置为 `1` 到 `120` |
 | `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | 低带宽侧的 H264 CRF 默认值 |
 | `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 低带宽采样 / 带宽缩放下限 |
-| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | 自适应休眠默认待机秒数；界面可选 `60`、`900`、`1800`、`2700`、`3600` |
+| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `3600` | 自适应休眠默认待机秒数；界面可选 `60`、`900`、`1800`、`2700`、`3600` |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |
 | `SELKIES_CONTAINER_SLEEP` | `false` | 启用 PIN 驱动的容器内部超低占用休眠；compose 示例中已开启，但只有设置 `PASSWORD` 后才会实际生效 |
 | `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | 旧版兜底值；启用自适应休眠后以界面选择的待机时间为准 |
@@ -220,13 +220,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.40 .
+docker build -t wechat-selkies:1.41 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.40.tar wechat-selkies:1.40
+docker save -o wechat-selkies-1.41.tar wechat-selkies:1.41
 ```
 
 ## 故障排查

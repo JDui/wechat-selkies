@@ -15,7 +15,7 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   videoSoftRecoverLimit: 2,
   videoRecoverCooldownMs: 120000,
   idleCleanupMinutes: 20,
-  adaptiveSleepIdleSeconds: 60,
+  adaptiveSleepIdleSeconds: 3600,
   defaultGamepadEnabled: false,
   gamepadUiEnabled: false,
   dynamicLowLatencyEnabled: true,

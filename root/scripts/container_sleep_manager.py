@@ -93,9 +93,9 @@ def sanitize_adaptive_sleep_idle_seconds(value):
     try:
         seconds = int(str(value).strip())
     except Exception:
-        seconds = int(os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "60") or "60")
+        seconds = int(os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "3600") or "3600")
     if seconds not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
-        seconds = 60
+        seconds = 3600
     return seconds
 
 
@@ -120,11 +120,18 @@ def read_json(path, default=None):
 
 def read_sleep_mode_config():
     payload = read_json(MODE_STATE_PATH, {})
+    idle_seconds = sanitize_adaptive_sleep_idle_seconds(
+        payload.get("adaptive_sleep_idle_seconds", os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "3600"))
+    )
+    if (
+        not bool(payload.get("adaptive_sleep_idle_seconds_user_set", False))
+        and idle_seconds == 60
+        and sanitize_adaptive_sleep_idle_seconds(os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "3600")) == 3600
+    ):
+        idle_seconds = 3600
     return {
         "adaptive_sleep_enabled": mode_bool(payload.get("adaptive_sleep_enabled"), False),
-        "adaptive_sleep_idle_seconds": sanitize_adaptive_sleep_idle_seconds(
-            payload.get("adaptive_sleep_idle_seconds", os.environ.get("SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", "60"))
-        ),
+        "adaptive_sleep_idle_seconds": idle_seconds,
     }
 
 

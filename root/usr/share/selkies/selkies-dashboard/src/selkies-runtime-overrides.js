@@ -1,8 +1,7 @@
 (function () {
   "use strict";
 
-  // The bundled client checks this flag before pushing clipboard contents on focus.
-  window.clipboard_enabled = false;
+  installClientClipboardGuard();
 
   var runtime = window.__SELKIES_RUNTIME__ || {};
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
@@ -127,10 +126,11 @@
   var notificationPassthroughEnabled = sanitizeBool(getStoredValue("notification_passthrough_enabled"), false);
   var adaptiveSleepEnabled = sanitizeBool(getStoredValue("adaptive_sleep_enabled"), false);
   var adaptiveSleepIdleSeconds = sanitizeAdaptiveSleepIdleSeconds(
-    getStoredValue("adaptive_sleep_idle_seconds") || runtime.adaptiveSleepIdleSeconds || 60
+    getStoredValue("adaptive_sleep_idle_seconds") || runtime.adaptiveSleepIdleSeconds || 3600
   );
   var adaptiveSleepStatusTimer = null;
   var adaptiveSleepOverlayTimer = null;
+  var adaptiveSleepIdleTimer = null;
   var adaptiveSleepOverlayVisible = false;
   var adaptiveSleepLastStatus = null;
   var adaptiveSleepLastActivityPostAt = 0;
@@ -155,6 +155,186 @@
   var modifierGestureState = {
     remoteToClient: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null }
   };
+
+  function clientClipboardPermissionDepth(kind) {
+    var key = kind === "write" ? "__SELKIES_CLIENT_CLIPBOARD_WRITE_DEPTH__" : "__SELKIES_CLIENT_CLIPBOARD_READ_DEPTH__";
+    return Math.max(0, Number(window[key]) || 0);
+  }
+
+  function pushClientClipboardPermission(kind) {
+    var key = kind === "write" ? "__SELKIES_CLIENT_CLIPBOARD_WRITE_DEPTH__" : "__SELKIES_CLIENT_CLIPBOARD_READ_DEPTH__";
+    window[key] = clientClipboardPermissionDepth(kind) + 1;
+    return function () {
+      window[key] = Math.max(0, clientClipboardPermissionDepth(kind) - 1);
+    };
+  }
+
+  function clientClipboardReadAllowed() {
+    return clientClipboardPermissionDepth("read") > 0;
+  }
+
+  function clientClipboardWriteAllowed() {
+    return clientClipboardPermissionDepth("write") > 0;
+  }
+
+  function withClientClipboardReadPermission(callback) {
+    var release = pushClientClipboardPermission("read");
+    try {
+      return Promise.resolve(callback()).then(
+        function (value) {
+          release();
+          return value;
+        },
+        function (err) {
+          release();
+          throw err;
+        }
+      );
+    } catch (err) {
+      release();
+      return Promise.reject(err);
+    }
+  }
+
+  function withClientClipboardWritePermission(callback) {
+    var release = pushClientClipboardPermission("write");
+    try {
+      return Promise.resolve(callback()).then(
+        function (value) {
+          release();
+          return value;
+        },
+        function (err) {
+          release();
+          throw err;
+        }
+      );
+    } catch (err) {
+      release();
+      return Promise.reject(err);
+    }
+  }
+
+  function withClientClipboardTransferPermission(callback) {
+    var releaseRead = pushClientClipboardPermission("read");
+    var releaseWrite = pushClientClipboardPermission("write");
+    var release = function () {
+      releaseWrite();
+      releaseRead();
+    };
+    try {
+      return Promise.resolve(callback()).then(
+        function (value) {
+          release();
+          return value;
+        },
+        function (err) {
+          release();
+          throw err;
+        }
+      );
+    } catch (err) {
+      release();
+      return Promise.reject(err);
+    }
+  }
+
+  function isClientClipboardWriteCommand(payload) {
+    if (typeof payload !== "string") return false;
+    return /^(cw|cb|cws|cbs|cwd|cbd|cwe|cbe)(?:,|$)/.test(payload);
+  }
+
+  function blockedClipboardReadPromise() {
+    var error;
+    try {
+      error = new DOMException("Client clipboard reads are disabled until an explicit paste action.", "NotAllowedError");
+    } catch (_err) {
+      error = new Error("Client clipboard reads are disabled until an explicit paste action.");
+      error.name = "NotAllowedError";
+    }
+    return Promise.reject(error);
+  }
+
+  function installClientClipboardGuard() {
+    try {
+      Object.defineProperty(window, "clipboard_enabled", {
+        configurable: true,
+        enumerable: true,
+        get: function () {
+          return false;
+        },
+        set: function () {}
+      });
+    } catch (_err) {
+      window.clipboard_enabled = false;
+    }
+
+    window.__selkiesWithClientClipboardRead = withClientClipboardReadPermission;
+    window.__selkiesWithClientClipboardWrite = withClientClipboardWritePermission;
+    window.__selkiesWithClientClipboardTransfer = withClientClipboardTransferPermission;
+    window.__selkiesClientClipboardReadAllowed = clientClipboardReadAllowed;
+    window.__selkiesClientClipboardWriteAllowed = clientClipboardWriteAllowed;
+
+    try {
+      if (navigator.clipboard && !navigator.clipboard.__selkiesReadGuardInstalled) {
+        var nativeRead = typeof navigator.clipboard.read === "function" ? navigator.clipboard.read.bind(navigator.clipboard) : null;
+        var nativeReadText = typeof navigator.clipboard.readText === "function" ? navigator.clipboard.readText.bind(navigator.clipboard) : null;
+        if (nativeRead) {
+          navigator.clipboard.read = function () {
+            if (!clientClipboardReadAllowed()) return blockedClipboardReadPromise();
+            return nativeRead.apply(navigator.clipboard, arguments);
+          };
+        }
+        if (nativeReadText) {
+          navigator.clipboard.readText = function () {
+            if (!clientClipboardReadAllowed()) return blockedClipboardReadPromise();
+            return nativeReadText.apply(navigator.clipboard, arguments);
+          };
+        }
+        Object.defineProperty(navigator.clipboard, "__selkiesReadGuardInstalled", {
+          configurable: false,
+          enumerable: false,
+          value: true
+        });
+      }
+    } catch (_err2) {}
+
+    try {
+      if (window.WebSocket && !window.WebSocket.prototype.__selkiesClipboardGuardInstalled) {
+        var nativeWsSend = window.WebSocket.prototype.send;
+        window.WebSocket.prototype.send = function (payload) {
+          if (isClientClipboardWriteCommand(payload) && !clientClipboardWriteAllowed()) {
+            console.warn("[selkies] blocked client clipboard upload outside explicit paste action");
+            return;
+          }
+          return nativeWsSend.apply(this, arguments);
+        };
+        Object.defineProperty(window.WebSocket.prototype, "__selkiesClipboardGuardInstalled", {
+          configurable: false,
+          enumerable: false,
+          value: true
+        });
+      }
+    } catch (_err3) {}
+
+    try {
+      if (window.RTCDataChannel && !window.RTCDataChannel.prototype.__selkiesClipboardGuardInstalled) {
+        var nativeDcSend = window.RTCDataChannel.prototype.send;
+        window.RTCDataChannel.prototype.send = function (payload) {
+          if (isClientClipboardWriteCommand(payload) && !clientClipboardWriteAllowed()) {
+            console.warn("[selkies] blocked client clipboard data-channel upload outside explicit paste action");
+            return;
+          }
+          return nativeDcSend.apply(this, arguments);
+        };
+        Object.defineProperty(window.RTCDataChannel.prototype, "__selkiesClipboardGuardInstalled", {
+          configurable: false,
+          enumerable: false,
+          value: true
+        });
+      }
+    } catch (_err4) {}
+  }
 
   function isForcedSelkiesOffKey(name) {
     return /(^|_)(use_paint_over_quality|gamepad_enabled|isGamepadEnabled|ui_sidebar_show_gamepads)(_display2)?$/.test(String(name || ""));
@@ -722,6 +902,7 @@
     lastFrontendInteractionAt = Date.now();
     reportFrontendInteractionState(false);
     postContainerSleepActivity(false);
+    scheduleAdaptiveSleepIdleWarning();
     if (passthroughIdleTimer) {
       window.clearTimeout(passthroughIdleTimer);
       passthroughIdleTimer = null;
@@ -936,10 +1117,16 @@
   }
 
   function showAdaptiveSleepOverlay(status) {
-    adaptiveSleepLastStatus = status || adaptiveSleepLastStatus || {};
+    var nextStatus = status || adaptiveSleepLastStatus || {};
+    var previousDeadline = Number((adaptiveSleepLastStatus && adaptiveSleepLastStatus.warning_deadline_at) || 0);
+    var nextDeadline = Number(nextStatus.warning_deadline_at || 0);
+    var resetSleepRequest = !adaptiveSleepOverlayVisible || Math.abs(nextDeadline - previousDeadline) > 0.25;
+    adaptiveSleepLastStatus = nextStatus;
     adaptiveSleepOverlayVisible = true;
     var overlay = ensureAdaptiveSleepOverlay();
-    overlay.dataset.sleepRequested = "0";
+    if (resetSleepRequest) {
+      overlay.dataset.sleepRequested = "0";
+    }
     overlay.setAttribute("data-open", "1");
     renderAdaptiveSleepOverlay();
     if (!adaptiveSleepOverlayTimer) {
@@ -961,6 +1148,41 @@
     }
   }
 
+  function scheduleAdaptiveSleepIdleWarning() {
+    if (adaptiveSleepIdleTimer) {
+      window.clearTimeout(adaptiveSleepIdleTimer);
+      adaptiveSleepIdleTimer = null;
+    }
+    if (!adaptiveSleepEnabled) {
+      hideAdaptiveSleepOverlay();
+      return;
+    }
+    var elapsed = Math.max(0, Date.now() - lastFrontendInteractionAt);
+    var delay = Math.max(0, adaptiveSleepIdleSeconds * 1000 - elapsed);
+    adaptiveSleepIdleTimer = window.setTimeout(function () {
+      adaptiveSleepIdleTimer = null;
+      beginLocalAdaptiveSleepWarning();
+    }, delay);
+  }
+
+  function beginLocalAdaptiveSleepWarning() {
+    if (!adaptiveSleepEnabled) return;
+    var now = Date.now();
+    if (now - lastFrontendInteractionAt < adaptiveSleepIdleSeconds * 1000) {
+      scheduleAdaptiveSleepIdleWarning();
+      return;
+    }
+    showAdaptiveSleepOverlay({
+      ok: true,
+      adaptive_sleep_enabled: true,
+      pending_sleep: true,
+      local_warning: true,
+      warning_started_at: now / 1000,
+      warning_deadline_at: (now + 60000) / 1000,
+      warning_seconds: 60
+    });
+  }
+
   function cancelAdaptiveSleepWarning(event) {
     if (!adaptiveSleepOverlayVisible) return;
     stopFrontendShortcutEvent(event);
@@ -968,12 +1190,15 @@
     reportFrontendInteractionState(true);
     postContainerSleepActivity(true);
     hideAdaptiveSleepOverlay();
+    scheduleAdaptiveSleepIdleWarning();
     window.setTimeout(pollAdaptiveSleepStatus, 400);
   }
 
   function applyAdaptiveSleepStatus(status) {
     if (!status || !status.ok) {
-      hideAdaptiveSleepOverlay();
+      if (!(adaptiveSleepLastStatus && adaptiveSleepLastStatus.local_warning)) {
+        hideAdaptiveSleepOverlay();
+      }
       return;
     }
     if (status.sleeping) {
@@ -982,7 +1207,9 @@
       return;
     }
     if (!status.adaptive_sleep_enabled || !status.pending_sleep) {
-      hideAdaptiveSleepOverlay();
+      if (!(adaptiveSleepLastStatus && adaptiveSleepLastStatus.local_warning)) {
+        hideAdaptiveSleepOverlay();
+      }
       return;
     }
     showAdaptiveSleepOverlay(status);
@@ -997,6 +1224,7 @@
     reportFrontendInteractionState(true);
     postContainerSleepActivity(true);
     pollAdaptiveSleepStatus();
+    scheduleAdaptiveSleepIdleWarning();
     adaptiveSleepStatusTimer = window.setInterval(pollAdaptiveSleepStatus, 2000);
     document.addEventListener("pointerdown", cancelAdaptiveSleepWarning, true);
     document.addEventListener("keydown", cancelAdaptiveSleepWarning, true);
@@ -1339,6 +1567,7 @@
     setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
     adaptiveSleepIdleSeconds = sanitizeAdaptiveSleepIdleSeconds(payload.adaptive_sleep_idle_seconds || adaptiveSleepIdleSeconds);
     setStoredValue("adaptive_sleep_idle_seconds", adaptiveSleepIdleSeconds);
+    scheduleAdaptiveSleepIdleWarning();
     qqIdleBlurSeconds = sanitizeInt(payload.idle_focus_seconds, qqIdleBlurSeconds, 0, 1800);
     if ([0, 60, 300, 600, 1800].indexOf(qqIdleBlurSeconds) < 0) {
       qqIdleBlurSeconds = 600;
@@ -2223,7 +2452,7 @@
   function sanitizeAdaptiveSleepIdleSeconds(value) {
     var n = parseInt(String(value), 10);
     if ([60, 900, 1800, 2700, 3600].indexOf(n) >= 0) return n;
-    return 60;
+    return 3600;
   }
 
   function sanitizeDockPosition(value) {
@@ -4015,20 +4244,22 @@
 
   async function sendClientClipboardPayloadToRemote(payload) {
     if (!payload) return false;
-    if (typeof window.__selkiesSendClipboardPayload === "function") {
-      return !!(await window.__selkiesSendClipboardPayload(payload, { skipDuplicateCheck: true }));
-    }
-    if (window.selkiesSendClipboard && typeof window.selkiesSendClipboard === "function") {
-      if (payload.type === "text") {
-        await window.selkiesSendClipboard(payload.text || "", "text/plain");
-        return true;
+    return withClientClipboardWritePermission(async function () {
+      if (typeof window.__selkiesSendClipboardPayload === "function") {
+        return !!(await window.__selkiesSendClipboardPayload(payload, { skipDuplicateCheck: true }));
       }
-      if (payload.type === "image" && payload.buffer && payload.mime) {
-        await window.selkiesSendClipboard(payload.buffer, payload.mime);
-        return true;
+      if (window.selkiesSendClipboard && typeof window.selkiesSendClipboard === "function") {
+        if (payload.type === "text") {
+          await window.selkiesSendClipboard(payload.text || "", "text/plain");
+          return true;
+        }
+        if (payload.type === "image" && payload.buffer && payload.mime) {
+          await window.selkiesSendClipboard(payload.buffer, payload.mime);
+          return true;
+        }
       }
-    }
-    return false;
+      return false;
+    });
   }
 
   async function handleRemoteCopyShortcut(shortcut) {
@@ -4058,7 +4289,8 @@
   }
 
   async function handleRemotePasteShortcut() {
-    try {
+    return withClientClipboardTransferPermission(async function () {
+      try {
       setActivityTask("clipboard-shortcut", {
         title: "\u6b63\u5728\u7c98\u8d34\u5230\u8fdc\u7aef",
         detail: "\u6b63\u5728\u8bfb\u53d6\u672c\u673a\u526a\u8d34\u677f\uff0c\u51c6\u5907\u5148\u540c\u6b65\u5230\u8fdc\u7aef\u518d\u6267\u884c Ctrl+V\u3002",
@@ -4125,6 +4357,7 @@
     } finally {
       releaseClipboardShortcutLock();
     }
+    });
   }
 
   function bindClipboardSyncTriggers() {
@@ -5055,9 +5288,12 @@
         var nextValue = !!(event && event.target && event.target.checked);
         var target = event.target;
         adaptiveSleepEnabled = nextValue;
+        lastFrontendInteractionAt = Date.now();
         setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
         updateNotificationBridgeState({ adaptive_sleep_enabled: nextValue })
           .then(function () {
+            postContainerSleepActivity(true);
+            scheduleAdaptiveSleepIdleWarning();
             setActivityTask("adaptive-sleep-setting", {
               title: nextValue ? "\u5df2\u5f00\u542f\u81ea\u9002\u5e94\u4f11\u7720" : "\u5df2\u5173\u95ed\u81ea\u9002\u5e94\u4f11\u7720",
               detail: nextValue
@@ -5074,6 +5310,7 @@
           .catch(function () {
             adaptiveSleepEnabled = !nextValue;
             setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
+            scheduleAdaptiveSleepIdleWarning();
             target.checked = adaptiveSleepEnabled;
             setActivityTask("adaptive-sleep-setting", {
               title: "\u81ea\u9002\u5e94\u4f11\u7720\u8bbe\u7f6e\u5931\u8d25",
@@ -5092,8 +5329,10 @@
         updateNotificationBridgeState({ adaptive_sleep_idle_seconds: nextValue })
           .then(function () {
             adaptiveSleepIdleSeconds = nextValue;
+            lastFrontendInteractionAt = Date.now();
             setStoredValue("adaptive_sleep_idle_seconds", adaptiveSleepIdleSeconds);
             postContainerSleepActivity(true);
+            scheduleAdaptiveSleepIdleWarning();
             setActivityTask("adaptive-sleep-idle-setting", {
               title: "\u5df2\u66f4\u65b0\u81ea\u9002\u5e94\u4f11\u7720\u5f85\u673a\u65f6\u95f4",
               detail: "\u65e0\u952e\u9f20\u4ea4\u4e92 " + (nextValue === 60 ? "1" : String(nextValue / 60)) + " \u5206\u949f\u540e\u8fdb\u5165 60 \u79d2\u4f11\u7720\u786e\u8ba4\u3002",
@@ -5766,17 +6005,19 @@
   }
 
   async function readClientClipboardPayload() {
-    if (typeof window.__selkiesReadClientClipboardPayload === "function") {
-      return window.__selkiesReadClientClipboardPayload();
-    }
-    if (navigator.clipboard && typeof navigator.clipboard.readText === "function") {
-      try {
-        var text = await navigator.clipboard.readText();
-        if (!text) return null;
-        return { type: "text", text: text };
-      } catch (_err) {}
-    }
-    return null;
+    return withClientClipboardReadPermission(async function () {
+      if (typeof window.__selkiesReadClientClipboardPayload === "function") {
+        return window.__selkiesReadClientClipboardPayload();
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.readText === "function") {
+        try {
+          var text = await navigator.clipboard.readText();
+          if (!text) return null;
+          return { type: "text", text: text };
+        } catch (_err) {}
+      }
+      return null;
+    });
   }
 
   function forceClipboardRemoteToClient() {

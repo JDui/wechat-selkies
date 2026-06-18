@@ -60,10 +60,10 @@ FRONTEND_ACTIVITY_STATE_PATH = pathlib.Path(
 IDLE_DEFOCUS_SECONDS = parse_int_env("NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS", 600, 0, 1800)
 ADAPTIVE_SLEEP_IDLE_OPTIONS = {60, 900, 1800, 2700, 3600}
 ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = parse_int_env(
-    "SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", 60, 60, 3600
+    "SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", 3600, 60, 3600
 )
 if ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
-    ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = 60
+    ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = 3600
 WECHAT_AUDIO_ENABLED = os.getenv("NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED", "true").strip().lower() in {
     "1",
     "true",
@@ -848,6 +848,7 @@ def default_mode_state():
         "idle_focus_seconds": IDLE_DEFOCUS_SECONDS,
         "adaptive_sleep_enabled": False,
         "adaptive_sleep_idle_seconds": ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS,
+        "adaptive_sleep_idle_seconds_user_set": False,
     }
 
 
@@ -865,9 +866,18 @@ def _read_mode_state_unlocked():
         payload.get("adaptive_sleep_enabled", state["adaptive_sleep_enabled"]),
         state["adaptive_sleep_enabled"],
     )
+    state["adaptive_sleep_idle_seconds_user_set"] = bool(
+        payload.get("adaptive_sleep_idle_seconds_user_set", state["adaptive_sleep_idle_seconds_user_set"])
+    )
     state["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(
         payload.get("adaptive_sleep_idle_seconds", state["adaptive_sleep_idle_seconds"])
     )
+    if (
+        not state["adaptive_sleep_idle_seconds_user_set"]
+        and state["adaptive_sleep_idle_seconds"] == 60
+        and ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS == 3600
+    ):
+        state["adaptive_sleep_idle_seconds"] = ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS
     return state
 
 
@@ -887,6 +897,7 @@ def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=
             state["adaptive_sleep_enabled"] = sanitize_bool(adaptive_sleep_enabled, state["adaptive_sleep_enabled"])
         if adaptive_sleep_idle_seconds is not None:
             state["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(adaptive_sleep_idle_seconds)
+            state["adaptive_sleep_idle_seconds_user_set"] = True
         MODE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = MODE_STATE_PATH.with_suffix(MODE_STATE_PATH.suffix + ".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")

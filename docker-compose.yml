@@ -57,7 +57,7 @@ services:
       - SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS=180
       - CUSTOM_WS_PORT=8081
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
-      - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
+      - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
       - QQ_NICE_LEVEL=-2
       - QQ_WATCHDOG_HANG_DETECT=true

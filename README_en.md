@@ -180,7 +180,7 @@ docker run -it -p 3001:3001 -v ./config:/config --device /dev/dri:/dev/dri nickr
           - QQ_WATCHDOG_FAIL_THRESHOLD=3
           - QQ_WATCHDOG_X11_PING=true
           - QQ_WATCHDOG_X11_TIMEOUT=2
-          - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=60
+          - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
           - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
           - DRI_NODE=/dev/dri/renderD128 # preferred render node for VAAPI
           - SELKIES_ENABLE_BINARY_CLIPBOARD=true
@@ -272,7 +272,7 @@ Configure the following environment variables in `docker-compose.yml`:
 | `WATCHDOG_RESTART_QQ` | `true` | Auto-restart QQ if process exits (only when AUTO_START_QQ=true) |
 | `WATCHDOG_AUDIO` | `true` | Auto-recover PulseAudio when audio becomes unavailable |
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
-| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `60` | Default standby seconds for Adaptive Sleep. Valid UI/runtime values: `60`, `900`, `1800`, `2700`, `3600` |
+| `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `3600` | Default standby seconds for Adaptive Sleep. Valid UI/runtime values: `60`, `900`, `1800`, `2700`, `3600` |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | Adaptive sleep monitor polling interval |
 | `SELKIES_CONTAINER_SLEEP` | `false` | Enable PIN-gated in-container sleep; compose enables it by default, but it only starts when `PASSWORD` is set |
 | `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | Legacy fallback only; the Adaptive Sleep UI now controls the active standby window |
