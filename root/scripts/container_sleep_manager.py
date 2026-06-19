@@ -38,6 +38,9 @@ STARTUP_GRACE_SECONDS = max(
 WAKE_VERIFY_SECONDS = max(1, int(os.environ.get("SELKIES_CONTAINER_SLEEP_WAKE_VERIFY_SECONDS", "8") or "8"))
 WARNING_SECONDS = max(15, min(300, int(os.environ.get("SELKIES_CONTAINER_SLEEP_WARNING_SECONDS", "60") or "60")))
 ADAPTIVE_SLEEP_IDLE_OPTIONS = {60, 900, 1800, 2700, 3600}
+ACTIVITY_FUTURE_SKEW_SECONDS = max(
+    0, int(os.environ.get("SELKIES_CONTAINER_SLEEP_ACTIVITY_FUTURE_SKEW_SECONDS", "30") or "30")
+)
 LOG_PREFIX = "[container-sleep]"
 
 PROTECTED_CMD_PATTERNS = (
@@ -153,11 +156,64 @@ def write_frontend_activity(ts=None):
 
 def latest_frontend_interaction_at():
     payload = read_json(FRONTEND_ACTIVITY_STATE_PATH, {})
-    candidates = [
-        normalize_timestamp(payload.get("last_interaction_at"), 0.0),
-        normalize_timestamp(payload.get("interaction_at"), 0.0),
-    ]
-    return max(candidates)
+    now = time.time()
+    received_at = normalize_timestamp(payload.get("updated_at"), 0.0)
+    candidates = []
+    for key in ("last_interaction_at", "interaction_at"):
+        ts = normalize_timestamp(payload.get(key), 0.0)
+        if ts <= 0:
+            continue
+        if ts > now + ACTIVITY_FUTURE_SKEW_SECONDS:
+            if received_at > 0:
+                candidates.append(received_at)
+            continue
+        candidates.append(min(ts, now))
+    return max(candidates) if candidates else 0.0
+
+
+def awake_clients_snapshot(now=None):
+    now = now or time.time()
+    payload = read_json(AWAKE_STATE_PATH, {})
+    clients = payload.get("clients") if isinstance(payload.get("clients"), list) else []
+    active_clients = []
+    recent_clients = []
+    last_awake_at = 0.0
+    for item in clients:
+        if not isinstance(item, dict):
+            continue
+        updated_at = normalize_timestamp(item.get("updated_at"), 0.0)
+        if updated_at <= 0:
+            continue
+        if updated_at > now + ACTIVITY_FUTURE_SKEW_SECONDS:
+            updated_at = now
+        client = {
+            "awake": bool(item.get("awake")),
+            "updated_at": updated_at,
+            "display_id": item.get("display_id") or "",
+        }
+        recent = now - updated_at <= 45.0
+        if recent:
+            recent_clients.append(client)
+        if client["awake"] and recent:
+            active_clients.append(client)
+            last_awake_at = max(last_awake_at, updated_at)
+    updated_at = normalize_timestamp(payload.get("updated_at"), 0.0)
+    if updated_at > now + ACTIVITY_FUTURE_SKEW_SECONDS:
+        updated_at = now
+    return {
+        "updated_at": updated_at,
+        "state_age_seconds": max(0.0, now - updated_at) if updated_at > 0 else None,
+        "awake_clients": len(active_clients),
+        "recent_clients": len(recent_clients),
+        "any_awake": bool(active_clients),
+        "last_awake_at": last_awake_at,
+    }
+
+
+def idle_reference(now, last_interaction_at):
+    if last_interaction_at > 0:
+        return max(last_interaction_at, started_at), "frontend-interaction"
+    return started_at, "manager-start"
 
 
 def write_state(payload):
@@ -231,11 +287,26 @@ def status_payload():
     config = read_sleep_mode_config()
     last_interaction_at = latest_frontend_interaction_at()
     idle_seconds = int(config["adaptive_sleep_idle_seconds"])
-    reference_at = max(last_interaction_at, started_at)
+    reference_at, reference_reason = idle_reference(now, last_interaction_at)
     idle_for = max(0.0, now - reference_at)
+    awake_state = awake_clients_snapshot(now)
     warning_deadline_at = normalize_timestamp(state.get("warning_deadline_at"), 0.0)
     pending_sleep = bool(state.get("pending_sleep")) and not bool(state.get("sleeping"))
     warning_remaining = max(0.0, warning_deadline_at - now) if pending_sleep else 0.0
+    if not is_feature_enabled():
+        sleep_block_reason = "feature-disabled"
+    elif not bool(config["adaptive_sleep_enabled"]):
+        sleep_block_reason = "adaptive-sleep-disabled"
+    elif bool(state.get("sleeping")):
+        sleep_block_reason = "sleeping"
+    elif now - started_at < STARTUP_GRACE_SECONDS:
+        sleep_block_reason = "startup-grace"
+    elif idle_for < idle_seconds:
+        sleep_block_reason = "idle-window"
+    elif pending_sleep and awake_state["any_awake"]:
+        sleep_block_reason = "warning-countdown"
+    else:
+        sleep_block_reason = "ready"
     payload = dict(state)
     payload.update(
         {
@@ -246,10 +317,18 @@ def status_payload():
             "idle_seconds": idle_seconds,
             "warning_seconds": WARNING_SECONDS,
             "last_interaction_at": last_interaction_at,
+            "idle_reference_at": reference_at,
+            "idle_reference_reason": reference_reason,
             "idle_for_seconds": idle_for,
             "idle_remaining_seconds": max(0.0, idle_seconds - idle_for),
+            "awake_clients": awake_state["awake_clients"],
+            "recent_clients": awake_state["recent_clients"],
+            "any_awake": awake_state["any_awake"],
+            "awake_state_age_seconds": awake_state["state_age_seconds"],
+            "last_awake_at": awake_state["last_awake_at"],
             "pending_sleep": pending_sleep,
             "warning_remaining_seconds": warning_remaining,
+            "sleep_block_reason": sleep_block_reason,
             "updated_at": now,
         }
     )
@@ -393,16 +472,7 @@ def leave_sleep(reason="pin"):
 
 
 def awake_clients_active():
-    payload = read_json(AWAKE_STATE_PATH, {})
-    now = time.time()
-    clients = payload.get("clients") if isinstance(payload.get("clients"), list) else []
-    for item in clients:
-        if not isinstance(item, dict):
-            continue
-        updated_at = float(item.get("updated_at", 0.0) or 0.0)
-        if item.get("awake") and updated_at > 0 and now - updated_at <= 45.0:
-            return True
-    return bool(payload.get("any_awake")) and now - float(payload.get("updated_at", 0.0) or 0.0) <= 45.0
+    return bool(awake_clients_snapshot().get("any_awake"))
 
 
 def monitor_loop():
@@ -423,14 +493,15 @@ def monitor_loop():
             state = read_state()
             if state.get("sleeping"):
                 continue
-            if time.time() - started_at < STARTUP_GRACE_SECONDS:
+            now = time.time()
+            if now - started_at < STARTUP_GRACE_SECONDS:
                 clear_pending_sleep("startup grace")
                 idle_since = 0.0
                 continue
 
-            now = time.time()
             last_interaction_at = latest_frontend_interaction_at()
-            reference_at = max(last_interaction_at, started_at)
+            reference_at, reference_reason = idle_reference(now, last_interaction_at)
+            awake_state = awake_clients_snapshot(now)
             pending_started_at = normalize_timestamp(state.get("warning_started_at"), 0.0)
             if state.get("pending_sleep") and last_interaction_at > pending_started_at:
                 clear_pending_sleep("client interaction")
@@ -443,7 +514,22 @@ def monitor_loop():
                 idle_since = 0.0
                 continue
 
+            if state.get("pending_sleep") and not awake_state["any_awake"]:
+                log(
+                    "sleep warning skipped because no awake clients remain "
+                    f"idle_for={idle_for:.1f} reference={reference_reason}"
+                )
+                enter_sleep("idle timeout no awake clients")
+                continue
+
             if not state.get("pending_sleep"):
+                if not awake_state["any_awake"]:
+                    log(
+                        "idle timeout reached with no awake clients "
+                        f"idle_for={idle_for:.1f} reference={reference_reason}"
+                    )
+                    enter_sleep("idle timeout no awake clients")
+                    continue
                 begin_pending_sleep(idle_seconds, last_interaction_at)
                 idle_since = now
                 continue

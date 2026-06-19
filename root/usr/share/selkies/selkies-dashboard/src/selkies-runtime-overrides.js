@@ -669,6 +669,9 @@
         }
       });
       activeDataSockets.push(ws);
+      ws.addEventListener("open", function () {
+        reportClientAwakeState();
+      });
       ws.addEventListener("close", function () {
         activeDataSockets = activeDataSockets.filter(function (item) {
           return item !== ws;
@@ -776,6 +779,8 @@
 
   function isClientPageAwake() {
     if (!hasOpenDataSocket()) return false;
+    if (document.hidden) return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     return true;
   }
 
@@ -6484,7 +6489,7 @@
       reportClientAwakeState();
     }, 15000);
     window.addEventListener("focus", function () {
-      reportClientAwakeState(true);
+      reportClientAwakeState();
     });
     window.addEventListener("blur", function () {
       reportClientAwakeState(false);
