@@ -144,6 +144,15 @@
   var bottomActionDockRestoreTimer = null;
   var managedFileTransfers = Object.create(null);
   var fileTransferSockets = typeof WeakMap === "function" ? new WeakMap() : null;
+  var uploadTransportStates = [];
+  var UPLOAD_QUEUE_HIGH_WATER_CHUNKS = sanitizeInt(runtime.uploadQueueHighWaterChunks, 4, 1, 64);
+  var UPLOAD_BUFFERED_HIGH_WATER_BYTES = sanitizeInt(runtime.uploadBufferedHighWaterBytes, 4 * 1024 * 1024, 256 * 1024, 64 * 1024 * 1024);
+  var UPLOAD_READ_GATE_DELAY_MS = sanitizeInt(runtime.uploadReadGateDelayMs, 35, 5, 250);
+  var CLIPBOARD_UPLOAD_CHUNK_SIZE = sanitizeInt(runtime.clipboardUploadChunkSize, 750 * 1024, 64 * 1024, 2 * 1024 * 1024);
+  var CLIPBOARD_BUFFERED_HIGH_WATER_BYTES = sanitizeInt(runtime.clipboardBufferedHighWaterBytes, 2 * 1024 * 1024, 256 * 1024, 64 * 1024 * 1024);
+  var CLIPBOARD_SEND_YIELD_MS = sanitizeInt(runtime.clipboardSendYieldMs, 12, 0, 250);
+  var managedClipboardNativeSender = null;
+  var managedClipboardSenderInstalled = false;
   var debugNotificationTargetAt = 0;
   var debugNotificationTimeout = null;
   var debugNotificationInterval = null;
@@ -621,6 +630,20 @@
       });
       ws.addEventListener("message", function (event) {
         if (!event || typeof event.data !== "string") return;
+        if (event.data.indexOf("FILE_UPLOAD_STATUS:") === 0) {
+          try {
+            var uploadStatus = JSON.parse(event.data.slice("FILE_UPLOAD_STATUS:".length));
+            if (typeof window.__selkiesApplyManagedUploadStatus === "function") {
+              window.__selkiesApplyManagedUploadStatus(uploadStatus);
+            } else {
+              window.postMessage({ type: "fileUploadStatus", payload: uploadStatus }, window.location.origin);
+            }
+          } catch (_uploadStatusErr) {}
+          if (typeof event.stopImmediatePropagation === "function") {
+            event.stopImmediatePropagation();
+          }
+          return;
+        }
         if (event.data.charAt(0) === "{") {
           try {
             recordNetworkStatsBandwidth(JSON.parse(event.data));
@@ -713,6 +736,167 @@
       } catch (_err) {}
     });
     return sent;
+  }
+
+  function getPrimaryOpenDataSocket() {
+    for (var i = activeDataSockets.length - 1; i >= 0; i -= 1) {
+      var socket = activeDataSockets[i];
+      if (socket && socket.readyState === window.WebSocket.OPEN) {
+        return socket;
+      }
+    }
+    return null;
+  }
+
+  function sleepMs(ms) {
+    return new Promise(function (resolve) {
+      window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    });
+  }
+
+  function bytesToBase64(bytes) {
+    var view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    var parts = [];
+    var stride = 0x8000;
+    for (var i = 0; i < view.length; i += stride) {
+      var chunk = view.subarray(i, Math.min(i + stride, view.length));
+      var text = "";
+      for (var j = 0; j < chunk.length; j += 1) {
+        text += String.fromCharCode(chunk[j]);
+      }
+      parts.push(text);
+    }
+    return btoa(parts.join(""));
+  }
+
+  function emitClipboardTransferState(status, detail, extra) {
+    var payload = Object.assign(
+      {
+        type: "clipboardTransferState",
+        status: String(status || ""),
+        detail: String(detail || "")
+      },
+      extra || {}
+    );
+    window.postMessage(payload, window.location.origin);
+  }
+
+  async function waitForSocketBufferedAmount(socket, maxBufferedBytes) {
+    var ceiling = Math.max(0, Number(maxBufferedBytes) || 0);
+    while (socket && socket.readyState === window.WebSocket.OPEN && socket.bufferedAmount > ceiling) {
+      await sleepMs(25);
+    }
+  }
+
+  async function sendManagedClipboardPayload(payload, mimeType) {
+    var nativeSender = managedClipboardNativeSender;
+    var socket = getPrimaryOpenDataSocket();
+    if (!socket || socket.readyState !== window.WebSocket.OPEN) {
+      if (typeof nativeSender === "function") {
+        return nativeSender.apply(window, arguments);
+      }
+      throw new Error("WebSocket is not open.");
+    }
+
+    var isBinary = payload instanceof ArrayBuffer || ArrayBuffer.isView(payload);
+    var bytes = isBinary
+      ? payload instanceof Uint8Array
+        ? payload
+        : new Uint8Array(payload instanceof ArrayBuffer ? payload : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength))
+      : new TextEncoder().encode(String(payload || ""));
+    var safeMime = isBinary ? String(mimeType || "application/octet-stream") : "text/plain";
+    var totalBytes = bytes.byteLength;
+    var isLargePayload = totalBytes >= CLIPBOARD_UPLOAD_CHUNK_SIZE;
+
+    if (!isLargePayload) {
+      await waitForSocketBufferedAmount(socket, CLIPBOARD_BUFFERED_HIGH_WATER_BYTES);
+      var singlePayload = bytesToBase64(bytes);
+      if (safeMime === "text/plain") {
+        socket.send("cw," + singlePayload);
+      } else {
+        socket.send("cb," + safeMime + "," + singlePayload);
+      }
+      return true;
+    }
+
+    emitClipboardTransferState("start", "\u6b63\u5728\u5206\u7247\u53d1\u9001\u526a\u8d34\u677f\u5185\u5bb9\u3002", {
+      sentBytes: 0,
+      totalBytes: totalBytes,
+      progress: 1
+    });
+
+    if (safeMime === "text/plain") {
+      socket.send("cws," + totalBytes);
+    } else {
+      socket.send("cbs," + safeMime + "," + totalBytes);
+    }
+
+    var lastProgressAt = 0;
+    for (var offset = 0; offset < totalBytes; offset += CLIPBOARD_UPLOAD_CHUNK_SIZE) {
+      await waitForSocketBufferedAmount(socket, CLIPBOARD_BUFFERED_HIGH_WATER_BYTES);
+      var chunk = bytes.subarray(offset, Math.min(offset + CLIPBOARD_UPLOAD_CHUNK_SIZE, totalBytes));
+      var encodedChunk = bytesToBase64(chunk);
+      if (safeMime === "text/plain") {
+        socket.send("cwd," + encodedChunk);
+      } else {
+        socket.send("cbd," + encodedChunk);
+      }
+      var sentBytes = Math.min(totalBytes, offset + chunk.byteLength);
+      var now = Date.now();
+      if (now - lastProgressAt > 120 || sentBytes >= totalBytes) {
+        lastProgressAt = now;
+        emitClipboardTransferState("progress", "\u6b63\u5728\u53d1\u9001\u526a\u8d34\u677f\u5185\u5bb9\u3002", {
+          sentBytes: sentBytes,
+          totalBytes: totalBytes,
+          progress: clamp((sentBytes / Math.max(1, totalBytes)) * 100, 1, 99)
+        });
+      }
+      if (CLIPBOARD_SEND_YIELD_MS > 0) {
+        await sleepMs(CLIPBOARD_SEND_YIELD_MS);
+      } else {
+        await sleepMs(0);
+      }
+    }
+
+    await waitForSocketBufferedAmount(socket, Math.min(CLIPBOARD_BUFFERED_HIGH_WATER_BYTES, CLIPBOARD_UPLOAD_CHUNK_SIZE));
+    socket.send(safeMime === "text/plain" ? "cwe" : "cbe");
+    emitClipboardTransferState("progress", "\u526a\u8d34\u677f\u5185\u5bb9\u5df2\u53d1\u9001\uff0c\u7b49\u5f85\u8fdc\u7aef\u5199\u5165\u3002", {
+      sentBytes: totalBytes,
+      totalBytes: totalBytes,
+      progress: 99
+    });
+    return true;
+  }
+
+  function installManagedClipboardSender() {
+    if (managedClipboardSenderInstalled) return;
+    managedClipboardSenderInstalled = true;
+    var currentSender = window.selkiesSendClipboard;
+    var managedSender = function (payload, mimeType) {
+      return sendManagedClipboardPayload(payload, mimeType);
+    };
+    managedSender.__selkiesManagedClipboardSender = true;
+    try {
+      Object.defineProperty(window, "selkiesSendClipboard", {
+        configurable: true,
+        enumerable: true,
+        get: function () {
+          return managedSender;
+        },
+        set: function (value) {
+          if (value && value.__selkiesManagedClipboardSender) return;
+          managedClipboardNativeSender = typeof value === "function" ? value : null;
+        }
+      });
+      if (typeof currentSender === "function" && !currentSender.__selkiesManagedClipboardSender) {
+        managedClipboardNativeSender = currentSender;
+      }
+    } catch (_err) {
+      if (typeof currentSender === "function" && !currentSender.__selkiesManagedClipboardSender) {
+        managedClipboardNativeSender = currentSender;
+      }
+      window.selkiesSendClipboard = managedSender;
+    }
   }
 
   function isForegroundControllerPage() {
@@ -816,6 +1000,56 @@
 
   function isTransportBusy() {
     return Object.keys(highLoadStateMap).length > 0 || Date.now() < highLoadBusyUntil;
+  }
+
+  function registerUploadTransportState(state) {
+    if (!state) return;
+    for (var i = 0; i < uploadTransportStates.length; i += 1) {
+      if (uploadTransportStates[i] === state) return;
+    }
+    uploadTransportStates.push(state);
+  }
+
+  function getUploadReadGateDelayMs() {
+    uploadTransportStates = uploadTransportStates.filter(function (state) {
+      return !!(state && state.socket && state.socket.readyState !== window.WebSocket.CLOSED);
+    });
+    for (var i = 0; i < uploadTransportStates.length; i += 1) {
+      var state = uploadTransportStates[i];
+      if (!state || !state.uploadState) continue;
+      if (state.queue && state.queue.length >= UPLOAD_QUEUE_HIGH_WATER_CHUNKS) {
+        return UPLOAD_READ_GATE_DELAY_MS;
+      }
+      if (state.socket && state.socket.bufferedAmount >= UPLOAD_BUFFERED_HIGH_WATER_BYTES) {
+        return UPLOAD_READ_GATE_DELAY_MS;
+      }
+    }
+    return 0;
+  }
+
+  function installFileUploadReadBackpressure() {
+    if (!window.FileReader || !window.FileReader.prototype || window.FileReader.prototype.__selkiesUploadReadGateWrapped) {
+      return;
+    }
+    var nativeReadAsArrayBuffer = window.FileReader.prototype.readAsArrayBuffer;
+    window.FileReader.prototype.readAsArrayBuffer = function () {
+      var reader = this;
+      var args = Array.prototype.slice.call(arguments);
+      var delayMs = getUploadReadGateDelayMs();
+      if (delayMs <= 0 || reader.readyState !== 0) {
+        return nativeReadAsArrayBuffer.apply(reader, args);
+      }
+      var retry = function () {
+        var nextDelay = getUploadReadGateDelayMs();
+        if (nextDelay > 0) {
+          window.setTimeout(retry, nextDelay);
+          return;
+        }
+        nativeReadAsArrayBuffer.apply(reader, args);
+      };
+      window.setTimeout(retry, delayMs);
+    };
+    window.FileReader.prototype.__selkiesUploadReadGateWrapped = true;
   }
 
   function updateTransportBusyTask() {
@@ -3666,8 +3900,10 @@
         fileName: fileName,
         totalBytes: Math.max(0, Number(size) || 0),
         sentBytes: 0,
+        receivedBytes: 0,
         active: true,
         transportAware: false,
+        serverAware: false,
         status: "start",
         startedAt: Date.now(),
         completionTimer: null
@@ -3704,20 +3940,26 @@
       var taskId = getFileTransferTaskId(state);
       var totalBytes = Math.max(0, Number(state.totalBytes) || 0);
       var sentBytes = Math.max(0, Number(state.sentBytes) || 0);
+      var receivedBytes = Math.max(0, Number(state.receivedBytes) || 0);
+      var measuredBytes = state.serverAware ? receivedBytes : sentBytes;
       var title = state.direction === "download" ? "\u6b63\u5728\u4e0b\u8f7d\u6587\u4ef6" : "\u6b63\u5728\u4e0a\u4f20\u6587\u4ef6";
       var detail = state.fileName;
       var phase = "\u51c6\u5907\u4e2d";
-      var progress = totalBytes > 0 ? clamp((sentBytes / totalBytes) * 100, 1, 100) : null;
+      var progress = totalBytes > 0 ? clamp((measuredBytes / totalBytes) * 100, 1, 100) : null;
       var indeterminate = totalBytes <= 0;
 
       if (state.status === "progress") {
-        phase = state.direction === "download" ? "\u4f20\u8f93\u4e2d" : "\u53d1\u9001\u4e2d";
+        phase = state.direction === "download" ? "\u4f20\u8f93\u4e2d" : state.serverAware ? "\u8fdc\u7aef\u63a5\u6536\u4e2d" : "\u53d1\u9001\u4e2d";
         if (progress !== null && state.direction === "upload") {
-          progress = Math.min(progress, 95);
+          progress = Math.min(progress, state.serverAware ? 99 : 90);
         }
       } else if (state.status === "finalizing") {
         phase = state.direction === "download" ? "\u6d4f\u89c8\u5668\u6536\u5c3e" : "\u8fdc\u7aef\u5199\u5165\u4e2d";
         progress = progress === null ? 96 : Math.max(progress, 96);
+        indeterminate = false;
+      } else if (state.status === "done") {
+        phase = state.direction === "download" ? "\u4e0b\u8f7d\u5b8c\u6210" : "\u8fdc\u7aef\u5df2\u5199\u5165";
+        progress = 100;
         indeterminate = false;
       } else if (state.status === "error") {
         setActivityTask(taskId, {
@@ -3755,7 +3997,7 @@
         indeterminate: indeterminate,
         priority: 80,
         startedAt: state.startedAt,
-        meta: totalBytes ? formatBytes(sentBytes) + " / " + formatBytes(totalBytes) : ""
+        meta: totalBytes ? formatBytes(measuredBytes) + " / " + formatBytes(totalBytes) : ""
       });
     }
 
@@ -3770,11 +4012,54 @@
       releaseFileTransferBandwidth();
     }
 
+    function applyManagedUploadStatus(payload) {
+      if (!payload || typeof payload !== "object") return;
+      var name = String(payload.fileName || payload.name || "\u6587\u4ef6\u4f20\u8f93");
+      var state = ensureManagedFileTransfer(name, payload.fileSize || payload.totalBytes, "upload");
+      var totalBytes = Math.max(state.totalBytes || 0, Number(payload.fileSize || payload.totalBytes) || 0);
+      var receivedBytes = Math.max(0, Number(payload.receivedBytes || payload.bytesReceived) || 0);
+      cancelManagedTransferCompletion(state);
+      state.serverAware = true;
+      state.totalBytes = totalBytes;
+      state.receivedBytes = Math.max(state.receivedBytes || 0, receivedBytes);
+
+      if (payload.status === "start") {
+        state.active = true;
+        state.status = "start";
+        state.receivedBytes = 0;
+        setHighLoadState(true, "file upload");
+        renderManagedFileTransfer(state);
+        return;
+      }
+
+      if (payload.status === "progress") {
+        state.active = true;
+        state.status = "progress";
+        setHighLoadState(true, "file upload");
+        renderManagedFileTransfer(state);
+        return;
+      }
+
+      if (payload.status === "done") {
+        state.active = true;
+        state.status = "done";
+        if (totalBytes > 0) state.receivedBytes = totalBytes;
+        renderManagedFileTransfer(state);
+        scheduleManagedTransferCompletion(state, 550);
+        return;
+      }
+
+      if (payload.status === "error") {
+        markManagedTransferError(name, payload.message || "\u4e0a\u4f20\u672a\u5b8c\u6210\u3002", "upload");
+      }
+    }
+
     window.__selkiesHasActiveFileTransfer = hasActiveFileTransfer;
     window.__selkiesEnsureManagedFileTransfer = ensureManagedFileTransfer;
     window.__selkiesRenderManagedFileTransfer = renderManagedFileTransfer;
     window.__selkiesScheduleManagedTransferCompletion = scheduleManagedTransferCompletion;
     window.__selkiesMarkManagedTransferError = markManagedTransferError;
+    window.__selkiesApplyManagedUploadStatus = applyManagedUploadStatus;
 
     window.addEventListener("message", function (event) {
       var data = event && event.data;
@@ -3810,6 +4095,12 @@
       if (payload.status === "error") {
         markManagedTransferError(name, payload.message || name, "upload");
       }
+    });
+
+    window.addEventListener("message", function (event) {
+      var data = event && event.data;
+      if (!data || data.type !== "fileUploadStatus" || !data.payload) return;
+      applyManagedUploadStatus(data.payload);
     });
   }
 
@@ -3860,6 +4151,25 @@
             progress: null,
             indeterminate: true,
             priority: 78,
+            expiresAt: Date.now() + 12000
+          });
+          return;
+        }
+        if (data.status === "progress") {
+          setHighLoadState(true, "clipboard image");
+          scheduleHighLoadRelease("clipboard image", 12000);
+          setActivityTask("clipboard-image", {
+            title: "\u6b63\u5728\u7c98\u8d34\u56fe\u7247",
+            detail: data.detail || "\u6b63\u5728\u5206\u7247\u53d1\u9001\u56fe\u7247\u526a\u8d34\u677f\u3002",
+            phase: "\u526a\u8d34\u677f\u6865\u63a5",
+            kind: "info",
+            progress: Number(data.progress) > 0 ? clamp(Number(data.progress), 1, 99) : null,
+            indeterminate: !(Number(data.progress) > 0),
+            priority: 78,
+            meta:
+              Number(data.totalBytes) > 0
+                ? formatBytes(Number(data.sentBytes) || 0) + " / " + formatBytes(Number(data.totalBytes) || 0)
+                : "",
             expiresAt: Date.now() + 12000
           });
           return;
@@ -3966,12 +4276,14 @@
       var state = fileTransferSockets.get(socket);
       if (!state) {
         state = {
+          socket: socket,
           queue: [],
           flushing: false,
           uploadState: null,
           pendingEndMessage: null
         };
         fileTransferSockets.set(socket, state);
+        registerUploadTransportState(state);
       }
       return state;
     }
@@ -4067,12 +4379,8 @@
             if (typeof window.__selkiesRenderManagedFileTransfer === "function") {
               window.__selkiesRenderManagedFileTransfer(transportState.uploadState);
             }
-            if (typeof window.__selkiesScheduleManagedTransferCompletion === "function") {
-              window.__selkiesScheduleManagedTransferCompletion(transportState.uploadState, 1000);
-            }
           }
           transportState.pendingEndMessage = null;
-          transportState.uploadState = null;
           transportState.flushing = false;
           return;
         }
@@ -4097,7 +4405,10 @@
           if (typeof window.__selkiesEnsureManagedFileTransfer === "function") {
             transportState.uploadState = window.__selkiesEnsureManagedFileTransfer(uploadName, uploadSize, "upload");
             transportState.uploadState.transportAware = true;
+            transportState.uploadState.serverAware = false;
             transportState.uploadState.status = "start";
+            transportState.uploadState.sentBytes = 0;
+            transportState.uploadState.receivedBytes = 0;
             if (typeof window.__selkiesRenderManagedFileTransfer === "function") {
               window.__selkiesRenderManagedFileTransfer(transportState.uploadState);
             }
@@ -6618,6 +6929,8 @@
     bindStreamRecoveryWatchdog();
     startPageStallWatchdog();
     bindActivityWatchers();
+    installManagedClipboardSender();
+    installFileUploadReadBackpressure();
     bindFileTransferActivity();
     installFileTransferTransportInterceptor();
     bindClipboardActivity();
