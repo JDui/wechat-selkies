@@ -2,6 +2,7 @@
   "use strict";
 
   installClientClipboardGuard();
+  installMediaPlaybackWakeGuard();
 
   var runtime = window.__SELKIES_RUNTIME__ || {};
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
@@ -26,6 +27,12 @@
   var PAGE_STALL_RELOAD_THRESHOLD_MS = sanitizeInt(runtime.pageStallReloadThresholdMs, 90000, 30000, 600000);
   var PAGE_STALL_COOLDOWN_MS = sanitizeInt(runtime.pageStallCooldownMs, 300000, 60000, 1800000);
   var PAGE_STALL_LOOP_LAG_MS = sanitizeInt(runtime.pageStallLoopLagMs, 12000, 3000, 120000);
+  var RENDER_STALL_WATCHDOG = sanitizeBool(runtime.renderStallWatchdog, true);
+  var RENDER_STALL_THRESHOLD_MS = sanitizeInt(runtime.renderStallThresholdMs, 12000, 5000, 120000);
+  var RENDER_STALL_COOLDOWN_MS = sanitizeInt(runtime.renderStallCooldownMs, 25000, 8000, 300000);
+  var AUDIO_WATCHDOG = sanitizeBool(runtime.audioWatchdog, true);
+  var AUDIO_START_INTERVAL_MS = sanitizeInt(runtime.audioStartIntervalMs, 8000, 2000, 60000);
+  var AUDIO_PACKET_STALL_MS = sanitizeInt(runtime.audioPacketStallMs, 15000, 5000, 120000);
   var WS_SESSION_ID = "";
   var WS_SESSION_EPOCH = 0;
   var sessionMonitorTimer = null;
@@ -72,6 +79,19 @@
   var pageStallWatchdogTimer = null;
   var lastPageWatchdogTickAt = Date.now();
   var pageStallSoftRecoverAt = 0;
+  var renderStallWatchdogTimer = null;
+  var lastRenderProgressAt = Date.now();
+  var lastRenderKickAt = 0;
+  var lastVideoPacketAt = 0;
+  var lastObservedFps = -1;
+  var audioWatchdogTimer = null;
+  var trackedAudioContexts = [];
+  var trackedAudioWorkers = [];
+  var lastAudioPacketAt = 0;
+  var lastAudioDecodedAt = 0;
+  var lastAudioStartRequestAt = 0;
+  var lastAudioReinitAt = 0;
+  var lastAudioPipelineActive = true;
   var highLoadReleaseTimer = null;
   var streamRestartVerifyTimer = null;
   var highLoadStateMap = Object.create(null);
@@ -343,6 +363,137 @@
         });
       }
     } catch (_err4) {}
+  }
+
+  function copyStaticProperties(source, target) {
+    try {
+      Object.getOwnPropertyNames(source).forEach(function (key) {
+        if (key in target) return;
+        try {
+          Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+        } catch (_err) {}
+      });
+    } catch (_err2) {}
+  }
+
+  function trackAudioContext(context) {
+    if (!context || trackedAudioContexts.indexOf(context) >= 0) return context;
+    trackedAudioContexts.push(context);
+    try {
+      context.addEventListener("statechange", function () {
+        if (context.state === "running") {
+          lastAudioDecodedAt = Math.max(lastAudioDecodedAt, Date.now());
+        }
+      });
+    } catch (_err) {}
+    return context;
+  }
+
+  function trackAudioWorker(worker) {
+    if (!worker || worker.__selkiesWorkerTracked) return worker;
+    worker.__selkiesWorkerTracked = true;
+    try {
+      var nativePostMessage = worker.postMessage;
+      if (typeof nativePostMessage === "function" && !nativePostMessage.__selkiesAudioWorkerWrapped) {
+        worker.postMessage = function (payload) {
+          if (payload && typeof payload === "object") {
+            var type = String(payload.type || "");
+            if (
+              type === "init" &&
+              payload.data &&
+              Object.prototype.hasOwnProperty.call(payload.data, "initialPipelineStatus")
+            ) {
+              markAudioWorker(worker);
+            } else if (worker.__selkiesAudioDecoderWorker && (type === "decode" || type === "reinitialize" || type === "updatePipelineStatus")) {
+              markAudioWorker(worker);
+            }
+          }
+          return nativePostMessage.apply(worker, arguments);
+        };
+        worker.postMessage.__selkiesAudioWorkerWrapped = true;
+      }
+    } catch (_postErr) {}
+    try {
+      worker.addEventListener("message", function (event) {
+        var data = event && event.data;
+        if (!data || typeof data !== "object") return;
+        var type = String(data.type || "");
+        if (
+          type === "decoderInitialized" ||
+          type === "decoderInitFailed" ||
+          type === "decoderError" ||
+          type === "decodedAudioData"
+        ) {
+          markAudioWorker(worker);
+          if (type === "decodedAudioData") {
+            lastAudioDecodedAt = Date.now();
+          }
+        }
+      });
+    } catch (_eventErr) {}
+    return worker;
+  }
+
+  function markAudioWorker(worker) {
+    if (!worker || worker.__selkiesAudioDecoderWorker) return;
+    worker.__selkiesAudioDecoderWorker = true;
+    trackedAudioWorkers.push(worker);
+  }
+
+  function installMediaPlaybackWakeGuard() {
+    if (window.__selkiesMediaPlaybackWakeGuardInstalled) return;
+    window.__selkiesMediaPlaybackWakeGuardInstalled = true;
+
+    ["AudioContext", "webkitAudioContext"].forEach(function (key) {
+      var NativeAudioContext = window[key];
+      if (!NativeAudioContext || NativeAudioContext.__selkiesPlaybackWrapped) return;
+      var WrappedAudioContext = function () {
+        var args = [null].concat(Array.prototype.slice.call(arguments));
+        var ContextCtor = Function.prototype.bind.apply(NativeAudioContext, args);
+        return trackAudioContext(new ContextCtor());
+      };
+      WrappedAudioContext.prototype = NativeAudioContext.prototype;
+      copyStaticProperties(NativeAudioContext, WrappedAudioContext);
+      WrappedAudioContext.__selkiesPlaybackWrapped = true;
+      window[key] = WrappedAudioContext;
+    });
+
+    var NativeWorker = window.Worker;
+    if (NativeWorker && !NativeWorker.__selkiesPlaybackWrapped) {
+      var WrappedWorker = function (url, options) {
+        var worker =
+          typeof options === "undefined"
+            ? new NativeWorker(url)
+            : new NativeWorker(url, options);
+        return trackAudioWorker(worker);
+      };
+      WrappedWorker.prototype = NativeWorker.prototype;
+      copyStaticProperties(NativeWorker, WrappedWorker);
+      WrappedWorker.__selkiesPlaybackWrapped = true;
+      window.Worker = WrappedWorker;
+    }
+
+    function wakeFromGesture() {
+      noteUiInteraction();
+      resumeTrackedAudioContexts("user-gesture");
+      requestServerAudio("user-gesture");
+    }
+
+    ["pointerdown", "keydown", "touchstart", "click"].forEach(function (eventName) {
+      document.addEventListener(eventName, wakeFromGesture, true);
+    });
+    window.addEventListener("focus", function () {
+      resumeTrackedAudioContexts("focus");
+      requestServerAudio("focus");
+      kickLocalRenderSurfaces("focus");
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) {
+        resumeTrackedAudioContexts("visible");
+        requestServerAudio("visible");
+        kickLocalRenderSurfaces("visible");
+      }
+    });
   }
 
   function isForcedSelkiesOffKey(name) {
@@ -629,7 +780,23 @@
         forcePinLogin();
       });
       ws.addEventListener("message", function (event) {
-        if (!event || typeof event.data !== "string") return;
+        if (!event) return;
+        if (event.data instanceof ArrayBuffer) {
+          noteInboundStreamPacket(event.data);
+          return;
+        }
+        if (typeof event.data !== "string") return;
+        if (event.data === "AUDIO_STARTED") {
+          lastAudioPipelineActive = true;
+          lastAudioStartRequestAt = 0;
+        } else if (event.data === "AUDIO_STOPPED") {
+          lastAudioPipelineActive = false;
+        } else if (event.data === "VIDEO_STARTED") {
+          lastVideoPipelineActive = true;
+          lastRenderProgressAt = Date.now();
+        } else if (event.data === "VIDEO_STOPPED") {
+          lastVideoPipelineActive = false;
+        }
         if (event.data.indexOf("FILE_UPLOAD_STATUS:") === 0) {
           try {
             var uploadStatus = JSON.parse(event.data.slice("FILE_UPLOAD_STATUS:".length));
@@ -694,6 +861,9 @@
       activeDataSockets.push(ws);
       ws.addEventListener("open", function () {
         reportClientAwakeState();
+        window.setTimeout(function () {
+          requestServerAudio("socket-open");
+        }, 600);
       });
       ws.addEventListener("close", function () {
         activeDataSockets = activeDataSockets.filter(function (item) {
@@ -1111,6 +1281,151 @@
 
   function noteUiInteraction() {
     lastUiInteractionAt = Date.now();
+  }
+
+  function pruneTrackedAudioContexts() {
+    trackedAudioContexts = trackedAudioContexts.filter(function (context) {
+      return context && context.state !== "closed";
+    });
+  }
+
+  function resumeTrackedAudioContexts(source) {
+    pruneTrackedAudioContexts();
+    var resumed = false;
+    for (var i = 0; i < trackedAudioContexts.length; i += 1) {
+      var context = trackedAudioContexts[i];
+      if (!context || context.state !== "suspended" || typeof context.resume !== "function") continue;
+      try {
+        context.resume().then(
+          function () {
+            lastAudioDecodedAt = Math.max(lastAudioDecodedAt, Date.now());
+          },
+          function () {}
+        );
+        resumed = true;
+      } catch (_err) {}
+    }
+    if (resumed) {
+      console.log("[selkies] requested audio context resume:", source || "watchdog");
+    }
+    return resumed;
+  }
+
+  function requestServerAudio(source, force) {
+    if (!AUDIO_WATCHDOG && !force) return false;
+    if (document.hidden && !force) return false;
+    if (!hasOpenDataSocket()) return false;
+    var now = Date.now();
+    if (!force && now - lastAudioStartRequestAt < AUDIO_START_INTERVAL_MS) return false;
+    lastAudioStartRequestAt = now;
+    console.log("[selkies] requesting server audio:", source || "watchdog");
+    return sendRawDataCommand("START_AUDIO");
+  }
+
+  function reinitializeTrackedAudioWorkers(source) {
+    var now = Date.now();
+    if (now - lastAudioReinitAt < AUDIO_START_INTERVAL_MS) return false;
+    lastAudioReinitAt = now;
+    var requested = false;
+    trackedAudioWorkers = trackedAudioWorkers.filter(function (worker) {
+      return !!worker;
+    });
+    trackedAudioWorkers.forEach(function (worker) {
+      try {
+        worker.postMessage({ type: "reinitialize" });
+        requested = true;
+      } catch (_err) {}
+    });
+    if (requested) {
+      console.log("[selkies] requested audio decoder reinitialize:", source || "watchdog");
+    }
+    return requested;
+  }
+
+  function noteInboundStreamPacket(payload) {
+    if (!payload || !(payload instanceof ArrayBuffer) || payload.byteLength < 1) return;
+    var type = 0;
+    try {
+      type = new DataView(payload).getUint8(0);
+    } catch (_err) {
+      return;
+    }
+    if (type === 1) {
+      lastAudioPacketAt = Date.now();
+    } else if (type === 0 || type === 3 || type === 4) {
+      lastVideoPacketAt = Date.now();
+    }
+  }
+
+  function kickLocalRenderSurfaces(source) {
+    if (document.hidden) return false;
+    var nodes = [];
+    var primary = findPrimaryStreamSurface();
+    if (primary) nodes.push(primary);
+    nodes = nodes.concat(Array.prototype.slice.call(document.querySelectorAll("#stream,video,canvas")));
+    var seen = [];
+    var kicked = false;
+    for (var i = 0; i < nodes.length; i += 1) {
+      var node = nodes[i];
+      if (!node || seen.indexOf(node) >= 0 || !isElementVisible(node)) continue;
+      seen.push(node);
+      kicked = true;
+      if (node.tagName && String(node.tagName).toLowerCase() === "video") {
+        try {
+          if (typeof node.play === "function") {
+            var playResult = node.play();
+            if (playResult && typeof playResult.catch === "function") playResult.catch(function () {});
+          }
+        } catch (_playErr) {}
+      }
+      try {
+        var previousTransform = node.style.transform;
+        var nextTransform = previousTransform ? previousTransform + " translateZ(0)" : "translateZ(0)";
+        node.style.willChange = "transform";
+        node.style.transform = nextTransform;
+        window.setTimeout(
+          (function (target, oldTransform, expectedTransform) {
+            return function () {
+              if (!target || !target.style) return;
+              if (target.style.transform === expectedTransform) {
+                target.style.transform = oldTransform;
+              }
+            };
+          })(node, previousTransform, nextTransform),
+          140
+        );
+      } catch (_styleErr) {}
+      try {
+        void node.offsetHeight;
+      } catch (_layoutErr) {}
+    }
+    if (kicked) {
+      try {
+        window.dispatchEvent(new Event("resize"));
+      } catch (_eventErr) {}
+      console.log("[selkies] kicked visible render surfaces:", source || "watchdog");
+    }
+    return kicked;
+  }
+
+  function recoverRenderStall(source) {
+    var now = Date.now();
+    if (now - lastRenderKickAt < RENDER_STALL_COOLDOWN_MS) return false;
+    lastRenderKickAt = now;
+    kickLocalRenderSurfaces(source || "render-stall");
+    suppressDynamicLatency(6000);
+    if (dynamicLatencyApplied) {
+      restoreDynamicLatency();
+    }
+    sendRawDataCommand("RESET_IO_MODULES");
+    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+    window.setTimeout(function () {
+      if (!hasOpenDataSocket() || document.hidden) return;
+      if (!lastVideoPipelineActive) {
+        sendRawDataCommand("START_VIDEO");
+      }
+    }, 350);
+    return true;
   }
 
   function clearWechatAudioDebugTimer() {
@@ -3481,6 +3796,7 @@
 
   function noteFrameProgress() {
     lastFrameProgressAt = Date.now();
+    lastRenderProgressAt = lastFrameProgressAt;
     waitingSinceMs = 0;
     if (streamRecoveryInFlight || streamRecoveryStage > 0) {
       finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
@@ -3723,6 +4039,84 @@
       lastPageWatchdogTickAt = Date.now();
       if (!document.hidden) {
         window.setTimeout(checkPageStallHealth, 1200);
+      }
+    });
+  }
+
+  function checkAudioPlaybackHealth() {
+    if (!AUDIO_WATCHDOG) return;
+    if (document.hidden) return;
+    if (!hasOpenDataSocket()) return;
+    resumeTrackedAudioContexts("watchdog");
+    if (!lastAudioPipelineActive) {
+      requestServerAudio("pipeline-inactive");
+      return;
+    }
+    var now = Date.now();
+    if (!lastAudioPacketAt || now - lastAudioPacketAt >= AUDIO_PACKET_STALL_MS) {
+      requestServerAudio("packet-stall");
+      return;
+    }
+    var noRecentDecode = !lastAudioDecodedAt || now - lastAudioDecodedAt >= AUDIO_PACKET_STALL_MS;
+    var bufferSize = Number(window.currentAudioBufferSize || 0);
+    if (noRecentDecode && bufferSize <= 0) {
+      reinitializeTrackedAudioWorkers("decode-stall");
+      requestServerAudio("decode-stall");
+    }
+  }
+
+  function startAudioPlaybackWatchdog() {
+    if (!AUDIO_WATCHDOG || audioWatchdogTimer) return;
+    audioWatchdogTimer = window.setInterval(checkAudioPlaybackHealth, 4000);
+    window.addEventListener("focus", function () {
+      window.setTimeout(checkAudioPlaybackHealth, 250);
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) {
+        window.setTimeout(checkAudioPlaybackHealth, 250);
+      }
+    });
+  }
+
+  function noteRenderProgressFromFps() {
+    var fps = Number(window.fps || 0);
+    if (!Number.isFinite(fps)) fps = 0;
+    if (fps > 0) {
+      lastObservedFps = fps;
+      lastRenderProgressAt = Date.now();
+    }
+  }
+
+  function checkRenderStallHealth() {
+    if (!RENDER_STALL_WATCHDOG) return;
+    if (document.hidden) return;
+    if (!hasOpenDataSocket()) return;
+    if (!lastVideoPipelineActive) return;
+    if (isTransportBusy()) return;
+    if (!hasVisibleStreamSurface()) return;
+    noteRenderProgressFromFps();
+    var now = Date.now();
+    var recentInteraction = now - lastUiInteractionAt < Math.max(30000, RENDER_STALL_THRESHOLD_MS * 2);
+    var recentVideoPackets = lastVideoPacketAt && now - lastVideoPacketAt < Math.max(30000, RENDER_STALL_THRESHOLD_MS * 3);
+    var waitingStatus = isStreamLikelyStalled();
+    if (!recentInteraction && !recentVideoPackets && !waitingStatus) return;
+    var referenceAt = lastRenderProgressAt || lastFrameProgressAt || lastVideoPacketAt || now;
+    if (now - referenceAt < RENDER_STALL_THRESHOLD_MS) return;
+    recoverRenderStall(recentVideoPackets ? "render-stall-with-packets" : "render-stall-no-packets");
+  }
+
+  function startRenderStallWatchdog() {
+    if (!RENDER_STALL_WATCHDOG || renderStallWatchdogTimer) return;
+    lastRenderProgressAt = Date.now();
+    renderStallWatchdogTimer = window.setInterval(checkRenderStallHealth, 3000);
+    window.addEventListener("focus", function () {
+      kickLocalRenderSurfaces("focus");
+      window.setTimeout(checkRenderStallHealth, 800);
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) {
+        kickLocalRenderSurfaces("visible");
+        window.setTimeout(checkRenderStallHealth, 800);
       }
     });
   }
@@ -6852,6 +7246,9 @@
       } else if (data.type === "pipelineStatusUpdate") {
         if (Object.prototype.hasOwnProperty.call(data, "video")) {
           lastVideoPipelineActive = sanitizeBool(data.video, lastVideoPipelineActive);
+          if (lastVideoPipelineActive) {
+            lastRenderProgressAt = Date.now();
+          }
           if (pipelineResetNoticeTimer) {
             window.clearTimeout(pipelineResetNoticeTimer);
             pipelineResetNoticeTimer = null;
@@ -6889,6 +7286,10 @@
           }
         }
         if (Object.prototype.hasOwnProperty.call(data, "audio")) {
+          lastAudioPipelineActive = sanitizeBool(data.audio, lastAudioPipelineActive);
+          if (!lastAudioPipelineActive) {
+            requestServerAudio("pipeline-status-inactive");
+          }
           if (isRemoteAudioPlaying()) {
             dynamicLatencyUntil = Date.now() + getDynamicLatencyConfig().holdMs;
             restoreDynamicLatency();
@@ -6928,6 +7329,8 @@
     bindServerSettingsModeHint();
     bindStreamRecoveryWatchdog();
     startPageStallWatchdog();
+    startAudioPlaybackWatchdog();
+    startRenderStallWatchdog();
     bindActivityWatchers();
     installManagedClipboardSender();
     installFileUploadReadBackpressure();

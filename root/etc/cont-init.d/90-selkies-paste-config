@@ -31,6 +31,12 @@ DEFAULT_PAGE_STALL_WATCHDOG_RAW="${SELKIES_PAGE_STALL_WATCHDOG:-true}"
 DEFAULT_PAGE_STALL_THRESHOLD_RAW="${SELKIES_PAGE_STALL_THRESHOLD_MS:-45000}"
 DEFAULT_PAGE_STALL_RELOAD_THRESHOLD_RAW="${SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS:-90000}"
 DEFAULT_PAGE_STALL_COOLDOWN_RAW="${SELKIES_PAGE_STALL_COOLDOWN_MS:-300000}"
+DEFAULT_RENDER_STALL_WATCHDOG_RAW="${SELKIES_RENDER_STALL_WATCHDOG:-true}"
+DEFAULT_RENDER_STALL_THRESHOLD_RAW="${SELKIES_RENDER_STALL_THRESHOLD_MS:-12000}"
+DEFAULT_RENDER_STALL_COOLDOWN_RAW="${SELKIES_RENDER_STALL_COOLDOWN_MS:-25000}"
+DEFAULT_AUDIO_WATCHDOG_RAW="${SELKIES_AUDIO_WATCHDOG:-true}"
+DEFAULT_AUDIO_START_INTERVAL_RAW="${SELKIES_AUDIO_START_INTERVAL_MS:-8000}"
+DEFAULT_AUDIO_PACKET_STALL_RAW="${SELKIES_AUDIO_PACKET_STALL_MS:-15000}"
 DEFAULT_IDLE_CLEANUP_MINUTES_RAW="${SELKIES_IDLE_CLEANUP_MINUTES:-20}"
 DEFAULT_ADAPTIVE_SLEEP_IDLE_RAW="${SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS:-3600}"
 LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
@@ -180,6 +186,38 @@ if ! [[ "$default_page_stall_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_page_sta
   default_page_stall_cooldown_ms="300000"
 fi
 
+default_render_stall_watchdog_js="true"
+case "${DEFAULT_RENDER_STALL_WATCHDOG_RAW,,}" in
+  false|0|no|off) default_render_stall_watchdog_js="false" ;;
+  *) default_render_stall_watchdog_js="true" ;;
+esac
+
+default_render_stall_threshold_ms="${DEFAULT_RENDER_STALL_THRESHOLD_RAW}"
+if ! [[ "$default_render_stall_threshold_ms" =~ ^[0-9]+$ ]] || [ "$default_render_stall_threshold_ms" -lt 5000 ] || [ "$default_render_stall_threshold_ms" -gt 120000 ]; then
+  default_render_stall_threshold_ms="12000"
+fi
+
+default_render_stall_cooldown_ms="${DEFAULT_RENDER_STALL_COOLDOWN_RAW}"
+if ! [[ "$default_render_stall_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_render_stall_cooldown_ms" -lt 8000 ] || [ "$default_render_stall_cooldown_ms" -gt 300000 ]; then
+  default_render_stall_cooldown_ms="25000"
+fi
+
+default_audio_watchdog_js="true"
+case "${DEFAULT_AUDIO_WATCHDOG_RAW,,}" in
+  false|0|no|off) default_audio_watchdog_js="false" ;;
+  *) default_audio_watchdog_js="true" ;;
+esac
+
+default_audio_start_interval_ms="${DEFAULT_AUDIO_START_INTERVAL_RAW}"
+if ! [[ "$default_audio_start_interval_ms" =~ ^[0-9]+$ ]] || [ "$default_audio_start_interval_ms" -lt 2000 ] || [ "$default_audio_start_interval_ms" -gt 60000 ]; then
+  default_audio_start_interval_ms="8000"
+fi
+
+default_audio_packet_stall_ms="${DEFAULT_AUDIO_PACKET_STALL_RAW}"
+if ! [[ "$default_audio_packet_stall_ms" =~ ^[0-9]+$ ]] || [ "$default_audio_packet_stall_ms" -lt 5000 ] || [ "$default_audio_packet_stall_ms" -gt 120000 ]; then
+  default_audio_packet_stall_ms="15000"
+fi
+
 default_idle_cleanup_minutes="${DEFAULT_IDLE_CLEANUP_MINUTES_RAW}"
 if ! [[ "$default_idle_cleanup_minutes" =~ ^[0-9]+$ ]] || [ "$default_idle_cleanup_minutes" -lt 5 ] || [ "$default_idle_cleanup_minutes" -gt 240 ]; then
   default_idle_cleanup_minutes="20"
@@ -256,6 +294,12 @@ window.__SELKIES_RUNTIME__ = {
   pageStallThresholdMs: ${default_page_stall_threshold_ms},
   pageStallReloadThresholdMs: ${default_page_stall_reload_threshold_ms},
   pageStallCooldownMs: ${default_page_stall_cooldown_ms},
+  renderStallWatchdog: ${default_render_stall_watchdog_js},
+  renderStallThresholdMs: ${default_render_stall_threshold_ms},
+  renderStallCooldownMs: ${default_render_stall_cooldown_ms},
+  audioWatchdog: ${default_audio_watchdog_js},
+  audioStartIntervalMs: ${default_audio_start_interval_ms},
+  audioPacketStallMs: ${default_audio_packet_stall_ms},
   idleCleanupMinutes: ${default_idle_cleanup_minutes},
   adaptiveSleepIdleSeconds: ${default_adaptive_sleep_idle_seconds},
   localLinkOpenEnabled: ${local_link_open_js},
