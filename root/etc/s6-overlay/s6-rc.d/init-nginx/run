@@ -13,6 +13,7 @@ CLINK="${LOCAL_LINK_BRIDGE_PORT:-38080}"
 CNOTIFY="${NOTIFICATION_BRIDGE_PORT:-38081}"
 CAUTH="${SELKIES_SESSION_AUTH_PORT:-38082}"
 CSLEEP="${SELKIES_CONTAINER_SLEEP_PORT:-38083}"
+CUPLOAD="${SELKIES_UPLOAD_PORT:-38084}"
 SFOLDER="${SUBFOLDER:-/}"
 FILE_MANAGER_PATH="${FILE_MANAGER_PATH:-$HOME/Desktop}"
 DASHBOARD="${DASHBOARD:-selkies-dashboard}"
@@ -83,6 +84,7 @@ sed -i "s/CLINK/$CLINK/g" "${NGINX_CONFIG}"
 sed -i "s/CNOTIFY/$CNOTIFY/g" "${NGINX_CONFIG}"
 sed -i "s/CAUTH/$CAUTH/g" "${NGINX_CONFIG}"
 sed -i "s/CSLEEP/$CSLEEP/g" "${NGINX_CONFIG}"
+sed -i "s/CUPLOAD/$CUPLOAD/g" "${NGINX_CONFIG}"
 sed -i "s|SUBFOLDER|$SFOLDER|g" "${NGINX_CONFIG}"
 sed -i "s|REPLACE_DOWNLOADS_PATH|$FILE_MANAGER_PATH|g" "${NGINX_CONFIG}"
 s6-setuidgid abc mkdir -p "${FILE_MANAGER_PATH}"
@@ -115,6 +117,21 @@ start_session_auth_bridge() {
   nohup python3 -u /scripts/session_auth_bridge.py >>"$SESSION_AUTH_LOG_PATH" 2>&1 &
 }
 
+start_upload_sidecar() {
+  case "${SELKIES_UPLOAD_ENABLED:-true}" in
+    true|TRUE|1|yes|YES|on|ON) ;;
+    *) return ;;
+  esac
+  if pgrep -f "/usr/local/bin/selkies-upload-sidecar" >/dev/null 2>&1; then
+    return
+  fi
+  local upload_dir="${SELKIES_UPLOAD_DIR:-${FILE_MANAGER_PATH:-/config/uploads}}"
+  local upload_log="${SELKIES_UPLOAD_LOG_PATH:-/config/logs/upload-sidecar.log}"
+  install -d -o abc -g abc -m 775 "$upload_dir" "$upload_dir/.staging" "$(dirname "$upload_log")"
+  export SELKIES_UPLOAD_LISTEN="127.0.0.1:${CUPLOAD}"
+  nohup s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar >>"$upload_log" 2>&1 &
+}
+
 start_container_sleep_manager() {
   case "${SELKIES_CONTAINER_SLEEP:-false}" in
     true|TRUE|1|yes|YES|on|ON) ;;
@@ -134,6 +151,7 @@ start_container_sleep_manager() {
 
 start_container_sleep_manager
 start_session_auth_bridge
+start_upload_sidecar
 
 cat > /usr/share/selkies/www/password-login.html <<EOF
 <!doctype html>

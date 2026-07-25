@@ -1,3 +1,9 @@
+FROM rust:1.96-bookworm AS upload-sidecar-builder
+WORKDIR /build
+COPY upload-sidecar/Cargo.toml upload-sidecar/Cargo.lock ./
+COPY upload-sidecar/src ./src
+RUN cargo build --locked --release
+
 # WeChat for Linux using Selkies baseimage
 FROM ghcr.io/linuxserver/baseimage-selkies:ubuntunoble
 
@@ -134,6 +140,19 @@ ENV SELKIES_SESSION_MODE="pin-takeover"
 ENV SELKIES_SESSION_STATE_PATH="/run/selkies-active-session.json"
 ENV SELKIES_SESSION_AUTH_PORT="38082"
 ENV SELKIES_SESSION_COOKIE_NAME="selkies_session"
+ENV SELKIES_UPLOAD_ENABLED="true"
+ENV SELKIES_UPLOAD_PORT="38084"
+ENV SELKIES_UPLOAD_DIR="/config/uploads"
+ENV SELKIES_UPLOAD_MAX_FILE_SIZE="2147483648"
+ENV SELKIES_UPLOAD_CHUNK_SIZE="8388608"
+ENV SELKIES_UPLOAD_MAX_CONCURRENCY="3"
+ENV SELKIES_UPLOAD_TOKEN_TTL_SECONDS="300"
+ENV SELKIES_UPLOAD_RESUME_ENABLED="true"
+ENV SELKIES_UPLOAD_CHECKSUM_ENABLED="true"
+ENV SELKIES_UPLOAD_ALLOW_OVERWRITE="false"
+ENV SELKIES_UPLOAD_MIN_FREE_BYTES="268435456"
+ENV SELKIES_UPLOAD_ALLOWED_SUBDIRS=""
+ENV SELKIES_LEGACY_UPLOAD_ENABLED="false"
 ENV SELKIES_CONTAINER_SLEEP="false"
 ENV SELKIES_CONTAINER_SLEEP_REQUIRE_PIN="true"
 ENV SELKIES_CONTAINER_SLEEP_PORT="38083"
@@ -213,6 +232,7 @@ RUN cp /usr/share/icons/hicolor/512x512/apps/qq.png /usr/share/selkies/www/icon.
 
 # add local files
 COPY /root /
+COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 
 # normalize line endings for scripts copied from Windows worktrees
 RUN sed -i 's/\r$//' \
@@ -277,7 +297,8 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /scripts/patch_openbox_rc.py \
     /scripts/split_fab.py \
     /scripts/wechat/*.sh \
-    /scripts/qq/*.sh
+    /scripts/qq/*.sh \
+    /usr/local/bin/selkies-upload-sidecar
 
 RUN if [ -x /usr/bin/xdg-open ] && [ ! -x /usr/bin/xdg-open.real ]; then mv /usr/bin/xdg-open /usr/bin/xdg-open.real; fi && \
     cp /scripts/xdg-open-wrapper.sh /usr/bin/xdg-open && \

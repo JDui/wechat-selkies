@@ -170,6 +170,27 @@ services:
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | 启用 QQ 卡死检测 |
 | `QQ_WATCHDOG_FAIL_THRESHOLD` | `3` | QQ 连续检测失败后重启 |
 
+## 独立文件上传（1.45）
+
+默认上传入口是页面左下角的“上传”按钮，它会打开 `/uploader/` 小窗。文件读取、分片、重试和速度统计运行在 Dedicated Worker 中，分片通过独立 HTTP sidecar 发送，不再进入 Selkies 主数据 WebSocket。小窗支持拖放、队列、暂停、继续、取消、失败重试和基于服务器已确认分片的断点续传；刷新后需要重新选择同名、同大小文件以恢复本地 `File` 引用。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SELKIES_UPLOAD_ENABLED` | `true` | 启用独立上传 sidecar 与新上传入口 |
+| `SELKIES_UPLOAD_DIR` | `/config/uploads` | 上传根目录及 `.staging` 所在目录 |
+| `SELKIES_UPLOAD_MAX_FILE_SIZE` | `2147483648` | 单文件最大字节数 |
+| `SELKIES_UPLOAD_CHUNK_SIZE` | `8388608` | HTTP 分片大小，范围 64 KiB–64 MiB |
+| `SELKIES_UPLOAD_MAX_CONCURRENCY` | `3` | sidecar 同时接收的最大分片数 |
+| `SELKIES_UPLOAD_TOKEN_TTL_SECONDS` | `300` | 上传 token 有效期 |
+| `SELKIES_UPLOAD_RESUME_ENABLED` | `true` | 允许从 `.staging` 元数据恢复 |
+| `SELKIES_UPLOAD_CHECKSUM_ENABLED` | `true` | 允许 BLAKE3/SHA-256 完成校验 |
+| `SELKIES_UPLOAD_ALLOW_OVERWRITE` | `false` | token 是否允许覆盖已存在文件 |
+| `SELKIES_UPLOAD_MIN_FREE_BYTES` | `268435456` | 上传开始后必须保留的磁盘空间 |
+| `SELKIES_UPLOAD_ALLOWED_SUBDIRS` | 空 | 可选的逗号分隔目标子目录白名单 |
+| `SELKIES_LEGACY_UPLOAD_ENABLED` | `false` | 启用旧 WebSocket 上传兼容包装 |
+
+诊断日志位于 `/config/logs/upload-sidecar.log` 和 `/config/logs/upload-diagnostics.jsonl`。详细安全边界、API 与迁移说明见 `docs/upload-architecture-1.45.md`。
+
 ## 会话规则
 
 设置 `PASSWORD` 后：

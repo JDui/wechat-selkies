@@ -2,4 +2,5 @@
 /dist/
 /diagnostics/
 **/__pycache__/
+**/target/
 *.tar

@@ -383,6 +383,27 @@ Notes:
 
 > **Note:** If the right-click menu lacks `WeChat` related options after an upgrade, please clear the `openbox` directory in the local mounted directory (e.g., `./config/.config/openbox`).
 
+### Standalone uploads (1.45)
+
+The default upload entry opens `/uploader/`. A Dedicated Worker owns file slicing, retries, speed calculation, and resumable task metadata. Chunks use the HTTP upload sidecar instead of the Selkies data WebSocket.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SELKIES_UPLOAD_ENABLED` | `true` | Enable the sidecar and standalone uploader |
+| `SELKIES_UPLOAD_DIR` | `/config/uploads` | Confined upload root and staging location |
+| `SELKIES_UPLOAD_MAX_FILE_SIZE` | `2147483648` | Per-file byte limit |
+| `SELKIES_UPLOAD_CHUNK_SIZE` | `8388608` | Chunk size (64 KiB to 64 MiB) |
+| `SELKIES_UPLOAD_MAX_CONCURRENCY` | `3` | Maximum in-flight sidecar requests |
+| `SELKIES_UPLOAD_TOKEN_TTL_SECONDS` | `300` | Upload token lifetime |
+| `SELKIES_UPLOAD_RESUME_ENABLED` | `true` | Restore staged session metadata |
+| `SELKIES_UPLOAD_CHECKSUM_ENABLED` | `true` | Allow optional BLAKE3/SHA-256 verification |
+| `SELKIES_UPLOAD_ALLOW_OVERWRITE` | `false` | Permit token-bound overwrite behavior |
+| `SELKIES_UPLOAD_MIN_FREE_BYTES` | `268435456` | Required disk headroom |
+| `SELKIES_UPLOAD_ALLOWED_SUBDIRS` | empty | Optional comma-separated target subdirectory allowlist |
+| `SELKIES_LEGACY_UPLOAD_ENABLED` | `false` | Enable the legacy WebSocket upload compatibility wrapper |
+
+After a browser reload, choose the same file again to restore the local `File` reference; the worker queries server-confirmed chunks and only sends missing chunks. Diagnostics are written to `/config/logs/upload-sidecar.log` and `/config/logs/upload-diagnostics.jsonl`.
+
 ## Advanced Configuration
 
 ### Hardware Acceleration

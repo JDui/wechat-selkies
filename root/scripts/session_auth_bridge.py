@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import time
+import base64
 import urllib.error
 import urllib.request
 from http import HTTPStatus
@@ -30,6 +31,27 @@ SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "false").strip().lower
     "on",
 )
 SLEEP_STATE_PATH = Path(os.environ.get("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-container-sleep.json"))
+UPLOAD_ENABLED = os.environ.get("SELKIES_UPLOAD_ENABLED", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+UPLOAD_ROOT = os.environ.get("SELKIES_UPLOAD_DIR", os.environ.get("FILE_MANAGER_PATH", "/config/uploads"))
+UPLOAD_MAX_FILE_SIZE = int(os.environ.get("SELKIES_UPLOAD_MAX_FILE_SIZE", "2147483648"))
+UPLOAD_TOKEN_TTL_SECONDS = max(30, int(os.environ.get("SELKIES_UPLOAD_TOKEN_TTL_SECONDS", "300")))
+UPLOAD_CHUNK_SIZE = int(os.environ.get("SELKIES_UPLOAD_CHUNK_SIZE", "8388608"))
+UPLOAD_MAX_CONCURRENCY = int(os.environ.get("SELKIES_UPLOAD_MAX_CONCURRENCY", "3"))
+UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+DIAGNOSTICS_LOG_PATH = Path(
+    os.environ.get("SELKIES_UPLOAD_DIAGNOSTICS_LOG_PATH", "/config/logs/upload-diagnostics.jsonl")
+)
+MAX_DIAGNOSTICS_BODY = 64 * 1024
 
 
 def normalize_cookie_path(path):
@@ -61,6 +83,13 @@ def write_state(state):
     tmp_path = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
     tmp_path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
     tmp_path.replace(STATE_PATH)
+
+
+def ensure_upload_signing_key(state):
+    state = dict(state or {})
+    if not state.get("upload_signing_key"):
+        state["upload_signing_key"] = secrets.token_urlsafe(48)
+    return state
 
 
 def token_digest(token):
@@ -176,15 +205,64 @@ def new_session():
     now_ms = int(time.time() * 1000)
     session_id = "sid_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")
     token = "st_" + secrets.token_urlsafe(32)
-    state = {
+    state = ensure_upload_signing_key({
         "session_id": session_id,
         "session_epoch": now_ms,
         "token_hash": token_digest(token),
         "issued_at": now_ms,
         "mode": SESSION_MODE,
-    }
+    })
     write_state(state)
     return token, state
+
+
+def base64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def issue_upload_token():
+    state = ensure_upload_signing_key(read_state())
+    if not state.get("session_id") and not PASSWORD:
+        state.update(
+            {
+                "session_id": "anonymous",
+                "session_epoch": int(time.time() * 1000),
+                "issued_at": int(time.time() * 1000),
+                "mode": SESSION_MODE,
+            }
+        )
+    write_state(state)
+    now = int(time.time())
+    claims = {
+        "v": 1,
+        "sid": str(state.get("session_id") or ""),
+        "epoch": int(state.get("session_epoch") or 0),
+        "iat": now,
+        "exp": now + UPLOAD_TOKEN_TTL_SECONDS,
+        "root": UPLOAD_ROOT,
+        "max_file_size": UPLOAD_MAX_FILE_SIZE,
+        "overwrite": UPLOAD_ALLOW_OVERWRITE,
+    }
+    encoded = base64url(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signature = base64url(
+        hmac.new(
+            str(state["upload_signing_key"]).encode("utf-8"),
+            encoded.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+    )
+    return f"{encoded}.{signature}", claims
+
+
+def append_diagnostics(payload):
+    DIAGNOSTICS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp_ms": int(time.time() * 1000),
+        "source": "browser",
+        "metrics": payload,
+    }
+    with DIAGNOSTICS_LOG_PATH.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n")
 
 
 def cookie_header(token, max_age=None):
@@ -222,6 +300,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def read_json_body(self, max_bytes=MAX_DIAGNOSTICS_BODY):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return None
+        if length < 0 or length > max_bytes:
+            return None
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -265,6 +356,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/upload-token":
+            if not UPLOAD_ENABLED:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "disabled": True})
+                return
+            if not request_has_valid_session(self):
+                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "stale": True})
+                return
+            token, claims = issue_upload_token()
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "token": token,
+                    "expires_at": claims["exp"],
+                    "session_id": claims["sid"],
+                    "session_epoch": claims["epoch"],
+                    "max_file_size": claims["max_file_size"],
+                    "overwrite": claims["overwrite"],
+                    "chunk_size": UPLOAD_CHUNK_SIZE,
+                    "max_concurrency": UPLOAD_MAX_CONCURRENCY,
+                },
+            )
+            return
+        if path == "/diagnostics":
+            if not request_has_valid_session(self):
+                self.send_empty(HTTPStatus.UNAUTHORIZED)
+                return
+            payload = self.read_json_body()
+            if payload is None:
+                self.send_empty(HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                append_diagnostics(payload)
+            except OSError:
+                self.send_empty(HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+            self.send_empty(HTTPStatus.NO_CONTENT)
+            return
         if path == "/pin":
             if not PASSWORD:
                 self.send_empty(HTTPStatus.NO_CONTENT)
@@ -302,5 +431,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    initial_state = ensure_upload_signing_key(read_state())
+    if not initial_state.get("session_id") and not PASSWORD:
+        now_ms = int(time.time() * 1000)
+        initial_state.update(
+            {
+                "session_id": "anonymous",
+                "session_epoch": now_ms,
+                "issued_at": now_ms,
+                "mode": SESSION_MODE,
+            }
+        )
+    write_state(initial_state)
     with http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler) as httpd:
         httpd.serve_forever()

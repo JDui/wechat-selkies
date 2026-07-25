@@ -41,6 +41,8 @@ DEFAULT_IDLE_CLEANUP_MINUTES_RAW="${SELKIES_IDLE_CLEANUP_MINUTES:-20}"
 DEFAULT_ADAPTIVE_SLEEP_IDLE_RAW="${SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS:-3600}"
 LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
 LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
+STANDALONE_UPLOAD_RAW="${SELKIES_UPLOAD_ENABLED:-true}"
+LEGACY_UPLOAD_RAW="${SELKIES_LEGACY_UPLOAD_ENABLED:-false}"
 DRI_NODE_PATH="${DRI_NODE:-/dev/dri/renderD128}"
 
 enabled_js="false"
@@ -240,6 +242,18 @@ if ! [[ "$local_link_poll_interval_ms" =~ ^[0-9]+$ ]] || [ "$local_link_poll_int
   local_link_poll_interval_ms="800"
 fi
 
+standalone_upload_js="true"
+case "${STANDALONE_UPLOAD_RAW,,}" in
+  false|0|no|off) standalone_upload_js="false" ;;
+  *) standalone_upload_js="true" ;;
+esac
+
+legacy_upload_js="false"
+case "${LEGACY_UPLOAD_RAW,,}" in
+  true|1|yes|on) legacy_upload_js="true" ;;
+  *) legacy_upload_js="false" ;;
+esac
+
 dri_available_js="false"
 if [ -e "$DRI_NODE_PATH" ] || [ -e "/dev/dri/renderD128" ] || [ -d "/dev/dri" ]; then
   dri_available_js="true"
@@ -304,6 +318,8 @@ window.__SELKIES_RUNTIME__ = {
   adaptiveSleepIdleSeconds: ${default_adaptive_sleep_idle_seconds},
   localLinkOpenEnabled: ${local_link_open_js},
   localLinkPollIntervalMs: ${local_link_poll_interval_ms},
+  standaloneUploadEnabled: ${standalone_upload_js},
+  legacyUploadEnabled: ${legacy_upload_js},
   defaultGamepadEnabled: ${default_gamepad_js},
   gamepadUiEnabled: ${default_gamepad_js},
   dynamicLowLatencyEnabled: ${default_dynamic_low_latency_js},

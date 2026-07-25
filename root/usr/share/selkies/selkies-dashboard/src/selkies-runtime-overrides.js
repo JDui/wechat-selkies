@@ -165,6 +165,12 @@
   var managedFileTransfers = Object.create(null);
   var fileTransferSockets = typeof WeakMap === "function" ? new WeakMap() : null;
   var uploadTransportStates = [];
+  var LEGACY_UPLOAD_ENABLED = sanitizeBool(runtime.legacyUploadEnabled, false);
+  var uploadDiagnostics = [];
+  var uploadDiagnosticsFlushTimer = null;
+  var uploadDiagnosticsSampleTimer = null;
+  var uploadDiagnosticsLongTaskCount = 0;
+  var uploadDiagnosticsLongTaskMaxMs = 0;
   var UPLOAD_QUEUE_HIGH_WATER_CHUNKS = sanitizeInt(runtime.uploadQueueHighWaterChunks, 4, 1, 64);
   var UPLOAD_BUFFERED_HIGH_WATER_BYTES = sanitizeInt(runtime.uploadBufferedHighWaterBytes, 4 * 1024 * 1024, 256 * 1024, 64 * 1024 * 1024);
   var UPLOAD_READ_GATE_DELAY_MS = sanitizeInt(runtime.uploadReadGateDelayMs, 35, 5, 250);
@@ -873,6 +879,11 @@
       ws.addEventListener("close", function (event) {
         var code = event && typeof event.code === "number" ? event.code : 0;
         var reason = String((event && event.reason) || "").toLowerCase();
+        recordUploadDiagnostic("websocket-close", {
+          code: code,
+          reason: String((event && event.reason) || "").slice(0, 240),
+          wasClean: !!(event && event.wasClean)
+        });
         if (
           code === 4002 ||
           code === 4003 ||
@@ -3976,6 +3987,82 @@
     setStoredValue("page_stall_reload_at", String(tsMs));
   }
 
+  function recordUploadDiagnostic(eventName, fields) {
+    var record = Object.assign(
+      {
+        event: String(eventName || "sample"),
+        timestampMs: Date.now(),
+        visibility: document.visibilityState || "unknown"
+      },
+      fields || {}
+    );
+    uploadDiagnostics.push(record);
+    if (uploadDiagnostics.length > 120) {
+      uploadDiagnostics.splice(0, uploadDiagnostics.length - 120);
+    }
+    try {
+      console.debug("[selkies-diagnostics]", record);
+    } catch (_err) {}
+  }
+
+  function flushUploadDiagnostics() {
+    if (!uploadDiagnostics.length) return;
+    var batch = uploadDiagnostics.splice(0, uploadDiagnostics.length);
+    fetch("api/upload-diagnostics", {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: batch })
+    }).catch(function () {
+      uploadDiagnostics = batch.slice(-60).concat(uploadDiagnostics).slice(-120);
+    });
+  }
+
+  function sampleUploadDiagnostics() {
+    var heap = window.performance && window.performance.memory ? window.performance.memory : null;
+    var bufferedAmount = 0;
+    for (var i = 0; i < activeDataSockets.length; i += 1) {
+      bufferedAmount += Math.max(0, Number(activeDataSockets[i] && activeDataSockets[i].bufferedAmount) || 0);
+    }
+    var queuedChunks = 0;
+    var activeUploads = 0;
+    for (var j = 0; j < uploadTransportStates.length; j += 1) {
+      var state = uploadTransportStates[j];
+      if (!state) continue;
+      queuedChunks += state.queue ? state.queue.length : 0;
+      if (state.uploadState) activeUploads += 1;
+    }
+    recordUploadDiagnostic("browser-sample", {
+      jsHeapUsedBytes: heap ? Number(heap.usedJSHeapSize || 0) : null,
+      jsHeapTotalBytes: heap ? Number(heap.totalJSHeapSize || 0) : null,
+      jsHeapLimitBytes: heap ? Number(heap.jsHeapSizeLimit || 0) : null,
+      bufferedAmountBytes: bufferedAmount,
+      legacyUploadQueueChunks: queuedChunks,
+      legacyActiveUploads: activeUploads,
+      longTaskCount: uploadDiagnosticsLongTaskCount,
+      longTaskMaxMs: Math.round(uploadDiagnosticsLongTaskMaxMs)
+    });
+    uploadDiagnosticsLongTaskCount = 0;
+    uploadDiagnosticsLongTaskMaxMs = 0;
+  }
+
+  function startUploadDiagnostics() {
+    if (uploadDiagnosticsSampleTimer) return;
+    window.__selkiesRecordUploadDiagnostic = recordUploadDiagnostic;
+    var previousReloadReason = getStoredValue("page_reload_reason");
+    if (previousReloadReason) {
+      recordUploadDiagnostic("previous-page-reload", { reason: previousReloadReason });
+      setStoredValue("page_reload_reason", "");
+    }
+    uploadDiagnosticsSampleTimer = window.setInterval(sampleUploadDiagnostics, 5000);
+    uploadDiagnosticsFlushTimer = window.setInterval(flushUploadDiagnostics, 15000);
+    window.addEventListener("pagehide", function () {
+      flushUploadDiagnostics();
+    });
+    sampleUploadDiagnostics();
+  }
+
   function runSilentStreamSoftRecover(source) {
     var now = Date.now();
     if (streamRecoveryInFlight) return false;
@@ -3993,6 +4080,13 @@
     var now = Date.now();
     if (now - getLastPageStallReloadAt() < PAGE_STALL_COOLDOWN_MS) return false;
     markPageStallReloadAt(now);
+    var reloadReason = String(source || "page-stall") + ":" + String(Math.round(stalledForMs));
+    setStoredValue("page_reload_reason", reloadReason);
+    recordUploadDiagnostic("page-reload", {
+      reason: reloadReason,
+      stalledForMs: Math.round(stalledForMs)
+    });
+    flushUploadDiagnostics();
     try {
       window.location.reload();
       return true;
@@ -4226,6 +4320,12 @@
           for (var i = 0; i < entries.length; i += 1) {
             worst = Math.max(worst, entries[i].duration || 0);
           }
+          uploadDiagnosticsLongTaskCount += entries.length;
+          uploadDiagnosticsLongTaskMaxMs = Math.max(uploadDiagnosticsLongTaskMaxMs, worst);
+          recordUploadDiagnostic("long-task", {
+            count: entries.length,
+            worstDurationMs: Math.round(worst)
+          });
           if (worst < 150) return;
           setActivityTask("browser-busy", {
             title: "\u6d4f\u89c8\u5668\u6b63\u5fd9",
@@ -7332,10 +7432,11 @@
     startAudioPlaybackWatchdog();
     startRenderStallWatchdog();
     bindActivityWatchers();
+    startUploadDiagnostics();
     installManagedClipboardSender();
-    installFileUploadReadBackpressure();
+    if (LEGACY_UPLOAD_ENABLED) installFileUploadReadBackpressure();
     bindFileTransferActivity();
-    installFileTransferTransportInterceptor();
+    if (LEGACY_UPLOAD_ENABLED) installFileTransferTransportInterceptor();
     bindClipboardActivity();
     bindClipboardSyncTriggers();
     bindDynamicLatencyMode();

@@ -26,6 +26,8 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   audioPacketStallMs: 15000,
   idleCleanupMinutes: 20,
   adaptiveSleepIdleSeconds: 3600,
+  standaloneUploadEnabled: true,
+  legacyUploadEnabled: false,
   defaultGamepadEnabled: false,
   gamepadUiEnabled: false,
   dynamicLowLatencyEnabled: true,
