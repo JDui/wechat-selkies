@@ -50,6 +50,19 @@ The browser capture and the 1487 × 1058 reference were normalized to
 - WAN URL SQLite round-trip test: passed.
 - Drawer editing regression: a focused WAN field remained open and retained
   its in-progress value for more than six seconds.
+- Drawer input isolation: the real inputs are light-DOM controls assigned to
+  shadow slots, so Selkies sees their actual form targets instead of the
+  retargeted overlay host. In the browser preview, text focus remained active
+  beyond six seconds and `Ctrl+V` inserted the test payload exactly once.
+- Live WebView2 input smoke test: on the real `AXi-SNS-Box - PIN` page, mixed
+  Chinese/Latin input produced `AXIVER-文字-input`; native `Ctrl+V` produced
+  `AXIVER-native-paste`; the field stayed focused and the drawer stayed open.
+- Chinese/Japanese IME composition regression: the compiled portable EXE
+  navigated to a local WebView2 harness. The Microsoft Pinyin sequence, where
+  the selected candidate existed only in `compositionend.data`, committed
+  `你`; the Japanese sequence, where a populated final `input` followed
+  `compositionend`, committed `日`. The final record was `["你","日"]`,
+  with neither missing nor duplicate text and an empty assist field.
 - Live LAN fallback: with mDNS unavailable, the client scanned the
   `192.168.31.0/24` subnet, validated `192.168.31.221:3000`, opened the
   `AXi-SNS-Box - PIN` page, and rendered the rainbow LAN state.

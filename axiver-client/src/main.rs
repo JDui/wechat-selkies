@@ -1040,4 +1040,28 @@ mod tests {
             "--ignore-certificate-errors"
         );
     }
+
+    #[test]
+    fn drawer_inputs_stay_visible_to_page_input_guards() {
+        let script = include_str!("../ui/injected.js");
+        assert!(script.contains(r#"<slot name="broadcast-input"></slot>"#));
+        assert!(script.contains(r#"<slot name="wide-input"></slot>"#));
+        assert!(script.contains("host.append(broadcastInput, wideInput)"));
+        assert!(script.contains(r#"className = "allow-native-input""#));
+        assert!(script.contains("document.activeElement === wideInput"));
+        assert!(!script.contains(r##"shell.querySelector("#axiver-wide")"##));
+    }
+
+    #[test]
+    fn webview_guard_preserves_chinese_ime_composition_until_commit() {
+        let script = include_str!("../ui/injected.js");
+        assert!(script.contains("__selkiesCompositionGuardInstalled"));
+        assert!(script.contains(r#""compositionstart""#));
+        assert!(script.contains("event.isComposing"));
+        assert!(script.contains("event.stopImmediatePropagation()"));
+        assert!(script.contains(r#""compositionend""#));
+        assert!(script.contains(r#"String(event.data || "")"#));
+        assert!(script.contains("if (finalInputSeen) return"));
+        assert!(script.contains("input._typeString(value)"));
+    }
 }

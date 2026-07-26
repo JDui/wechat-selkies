@@ -25,6 +25,11 @@
   let pointerInside = false;
   let broadcastDirty = false;
   let wideDirty = false;
+  let imeCompositionActive = false;
+  let imeCompositionCommittedText = "";
+  let imeFinalInputSeen = false;
+  let imeCompositionFlushTimer = 0;
+  let imeGuardObserver = null;
   const iconRefresh = "__AXIVER_ICON_REFRESH__".startsWith("__AXIVER_")
     ? "./icons/refresh.svg"
     : "__AXIVER_ICON_REFRESH__";
@@ -37,6 +42,7 @@
 
   const host = document.createElement("div");
   host.id = "axiver-client-host";
+  host.className = "allow-native-input";
   host.setAttribute("data-axiver-overlay", "");
   const shadow = host.attachShadow({ mode: "open" });
 
@@ -285,7 +291,7 @@
       opacity: 1;
       transform: translateY(0);
     }
-    input {
+    ::slotted(input) {
       width: 100%;
       height: 38px;
       padding: 0 11px;
@@ -297,15 +303,16 @@
       font: 560 14px/1 "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
       transition: border-color 170ms ease, background 170ms ease, box-shadow 170ms ease;
     }
-    input:focus {
+    ::slotted(input:focus) {
       border-color: rgba(134, 204, 255, .88);
       background: rgba(3, 12, 21, .82);
       box-shadow: 0 0 0 3px rgba(79, 160, 229, .2);
     }
-    input.invalid {
+    ::slotted(input.invalid) {
       border-color: rgba(255, 113, 113, .7);
       box-shadow: 0 0 0 3px rgba(255, 92, 92, .12);
     }
+    slot { display: contents; }
     .hint {
       display: none;
       min-height: 13px;
@@ -380,7 +387,7 @@
           </label>
           <span class="saved broadcast-saved">已保存</span>
         </div>
-        <input id="axiver-broadcast" autocomplete="off" maxlength="32" spellcheck="false" />
+        <slot name="broadcast-input"></slot>
         <div class="hint broadcast-hint">1–32 位字母、数字、下划线或连字符</div>
       </div>
       <div class="setting">
@@ -391,18 +398,37 @@
           </label>
           <span class="saved wide-saved">已保存</span>
         </div>
-        <input id="axiver-wide" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://example.com" />
+        <slot name="wide-input"></slot>
         <div class="hint wide-hint">未发现局域网容器时自动回退</div>
       </div>
     </section>
   `;
   shadow.append(style, shell);
 
+  const broadcastInput = document.createElement("input");
+  broadcastInput.id = "axiver-broadcast";
+  broadcastInput.slot = "broadcast-input";
+  broadcastInput.className = "allow-native-input";
+  broadcastInput.autocomplete = "off";
+  broadcastInput.maxLength = 32;
+  broadcastInput.spellcheck = false;
+  broadcastInput.setAttribute("aria-label", "局域广播名设置");
+
+  const wideInput = document.createElement("input");
+  wideInput.id = "axiver-wide";
+  wideInput.slot = "wide-input";
+  wideInput.className = "allow-native-input";
+  wideInput.inputMode = "url";
+  wideInput.autocomplete = "url";
+  wideInput.spellcheck = false;
+  wideInput.placeholder = "https://example.com";
+  wideInput.setAttribute("aria-label", "广域地址");
+
+  host.append(broadcastInput, wideInput);
+
   const summary = shell.querySelector(".summary");
   const title = shell.querySelector(".summary-title");
   const detail = shell.querySelector(".summary-detail");
-  const broadcastInput = shell.querySelector("#axiver-broadcast");
-  const wideInput = shell.querySelector("#axiver-wide");
   const broadcastHint = shell.querySelector(".broadcast-hint");
   const wideHint = shell.querySelector(".wide-hint");
 
@@ -416,7 +442,7 @@
   };
 
   const isEditing = () =>
-    shadow.activeElement === broadcastInput || shadow.activeElement === wideInput;
+    document.activeElement === broadcastInput || document.activeElement === wideInput;
 
   const scheduleCollapse = (delay = 900) => {
     clearTimeout(collapseTimer);
@@ -589,7 +615,7 @@
         next &&
         typeof next.broadcastName === "string" &&
         !broadcastDirty &&
-        shadow.activeElement !== broadcastInput
+        document.activeElement !== broadcastInput
       ) {
         broadcastInput.value = next.broadcastName;
       }
@@ -597,7 +623,7 @@
         next &&
         typeof next.wideUrl === "string" &&
         !wideDirty &&
-        shadow.activeElement !== wideInput
+        document.activeElement !== wideInput
       ) {
         wideInput.value = next.wideUrl;
       }
@@ -612,11 +638,84 @@
     }
   };
 
+  const installImeCompositionGuard = () => {
+    const assist = document.getElementById("keyboard-input-assist");
+    if (!assist) return false;
+    if (assist.__selkiesCompositionGuardInstalled) return true;
+    assist.__selkiesCompositionGuardInstalled = true;
+
+    assist.addEventListener(
+      "compositionstart",
+      () => {
+        imeCompositionActive = true;
+        imeCompositionCommittedText = "";
+        imeFinalInputSeen = false;
+      },
+      true
+    );
+    assist.addEventListener(
+      "input",
+      (event) => {
+        if (event.isComposing || imeCompositionActive) {
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (imeCompositionCommittedText) {
+          // Only suppress the fallback when Selkies can actually read the
+          // committed value. Some WebView2 IMEs emit a final input event while
+          // leaving the hidden assist value empty.
+          imeFinalInputSeen = Boolean(assist.value);
+        }
+      },
+      true
+    );
+    assist.addEventListener(
+      "compositionend",
+      (event) => {
+        imeCompositionActive = false;
+        imeCompositionCommittedText = String(event.data || "");
+        imeFinalInputSeen = false;
+        clearTimeout(imeCompositionFlushTimer);
+        imeCompositionFlushTimer = window.setTimeout(() => {
+          imeCompositionFlushTimer = 0;
+          const committedText = imeCompositionCommittedText;
+          const finalInputSeen = imeFinalInputSeen;
+          imeCompositionCommittedText = "";
+          imeFinalInputSeen = false;
+          if (finalInputSeen) return;
+          // Microsoft Pinyin can expose the selected candidate only through
+          // compositionend.data while the hidden input value is already empty.
+          const value = String(assist.value || committedText || "");
+          const input = window.webrtcInput;
+          if (!value || !input || typeof input._typeString !== "function") return;
+          input._typeString(value);
+          assist.value = "";
+        }, 0);
+      },
+      true
+    );
+    return true;
+  };
+
+  const watchForImeAssist = () => {
+    if (installImeCompositionGuard() || imeGuardObserver) return;
+    imeGuardObserver = new MutationObserver(() => {
+      if (!installImeCompositionGuard()) return;
+      imeGuardObserver.disconnect();
+      imeGuardObserver = null;
+    });
+    imeGuardObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+  };
+
   window.__AXIVER_CLIENT__.syncSettings(bootstrap);
   const mount = () => {
     if (!document.documentElement.contains(host)) {
       (document.body || document.documentElement).appendChild(host);
     }
+    watchForImeAssist();
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", mount, { once: true });

@@ -53,7 +53,10 @@
   var localLinkHistoryMountTimer = null;
   var pendingRemoteClipboardPull = null;
   var imeFocusTimer = null;
+  var imeCompositionFlushTimer = null;
   var imeCompositionActive = false;
+  var imeCompositionCommittedText = "";
+  var imeFinalInputSeen = false;
   var clipboardShortcutBusy = false;
   var activeDataSockets = [];
   var lastClipboardTriggerAt = 0;
@@ -7325,6 +7328,53 @@
     assist.setAttribute("autocorrect", "off");
     assist.setAttribute("autocapitalize", "off");
     assist.setAttribute("spellcheck", "false");
+    if (!assist.__selkiesCompositionGuardInstalled) {
+      assist.__selkiesCompositionGuardInstalled = true;
+      assist.addEventListener(
+        "input",
+        function (event) {
+          if (!event.isComposing && !imeCompositionActive) {
+            if (imeCompositionCommittedText) {
+              // The bundled handler reads assist.value, not event.data.
+              // An empty final input therefore still needs our fallback.
+              imeFinalInputSeen = Boolean(assist.value);
+            }
+            return;
+          }
+          // The bundled Selkies handler forwards and clears the assist value
+          // on every input event. WebView2 emits interim input events while a
+          // Chinese IME is composing, so letting them through destroys the
+          // composition before the candidate is committed.
+          event.stopImmediatePropagation();
+        },
+        true
+      );
+      assist.addEventListener(
+        "compositionend",
+        function (event) {
+          imeCompositionCommittedText = String(event.data || "");
+          imeFinalInputSeen = false;
+          if (imeCompositionFlushTimer) {
+            window.clearTimeout(imeCompositionFlushTimer);
+          }
+          imeCompositionFlushTimer = window.setTimeout(function () {
+            imeCompositionFlushTimer = null;
+            var committedText = imeCompositionCommittedText;
+            var finalInputSeen = imeFinalInputSeen;
+            imeCompositionCommittedText = "";
+            imeFinalInputSeen = false;
+            if (finalInputSeen) return;
+            var value = String(assist.value || committedText || "");
+            if (!value) return;
+            var input = window.webrtcInput;
+            if (!input || typeof input._typeString !== "function") return;
+            input._typeString(value);
+            assist.value = "";
+          }, 0);
+        },
+        true
+      );
+    }
     return assist;
   }
 
@@ -7379,6 +7429,8 @@
       "compositionstart",
       function () {
         imeCompositionActive = true;
+        imeCompositionCommittedText = "";
+        imeFinalInputSeen = false;
       },
       true
     );
