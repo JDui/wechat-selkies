@@ -10,6 +10,14 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from lan_discovery_common import (
+    DEFAULT_BROADCAST_NAME,
+    build_identity_payload,
+    is_valid_broadcast_name,
+    parse_bool,
+    sanitize_broadcast_name,
+)
+
 try:
     import pulsectl
 except Exception:
@@ -49,6 +57,9 @@ PORT = parse_int_env("NOTIFICATION_BRIDGE_PORT", 38081, 1024, 65535)
 MAX_EVENTS = parse_int_env("NOTIFICATION_BRIDGE_MAX_EVENTS", 256, 16, 4096)
 FALLBACK_POLL_MS = parse_int_env("NOTIFICATION_BRIDGE_FALLBACK_POLL_MS", 1200, 300, 10000)
 MODE_STATE_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_MODE_PATH", "/config/state/notification-bridge.json"))
+LAN_DISCOVERY_STATUS_PATH = pathlib.Path(
+    os.getenv("SELKIES_LAN_DISCOVERY_STATUS_PATH", "/config/state/lan-discovery-status.json")
+)
 DUNST_CONFIG_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_DUNST_CONFIG_PATH", "/config/.config/dunst/dunstrc"))
 DUNST_DEFAULT_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_DUNST_DEFAULT_PATH", "/defaults/dunstrc"))
 RAW_LOG_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_RAW_LOG_PATH", "/config/logs/notification-bridge-raw.log"))
@@ -64,6 +75,14 @@ ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = parse_int_env(
 )
 if ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
     ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = 3600
+LAN_DISCOVERY_DEFAULT_ENABLED = parse_bool(
+    os.getenv("SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED"),
+    False,
+)
+LAN_DISCOVERY_DEFAULT_NAME = sanitize_broadcast_name(
+    os.getenv("SELKIES_LAN_DISCOVERY_DEFAULT_NAME"),
+    DEFAULT_BROADCAST_NAME,
+)
 WECHAT_AUDIO_ENABLED = os.getenv("NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED", "true").strip().lower() in {
     "1",
     "true",
@@ -849,6 +868,8 @@ def default_mode_state():
         "adaptive_sleep_enabled": False,
         "adaptive_sleep_idle_seconds": ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS,
         "adaptive_sleep_idle_seconds_user_set": False,
+        "lan_discovery_enabled": LAN_DISCOVERY_DEFAULT_ENABLED,
+        "lan_broadcast_name": LAN_DISCOVERY_DEFAULT_NAME,
     }
 
 
@@ -872,6 +893,14 @@ def _read_mode_state_unlocked():
     state["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(
         payload.get("adaptive_sleep_idle_seconds", state["adaptive_sleep_idle_seconds"])
     )
+    state["lan_discovery_enabled"] = parse_bool(
+        payload.get("lan_discovery_enabled"),
+        state["lan_discovery_enabled"],
+    )
+    state["lan_broadcast_name"] = sanitize_broadcast_name(
+        payload.get("lan_broadcast_name"),
+        state["lan_broadcast_name"],
+    )
     if (
         not state["adaptive_sleep_idle_seconds_user_set"]
         and state["adaptive_sleep_idle_seconds"] == 60
@@ -886,7 +915,14 @@ def read_mode_state():
         return dict(_read_mode_state_unlocked())
 
 
-def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=None, adaptive_sleep_idle_seconds=None):
+def write_mode_state(
+    mode=None,
+    idle_focus_seconds=None,
+    adaptive_sleep_enabled=None,
+    adaptive_sleep_idle_seconds=None,
+    lan_discovery_enabled=None,
+    lan_broadcast_name=None,
+):
     with MODE_LOCK:
         state = _read_mode_state_unlocked()
         if mode is not None:
@@ -898,6 +934,16 @@ def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=
         if adaptive_sleep_idle_seconds is not None:
             state["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(adaptive_sleep_idle_seconds)
             state["adaptive_sleep_idle_seconds_user_set"] = True
+        if lan_discovery_enabled is not None:
+            state["lan_discovery_enabled"] = parse_bool(
+                lan_discovery_enabled,
+                state["lan_discovery_enabled"],
+            )
+        if lan_broadcast_name is not None:
+            state["lan_broadcast_name"] = sanitize_broadcast_name(
+                lan_broadcast_name,
+                state["lan_broadcast_name"],
+            )
         MODE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = MODE_STATE_PATH.with_suffix(MODE_STATE_PATH.suffix + ".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
@@ -931,7 +977,7 @@ def apply_notification_mode(mode):
 
 def current_state_payload():
     state = read_mode_state()
-    return {
+    response = {
         "ok": True,
         "mode": state["mode"],
         "idle_focus_seconds": int(state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0),
@@ -939,7 +985,24 @@ def current_state_payload():
         "adaptive_sleep_idle_seconds": sanitize_adaptive_sleep_idle_seconds(
             state.get("adaptive_sleep_idle_seconds", ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS)
         ),
+        "lan_discovery_enabled": bool(state.get("lan_discovery_enabled", False)),
+        "lan_broadcast_name": sanitize_broadcast_name(
+            state.get("lan_broadcast_name"),
+            LAN_DISCOVERY_DEFAULT_NAME,
+        ),
     }
+    try:
+        status = json.loads(LAN_DISCOVERY_STATUS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        status = {}
+    response["lan_discovery_running"] = bool(status.get("running", False))
+    response["lan_discovery_address"] = str(status.get("address", "") or "")
+    response["lan_discovery_error"] = str(status.get("error", "") or "")
+    return response
+
+
+def current_discovery_identity_payload():
+    return build_identity_payload(read_mode_state())
 
 
 def append_raw_log(payload):
@@ -965,7 +1028,7 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         parsed = urlparse(getattr(self, "path", "") or "")
-        if parsed.path in {"/health", "/pull", "/activity", "/active-app", "/state"}:
+        if parsed.path in {"/health", "/pull", "/activity", "/active-app", "/state", "/discovery"}:
             return
         print(
             "%s - - [%s] %s"
@@ -1009,6 +1072,9 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/state":
             self._send_json(200, current_state_payload())
+            return
+        if parsed.path == "/discovery":
+            self._send_json(200, current_discovery_identity_payload())
             return
         self._send_json(404, {"ok": False, "error": "not found"})
 
@@ -1063,6 +1129,17 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"ok": False, "error": "not found"})
             return
 
+        if "lan_broadcast_name" in payload and not is_valid_broadcast_name(payload.get("lan_broadcast_name")):
+            self._send_json(
+                400,
+                {
+                    "ok": False,
+                    "error": "invalid broadcast name",
+                    "allowed": "A-Z, 0-9, underscore and hyphen; 1-32 characters",
+                },
+            )
+            return
+
         updated_state = None
         if "mode" in payload:
             updated_state = write_mode_state(mode=payload.get("mode"))
@@ -1073,6 +1150,10 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             updated_state = write_mode_state(adaptive_sleep_enabled=payload.get("adaptive_sleep_enabled"))
         if "adaptive_sleep_idle_seconds" in payload:
             updated_state = write_mode_state(adaptive_sleep_idle_seconds=payload.get("adaptive_sleep_idle_seconds"))
+        if "lan_discovery_enabled" in payload:
+            updated_state = write_mode_state(lan_discovery_enabled=payload.get("lan_discovery_enabled"))
+        if "lan_broadcast_name" in payload:
+            updated_state = write_mode_state(lan_broadcast_name=payload.get("lan_broadcast_name"))
 
         response = current_state_payload()
         if updated_state is not None:
@@ -1081,6 +1162,11 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             response["adaptive_sleep_enabled"] = bool(updated_state.get("adaptive_sleep_enabled", False))
             response["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(
                 updated_state.get("adaptive_sleep_idle_seconds", ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS)
+            )
+            response["lan_discovery_enabled"] = bool(updated_state.get("lan_discovery_enabled", False))
+            response["lan_broadcast_name"] = sanitize_broadcast_name(
+                updated_state.get("lan_broadcast_name"),
+                LAN_DISCOVERY_DEFAULT_NAME,
             )
         self._send_json(200, response)
 

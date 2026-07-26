@@ -43,6 +43,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
 - **Dynamic Throttle and Adaptive Sleep**: Idle browser sessions can switch to low bandwidth, low framerate, or low occupancy modes, while disconnected/non-receiving sessions can stop streaming work on the server.
 - **Notification Center**: A collapsible right-side center collects message, clipboard, system, tool, link, and client events while keeping stream bandwidth summaries out of the history list.
+- **LAN Discovery Broadcast**: Enable mDNS from `Miaomiao Toolbox`, choose a broadcast name, and let a desktop client prefer the discovered LAN address before falling back to the public URL.
 - **New QQ Support Enhancements**: Build-time latest Linux QQ URL resolution, hang detection, and auto-restart.
 - **Open Links Locally**: Links triggered inside QQ/WeChat now show a confirmation card first, then open in the local browser and are saved in jump history.
 

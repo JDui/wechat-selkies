@@ -32,6 +32,7 @@
 - **链接本地打开**：微信 / QQ 内点击链接时，浏览器侧显示确认卡片，可用本机浏览器打开并保留历史。
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
 - **通知中心**：右侧可收纳通知中心集中显示微信、QQ、剪板、系统、工具和链接事件；推流流量统计只保留在顶部带宽摘要，不再刷屏进入历史列表，同类系统级通知会在 1 分钟内合并为最新一条。
+- **局域网发现广播**：可在侧边栏【妙妙小工具】中启用 mDNS 广播并设置广播名，供单窗口客户端优先发现局域网地址。
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
 
@@ -39,10 +40,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.41.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.46.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.41.tar
+docker load -i wechat-selkies-1.46.tar
 ```
 
 启动：
@@ -57,7 +58,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.41
+  wechat-selkies:1.46
 ```
 
 访问：
@@ -73,12 +74,14 @@ docker run -d \
 docker compose up -d
 ```
 
+仓库内的 Compose 配置会同时启动 `axisnsbox-discovery` 发现 sidecar。该 sidecar 使用 host 网络发布 mDNS，业务容器仍保持 bridge 网络。
+
 常用配置示例：
 
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.41
+    image: wechat-selkies:1.46
     container_name: wechat-selkies
     init: true
     ports:
@@ -123,6 +126,11 @@ services:
 | `PUID` | `1000` | 容器用户 ID |
 | `PGID` | `100` | 容器用户组 ID |
 | `TZ` | `Asia/Shanghai` | 时区 |
+| `SELKIES_HTTP_PORT` | `3000` | Compose 发布到宿主机的 HTTP 端口 |
+| `SELKIES_HTTPS_PORT` | `3001` | Compose 发布到宿主机的 HTTPS 端口，也是默认广播端口 |
+| `SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED` | `false` | 首次运行且尚无持久化设置时是否默认开启局域网广播 |
+| `SELKIES_LAN_DISCOVERY_DEFAULT_NAME` | `AXISNSBOX-000` | 首次运行的默认广播名 |
+| `SELKIES_LAN_ADVERTISE_ADDRESS` | 自动检测 | 多网卡宿主机可显式指定需要广播的局域网 IPv4 地址 |
 | `AUTO_START_WECHAT` | `true` | 自动启动微信 |
 | `AUTO_START_QQ` | `false` | 自动启动 QQ |
 | `PROCESS_WATCHDOG` | `true` | 启用进程看门狗 |
@@ -189,6 +197,28 @@ services:
 | `SELKIES_UPLOAD_ALLOWED_SUBDIRS` | 空 | 可选的逗号分隔目标子目录白名单 |
 | `SELKIES_LEGACY_UPLOAD_ENABLED` | `false` | 启用旧 WebSocket 上传兼容包装 |
 
+## 局域网发现广播（1.46）
+
+- 打开左侧侧边栏的【妙妙小工具】，启用“局域网广播”后即可编辑广播名。
+- 广播名默认为 `AXISNSBOX-000`，允许 1–32 位英文字母、数字、下划线和连字符；保存时会转成大写。
+- 服务以 `_axisnsbox._tcp.local` 类型发布，端口为 `SELKIES_HTTPS_PORT`，配置变化通常会在约 1 秒内生效。
+- 客户端发现候选地址后，应请求 `/.well-known/axisnsbox` 验证 `service` 是否为 `wechat-selkies`，再跳转到返回的 HTTPS 端口。
+- `axisnsbox-discovery` 使用 `network_mode: host`，主要面向 Linux/NAS 宿主机；如果防火墙阻止 UDP 5353 或局域网禁用了组播，mDNS 将不可见。多网卡环境可给 sidecar 设置 `SELKIES_LAN_ADVERTISE_ADDRESS`。
+- 广播开关和名称持久化在 `./config/state/notification-bridge.json`，升级或重启容器后会保留。
+
+若不使用 Compose，业务容器启动后还需要用同一个镜像启动发现 sidecar：
+
+```bash
+docker run -d \
+  --name axisnsbox-discovery \
+  --network host \
+  -v ./config:/config \
+  --entrypoint python3 \
+  --restart unless-stopped \
+  wechat-selkies:1.46 \
+  -u /scripts/lan_discovery_service.py
+```
+
 诊断日志位于 `/config/logs/upload-sidecar.log` 和 `/config/logs/upload-diagnostics.jsonl`。详细安全边界、API 与迁移说明见 `docs/upload-architecture-1.45.md`。
 
 ## 会话规则
@@ -241,13 +271,13 @@ services:
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.41 .
+docker build -t wechat-selkies:1.46 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.41.tar wechat-selkies:1.41
+docker save -o wechat-selkies-1.46.tar wechat-selkies:1.46
 ```
 
 ## 故障排查

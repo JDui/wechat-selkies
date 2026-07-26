@@ -11,8 +11,8 @@ services:
     devices:
       - /dev/dri:/dev/dri # optional, for hardware acceleration
     ports:
-      - "3000:3000"       # http port
-      - "3001:3001"       # https port
+      - "${SELKIES_HTTP_PORT:-3000}:3000"       # http port
+      - "${SELKIES_HTTPS_PORT:-3001}:3001"       # https port
     restart: unless-stopped
     stop_grace_period: 1m
     mem_reservation: "2g" # reduce OOM risk during long-running idle sessions
@@ -62,6 +62,11 @@ services:
       - SELKIES_UPLOAD_ALLOW_OVERWRITE=false
       - SELKIES_UPLOAD_MIN_FREE_BYTES=268435456
       - SELKIES_LEGACY_UPLOAD_ENABLED=false
+      - SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED=${SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED:-false}
+      - SELKIES_LAN_DISCOVERY_DEFAULT_NAME=${SELKIES_LAN_DISCOVERY_DEFAULT_NAME:-AXISNSBOX-000}
+      - SELKIES_LAN_ADVERTISE_ADDRESS=${SELKIES_LAN_ADVERTISE_ADDRESS:-}
+      - SELKIES_LAN_ADVERTISE_HTTP_PORT=${SELKIES_HTTP_PORT:-3000}
+      - SELKIES_LAN_ADVERTISE_HTTPS_PORT=${SELKIES_HTTPS_PORT:-3001}
       - SELKIES_CONTAINER_SLEEP=true
       - SELKIES_CONTAINER_SLEEP_REQUIRE_PIN=true
       - SELKIES_CONTAINER_SLEEP_PORT=38083
@@ -110,3 +115,28 @@ services:
       # - SELKIES_PASTE_IMAGE_MAX_SIZE=20971520 # max image size in bytes
       # - SELKIES_PASTE_IMAGE_AUTO_PASTE=false  # disable auto Ctrl+V after write
     shm_size: "2gb"       # improves browser/desktop shared-memory headroom
+
+  axisnsbox-discovery:
+    build:
+      context: .
+    image: wechat-selkies:latest
+    container_name: axisnsbox-discovery
+    init: true
+    entrypoint: ["python3", "-u", "/scripts/lan_discovery_service.py"]
+    network_mode: host
+    volumes:
+      - ./config:/config
+    environment:
+      - SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED=${SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED:-false}
+      - SELKIES_LAN_DISCOVERY_DEFAULT_NAME=${SELKIES_LAN_DISCOVERY_DEFAULT_NAME:-AXISNSBOX-000}
+      - SELKIES_LAN_ADVERTISE_ADDRESS=${SELKIES_LAN_ADVERTISE_ADDRESS:-}
+      - SELKIES_LAN_ADVERTISE_HTTP_PORT=${SELKIES_HTTP_PORT:-3000}
+      - SELKIES_LAN_ADVERTISE_HTTPS_PORT=${SELKIES_HTTPS_PORT:-3001}
+    depends_on:
+      - wechat-selkies
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
