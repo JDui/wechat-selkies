@@ -1,0 +1,10 @@
+/target/
+/gen/
+/axiver-client.db
+/axiver-client.db-shm
+/axiver-client.db-wal
+/axiver-client-data/
+/dist/axiver-client.db
+/dist/axiver-client.db-shm
+/dist/axiver-client.db-wal
+/dist/axiver-client-data/

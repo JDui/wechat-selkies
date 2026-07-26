@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AXIVER Client</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+        background: #111924;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        color: #e9f1fa;
+        background:
+          radial-gradient(circle at 34% 46%, rgba(194, 215, 226, 0.18), transparent 29%),
+          radial-gradient(circle at 71% 21%, rgba(63, 98, 132, 0.2), transparent 34%),
+          linear-gradient(135deg, #111925 0%, #263646 52%, #172433 100%);
+      }
+      .ambient {
+        position: fixed;
+        inset: 0;
+        opacity: 0.42;
+        filter: blur(24px);
+        background:
+          linear-gradient(90deg, transparent 0 15%, rgba(217, 228, 232, 0.18) 22%, transparent 34%),
+          linear-gradient(160deg, transparent 0 45%, rgba(103, 137, 165, 0.22) 56%, transparent 72%);
+      }
+      .brand {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 12px;
+        text-align: center;
+        opacity: 0.68;
+      }
+      .brand strong {
+        font-size: 30px;
+        font-weight: 540;
+        letter-spacing: 0.18em;
+      }
+      .brand span {
+        color: #aebdcb;
+        font-size: 14px;
+        letter-spacing: 0.06em;
+      }
+    </style>
+    <script>
+      window.__AXIVER_PREVIEW__ = true;
+      window.__AXIVER_BOOTSTRAP__ = {
+        broadcastName: "AXISNSBOX-000",
+        wideUrl: ""
+      };
+      document.addEventListener("DOMContentLoaded", () => {
+        if (new URLSearchParams(window.location.search).get("preview") === "lan") {
+          window.__AXIVER_CLIENT__?.setStatus({
+            state: "lan",
+            detail: "当前连接：局域网",
+            url: "http://192.168.1.28:3000/"
+          });
+          window.__AXIVER_CLIENT__?.syncSettings({
+            broadcastName: "AXISNSBOX-000",
+            wideUrl: "https://axiver.example.com"
+          });
+          window.__AXIVER_CLIENT__?.open();
+        }
+      });
+    </script>
+    <script src="./injected.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true"></div>
+    <main class="brand">
+      <strong>AXIVER</strong>
+      <span>正在准备连接</span>
+    </main>
+  </body>
+</html>
