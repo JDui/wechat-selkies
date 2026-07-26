@@ -28,6 +28,10 @@ The browser capture and the 1487 × 1058 reference were normalized to
 - P3: the implemented glass surface is slightly darker and the menu labels are
   marginally heavier than the generated reference. This was retained to keep
   controls legible over arbitrary remote pages.
+- Readability follow-up: increased the surface opacity, label weight, input
+  contrast, icon size, and icon shadow; the expanded LAN-state preview passed
+  visual and accessibility-tree checks with all three controls clearly
+  distinguishable.
 - Result: passed.
 
 ## Interaction and console checks
@@ -52,10 +56,11 @@ The browser capture and the 1487 × 1058 reference were normalized to
 - Certificate handling: WebView2 is started with process-local certificate
   errors disabled for both LAN and user-configured WAN targets, as explicitly
   requested. No Windows or external-browser setting is modified.
-- Native title lock: after the real client connected and loaded the remote
-  document, the responsive window still reported `AXIVER Client`.
-- Portable EXE smoke test: window opened as `AXIVER Client`, remained
-  responsive, and closed cleanly.
+- Native title behavior: the waiting screen starts as `AXIVER Client`; after
+  connection, document-title changes are mirrored to the native window.
+- Portable EXE smoke test: the live LAN page loaded, the native title changed
+  to `AXi-SNS-Box - PIN`, the window remained responsive, and the exact test
+  process closed cleanly.
 - Windows PE subsystem: 2 (`WINDOWS_GUI`), so no console window is created.
 - SQLite smoke test: `dist/axiver-client.db` was created beside the EXE with
   `broadcast_name=AXISNSBOX-000` and an empty WAN URL.

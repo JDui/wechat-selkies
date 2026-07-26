@@ -104,9 +104,13 @@
       filter: drop-shadow(0 0 6px rgba(126, 191, 246, .72));
     }
     .shell.open .summary {
-      padding-right: 14px;
-      background: transparent;
-      box-shadow: none;
+      padding-right: 16px;
+      background: rgba(10, 22, 34, .91);
+      box-shadow:
+        0 10px 28px rgba(0, 6, 13, .42),
+        inset 0 0 0 1px rgba(224, 239, 250, .22);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
     }
     .dot-wrap {
       position: relative;
@@ -178,8 +182,10 @@
     .summary-title {
       font-size: 18px;
       line-height: 24px;
-      font-weight: 620;
+      font-weight: 680;
       letter-spacing: .01em;
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, .72);
     }
     .summary-detail {
       display: none;
@@ -194,15 +200,15 @@
       width: min(560px, calc(100vw - 16px));
       margin-top: 10px;
       padding: 16px;
-      border: 1px solid rgba(220, 235, 247, .38);
+      border: 1px solid rgba(224, 239, 250, .48);
       border-radius: 20px;
       background:
-        linear-gradient(145deg, rgba(80, 102, 124, .48), rgba(31, 47, 64, .64));
+        linear-gradient(145deg, rgba(32, 49, 67, .94), rgba(10, 22, 34, .96));
       box-shadow:
-        0 24px 58px rgba(2, 10, 18, .35),
-        inset 0 1px rgba(255, 255, 255, .2);
-      backdrop-filter: blur(26px) saturate(125%);
-      -webkit-backdrop-filter: blur(26px) saturate(125%);
+        0 24px 58px rgba(0, 7, 14, .52),
+        inset 0 1px rgba(255, 255, 255, .22);
+      backdrop-filter: blur(28px) saturate(130%);
+      -webkit-backdrop-filter: blur(28px) saturate(130%);
       transform: translateY(-8px) scale(.975);
       transform-origin: top left;
       opacity: 0;
@@ -223,9 +229,9 @@
       width: 100%;
       border: 0;
       border-radius: 12px;
-      color: #f3f7fb;
-      background: rgba(220, 236, 248, .08);
-      box-shadow: inset 0 0 0 1px rgba(224, 238, 250, .08);
+      color: #ffffff;
+      background: rgba(218, 235, 248, .13);
+      box-shadow: inset 0 0 0 1px rgba(229, 241, 250, .16);
       transition: background 170ms ease, box-shadow 170ms ease, transform 170ms ease;
     }
     .action {
@@ -240,15 +246,17 @@
     }
     .action:hover,
     .setting:focus-within {
-      background: rgba(224, 238, 250, .13);
-      box-shadow: inset 0 0 0 1px rgba(229, 240, 250, .17);
+      background: rgba(224, 239, 250, .21);
+      box-shadow: inset 0 0 0 1px rgba(235, 245, 252, .28);
     }
     .action:active { transform: scale(.99); }
     .action strong,
     .setting label {
       font-size: 16px;
-      font-weight: 580;
+      font-weight: 650;
       letter-spacing: .01em;
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, .72);
     }
     .setting {
       min-height: 66px;
@@ -281,18 +289,18 @@
       width: 100%;
       height: 38px;
       padding: 0 11px;
-      border: 1px solid rgba(224, 238, 248, .16);
+      border: 1px solid rgba(224, 239, 250, .32);
       border-radius: 8px;
       outline: none;
-      color: #f1f6fa;
-      background: rgba(8, 18, 28, .25);
-      font: 500 14px/1 "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+      color: #ffffff;
+      background: rgba(4, 13, 22, .62);
+      font: 560 14px/1 "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
       transition: border-color 170ms ease, background 170ms ease, box-shadow 170ms ease;
     }
     input:focus {
-      border-color: rgba(125, 190, 244, .62);
-      background: rgba(8, 18, 28, .38);
-      box-shadow: 0 0 0 3px rgba(79, 160, 229, .12);
+      border-color: rgba(134, 204, 255, .88);
+      background: rgba(3, 12, 21, .82);
+      box-shadow: 0 0 0 3px rgba(79, 160, 229, .2);
     }
     input.invalid {
       border-color: rgba(255, 113, 113, .7);
@@ -307,10 +315,11 @@
       line-height: 13px;
     }
     .ui-icon {
-      width: 24px;
-      height: 24px;
-      flex: 0 0 24px;
-      opacity: .94;
+      width: 25px;
+      height: 25px;
+      flex: 0 0 25px;
+      opacity: 1;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .78));
     }
     .setting-head label {
       display: flex;

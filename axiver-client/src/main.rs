@@ -888,8 +888,13 @@ fn main() {
                     .initialization_script(init_script.clone())
                     .enable_clipboard_access()
                     .zoom_hotkeys_enabled(true)
-                    .on_document_title_changed(|window, _document_title| {
-                        let _ = window.set_title(APP_TITLE);
+                    .on_document_title_changed(|window, document_title| {
+                        let title = if document_title.trim().is_empty() {
+                            APP_TITLE
+                        } else {
+                            document_title.trim()
+                        };
+                        let _ = window.set_title(title);
                     })
                     .on_navigation(move |url| {
                         if is_native_action(url) {
@@ -908,7 +913,6 @@ fn main() {
                         if payload.event() != PageLoadEvent::Finished {
                             return;
                         }
-                        let _ = window.set_title(APP_TITLE);
                         if let Ok(guard) = page_settings.lock() {
                             sync_settings(&window, &guard);
                         }
