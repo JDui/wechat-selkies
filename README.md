@@ -172,11 +172,11 @@ services:
 
 ## 独立文件上传（1.45）
 
-默认上传入口是页面左下角的“上传”按钮，它会打开 `/uploader/` 小窗。文件读取、分片、重试和速度统计运行在 Dedicated Worker 中，分片通过独立 HTTP sidecar 发送，不再进入 Selkies 主数据 WebSocket。小窗支持拖放、队列、暂停、继续、取消、失败重试和基于服务器已确认分片的断点续传；刷新后需要重新选择同名、同大小文件以恢复本地 `File` 引用。
+页面不再显示额外的独立上传按钮。用户继续使用 Selkies 原有的文件上传操作；选择文件后，桥接层会阻止文件进入旧 WebSocket 链路，自动打开 `/uploader/` 小窗并交给新上传模块处理。文件读取、分片、重试和速度统计运行在 Dedicated Worker 中，分片通过独立 HTTP sidecar 发送，不再进入 Selkies 主数据 WebSocket。小窗支持拖放、队列、暂停、继续、取消、失败重试和基于服务器已确认分片的断点续传；刷新后需要重新选择同名、同大小文件以恢复本地 `File` 引用。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `SELKIES_UPLOAD_ENABLED` | `true` | 启用独立上传 sidecar 与新上传入口 |
+| `SELKIES_UPLOAD_ENABLED` | `true` | 启用独立上传 sidecar，并自动接管原文件上传操作 |
 | `SELKIES_UPLOAD_DIR` | `/config/uploads` | 上传根目录及 `.staging` 所在目录 |
 | `SELKIES_UPLOAD_MAX_FILE_SIZE` | `2147483648` | 单文件最大字节数 |
 | `SELKIES_UPLOAD_CHUNK_SIZE` | `8388608` | HTTP 分片大小，范围 64 KiB–64 MiB |
