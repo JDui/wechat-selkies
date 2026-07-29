@@ -63,6 +63,17 @@ The browser capture and the 1487 × 1058 reference were normalized to
   `你`; the Japanese sequence, where a populated final `input` followed
   `compositionend`, committed `日`. The final record was `["你","日"]`,
   with neither missing nor duplicate text and an empty assist field.
+- Upload popup smoke test: `window.open()` returned a live proxy and created
+  a second WebView2 page with the opener's shared environment; the main
+  process remained responsive. Native Tauri drag/drop interception is disabled
+  so the Selkies page can receive HTML5 file drops.
+- Download smoke test: a real local HTTP response with
+  `Content-Disposition: attachment` completed successfully. WebView2 selected
+  the Windows-configured redirected download directory `D:\DL`; all diagnostic
+  26-byte sentinel files were verified and removed afterward.
+- External popup smoke test: an HTTPS `window.open()` request was handed to
+  the Windows default browser, returned no embedded proxy, left exactly one
+  AXIVER WebView2 page, and kept the AXIVER process alive.
 - Live LAN fallback: with mDNS unavailable, the client scanned the
   `192.168.31.0/24` subnet, validated `192.168.31.221:3000`, opened the
   `AXi-SNS-Box - PIN` page, and rendered the rainbow LAN state.

@@ -21,6 +21,12 @@
 - 客户端会保护 Selkies 隐藏输入框的中文 IME 组合事件，候选期间保留临时文本，
   并兼容 WebView2 仅通过 `compositionend.data` 返回候选词的情况；选中候选词后
   仅提交最终中文一次，即使容器页面尚未更新也能生效。
+- Selkies 上传器在同源、共享 WebView2 环境的独立窗口中打开，因此登录状态、
+  `BroadcastChannel` 和文件传递保持可用；同时放行网页原生拖放上传事件。
+- 下载请求会明确放行，并尊重 Windows 重定向后的系统“下载”目录；若 WebView2
+  只给出相对文件名，客户端会将其补成该目录下的绝对路径。
+- 除上传器外的 HTTP/HTTPS 弹窗与 `target="_blank"` 链接通过 Windows
+  `ShellExecuteW` 交给默认浏览器，失败时才回退到 WebView2 默认行为。
 - 启动和等待连接时窗口标题为 `AXIVER Client`；连接成功后跟随当前网页
   的标题，并响应网页后续的标题变化。
 

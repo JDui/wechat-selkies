@@ -13,15 +13,15 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     thread,
     time::{Duration, Instant},
 };
 use tauri::{
-    WebviewUrl, WebviewWindow,
-    webview::{PageLoadEvent, WebviewWindowBuilder},
+    Manager, WebviewUrl, WebviewWindow,
+    webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewWindowBuilder},
 };
 use url::Url;
 
@@ -36,6 +36,8 @@ const SUBNET_SCAN_WORKERS: usize = 32;
 const IGNORE_CERTIFICATE_ERRORS_FLAG: &str = "--ignore-certificate-errors";
 const NATIVE_HOST: &str = "axiver-client.invalid";
 const APP_TITLE: &str = "AXIVER Client";
+const UPLOADER_PATH_SUFFIX: &str = "/uploader/";
+static POPUP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -242,6 +244,103 @@ fn normalize_wide_url(value: &str) -> Result<String, String> {
         return Err("广域地址必须是完整的 HTTP 或 HTTPS 地址".to_string());
     }
     Ok(parsed.to_string())
+}
+
+fn http_origin(url: &Url) -> Option<String> {
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return None;
+    }
+    Some(url.origin().ascii_serialization())
+}
+
+fn is_internal_uploader_url(url: &Url, current_origin: Option<&str>) -> bool {
+    current_origin.is_some_and(|origin| http_origin(url).as_deref() == Some(origin))
+        && format!("{}/", url.path().trim_end_matches('/')).ends_with(UPLOADER_PATH_SUFFIX)
+}
+
+fn fallback_download_name(url: &Url) -> String {
+    let candidate = url
+        .path_segments()
+        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+        .unwrap_or("AXIVER-download");
+    let mut sanitized = candidate
+        .chars()
+        .map(|character| {
+            if character.is_control() || r#"<>:"/\|?*"#.contains(character) {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    while sanitized.ends_with(' ') || sanitized.ends_with('.') {
+        sanitized.pop();
+    }
+    if sanitized.is_empty() {
+        "AXIVER-download".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn ensure_download_destination(download_dir: Option<&Path>, url: &Url, destination: &mut PathBuf) {
+    if destination.is_absolute() {
+        return;
+    }
+    if let Some(download_dir) = download_dir {
+        let file_name = destination
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(fallback_download_name(url)));
+        *destination = download_dir.join(file_name);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_in_default_browser(url: &Url) -> bool {
+    use std::{ffi::OsStr, iter::once, os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        UI::{
+            Shell::ShellExecuteW,
+            WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_SHOWNORMAL},
+        },
+    };
+
+    if !is_external_browser_url(url) {
+        return false;
+    }
+    let operation = OsStr::new("open")
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let target = OsStr::new(url.as_str())
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: Both strings are valid, null-terminated UTF-16 buffers that
+    // remain alive for the duration of this synchronous ShellExecuteW call.
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut::<std::ffi::c_void>() as HWND,
+            operation.as_ptr(),
+            target.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL as SHOW_WINDOW_CMD,
+        )
+    };
+    result as isize > 32
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_in_default_browser(_url: &Url) -> bool {
+    false
+}
+
+fn is_external_browser_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
 }
 
 fn script_for(settings: &Settings) -> String {
@@ -859,11 +958,13 @@ fn main() {
     let settings = Arc::new(Mutex::new(initial_settings.clone()));
     let overlay_position = Arc::new(Mutex::new(None::<OverlayPosition>));
     let active_target = Arc::new(Mutex::new(TargetKind::None));
+    let current_page_origin = Arc::new(Mutex::new(None::<String>));
     let (control_tx, control_rx) = mpsc::channel::<ControlMessage>();
 
     let setup_settings = settings.clone();
     let setup_overlay_position = overlay_position.clone();
     let setup_active_target = active_target.clone();
+    let setup_current_page_origin = current_page_origin.clone();
     let setup_database_path = Arc::new(database_path);
     let setup_control_tx = control_tx.clone();
     let init_script = script_for(&initial_settings);
@@ -874,9 +975,12 @@ fn main() {
             let navigation_overlay_position = setup_overlay_position.clone();
             let navigation_database_path = setup_database_path.clone();
             let navigation_control_tx = setup_control_tx.clone();
+            let navigation_page_origin = setup_current_page_origin.clone();
             let page_settings = setup_settings.clone();
             let page_overlay_position = setup_overlay_position.clone();
             let page_active_target = setup_active_target.clone();
+            let popup_app = app.handle().clone();
+            let popup_page_origin = setup_current_page_origin.clone();
 
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -887,6 +991,7 @@ fn main() {
                     .data_directory(webview_data_path.clone())
                     .initialization_script(init_script.clone())
                     .enable_clipboard_access()
+                    .disable_drag_drop_handler()
                     .zoom_hotkeys_enabled(true)
                     .on_document_title_changed(|window, document_title| {
                         let title = if document_title.trim().is_empty() {
@@ -907,7 +1012,60 @@ fn main() {
                             );
                             return false;
                         }
-                        matches!(url.scheme(), "http" | "https" | "tauri" | "about")
+                        let allowed = matches!(url.scheme(), "http" | "https" | "tauri" | "about");
+                        if allowed
+                            && let Some(origin) = http_origin(url)
+                            && let Ok(mut guard) = navigation_page_origin.lock()
+                        {
+                            *guard = Some(origin);
+                        }
+                        allowed
+                    })
+                    .on_new_window(move |url, features| {
+                        let current_origin = popup_page_origin
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.clone());
+                        if is_internal_uploader_url(&url, current_origin.as_deref()) {
+                            let uploader_origin = http_origin(&url).unwrap_or_default();
+                            let popup_label = format!(
+                                "selkies-uploader-{}",
+                                POPUP_COUNTER.fetch_add(1, Ordering::Relaxed)
+                            );
+                            let builder = WebviewWindowBuilder::new(
+                                &popup_app,
+                                popup_label,
+                                WebviewUrl::External(
+                                    "about:blank".parse().expect("about:blank is a valid URL"),
+                                ),
+                            )
+                            .title("AXIVER 文件上传")
+                            .window_features(features)
+                            .enable_clipboard_access()
+                            .disable_drag_drop_handler()
+                            .on_navigation(move |candidate| {
+                                candidate.scheme() == "about"
+                                    || http_origin(candidate).as_deref()
+                                        == Some(uploader_origin.as_str())
+                            });
+                            return match builder.build() {
+                                Ok(window) => NewWindowResponse::Create { window },
+                                Err(_) => NewWindowResponse::Allow,
+                            };
+                        }
+
+                        if open_in_default_browser(&url) {
+                            NewWindowResponse::Deny
+                        } else {
+                            NewWindowResponse::Allow
+                        }
+                    })
+                    .on_download(|webview, event| {
+                        if let DownloadEvent::Requested { url, destination } = event {
+                            let download_dir = webview.app_handle().path().download_dir().ok();
+                            ensure_download_destination(download_dir.as_deref(), &url, destination);
+                        }
+                        true
                     })
                     .on_page_load(move |window, payload| {
                         if payload.event() != PageLoadEvent::Finished {
@@ -969,6 +1127,70 @@ mod tests {
         assert_eq!(normalize_wide_url("").unwrap(), "");
         assert!(normalize_wide_url("https://example.com/path").is_ok());
         assert!(normalize_wide_url("file:///c:/secret").is_err());
+    }
+
+    #[test]
+    fn uploader_popup_requires_the_current_origin_and_uploader_path() {
+        let current = "https://192.168.31.221:3001";
+        assert!(is_internal_uploader_url(
+            &Url::parse("https://192.168.31.221:3001/uploader/").unwrap(),
+            Some(current)
+        ));
+        assert!(is_internal_uploader_url(
+            &Url::parse("https://192.168.31.221:3001/subfolder/uploader/?from=client").unwrap(),
+            Some(current)
+        ));
+        assert!(!is_internal_uploader_url(
+            &Url::parse("https://example.com/uploader/").unwrap(),
+            Some(current)
+        ));
+        assert!(!is_internal_uploader_url(
+            &Url::parse("https://192.168.31.221:3001/help/").unwrap(),
+            Some(current)
+        ));
+    }
+
+    #[test]
+    fn ordinary_web_popups_are_external_browser_urls() {
+        assert!(is_external_browser_url(
+            &Url::parse("https://example.com/path").unwrap()
+        ));
+        assert!(is_external_browser_url(
+            &Url::parse("http://127.0.0.1/test").unwrap()
+        ));
+        assert!(!is_external_browser_url(
+            &Url::parse("file:///C:/secret.txt").unwrap()
+        ));
+        assert!(!is_external_browser_url(
+            &Url::parse("javascript:alert(1)").unwrap()
+        ));
+    }
+
+    #[test]
+    fn download_destination_falls_back_to_downloads_with_a_safe_name() {
+        let downloads = std::env::temp_dir().join("AXIVER-download-test");
+        let url = Url::parse("https://example.com/files/report%202026.pdf").unwrap();
+        let mut destination = PathBuf::new();
+        ensure_download_destination(Some(&downloads), &url, &mut destination);
+        assert_eq!(destination.parent(), Some(downloads.as_path()));
+        assert_eq!(
+            destination.file_name().and_then(|name| name.to_str()),
+            Some("report%202026.pdf")
+        );
+
+        let existing = downloads.join("already-selected.zip");
+        let mut selected = existing.clone();
+        ensure_download_destination(Some(&downloads), &url, &mut selected);
+        assert_eq!(selected, existing);
+
+        let mut relative = PathBuf::from("server-name.zip");
+        ensure_download_destination(Some(&downloads), &url, &mut relative);
+        assert_eq!(relative, downloads.join("server-name.zip"));
+
+        assert_eq!(
+            fallback_download_name(&Url::parse("https://example.com/").unwrap()),
+            "AXIVER-download"
+        );
     }
 
     #[test]
