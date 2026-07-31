@@ -155,6 +155,8 @@
   var adaptiveSleepLastStatus = null;
   var adaptiveSleepLastActivityPostAt = 0;
   var qqIdleBlurSeconds = sanitizeInt(getStoredValue("qq_idle_blur_seconds"), 600, 0, 1800);
+  var lanDiscoveryEnabled = sanitizeBool(getStoredValue("lan_discovery_enabled"), false);
+  var lanBroadcastName = sanitizeLanBroadcastName(getStoredValue("lan_broadcast_name"), "AXISNSBOX-000");
   var lastNotificationActivityReportAt = 0;
   var autoSplitEnabled = sanitizeBool(getStoredValue("auto_split_enabled"), false);
   var autoSplitStateLoaded = false;
@@ -2212,6 +2214,10 @@
       qqIdleBlurSeconds = 600;
     }
     setStoredValue("qq_idle_blur_seconds", qqIdleBlurSeconds);
+    lanDiscoveryEnabled = sanitizeBool(payload.lan_discovery_enabled, lanDiscoveryEnabled);
+    lanBroadcastName = sanitizeLanBroadcastName(payload.lan_broadcast_name, lanBroadcastName);
+    setStoredValue("lan_discovery_enabled", lanDiscoveryEnabled);
+    setStoredValue("lan_broadcast_name", lanBroadcastName);
   }
 
   function loadNotificationBridgeState() {
@@ -3097,6 +3103,13 @@
 
   function sanitizeDockPosition(value) {
     return String(value || "").toLowerCase() === "top" ? "top" : "bottom";
+  }
+
+  function sanitizeLanBroadcastName(value, fallbackValue) {
+    var candidate = String(value || "").trim().toUpperCase();
+    if (/^[A-Z0-9][A-Z0-9_-]{0,31}$/.test(candidate)) return candidate;
+    var fallback = String(fallbackValue || "AXISNSBOX-000").trim().toUpperCase();
+    return /^[A-Z0-9][A-Z0-9_-]{0,31}$/.test(fallback) ? fallback : "AXISNSBOX-000";
   }
 
   function clamp(value, minValue, maxValue) {
@@ -6034,7 +6047,7 @@
       '<details class="selkies-link-details">' +
       '<summary class="selkies-link-summary">' +
       '<span class="selkies-link-sidebar-title">\u5999\u5999\u5c0f\u5de5\u5177</span>' +
-      '<span class="selkies-link-summary-meta">\u901a\u77e5/\u526a\u677f</span>' +
+      '<span class="selkies-link-summary-meta">\u901a\u77e5/\u526a\u677f/\u5e7f\u64ad</span>' +
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
@@ -6043,6 +6056,8 @@
       '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
+      '<label class="selkies-tool-row"><span>\u5c40\u57df\u7f51\u5e7f\u64ad</span><input type="checkbox" data-debug-toggle="lan-discovery"></label>' +
+      '<label class="selkies-tool-row" data-debug-row="lan-broadcast-name"><span>\u5e7f\u64ad\u540d</span><input type="text" maxlength="32" spellcheck="false" autocomplete="off" placeholder="AXISNSBOX-000" data-debug-input="lan-broadcast-name"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
@@ -6077,7 +6092,8 @@
         ".selkies-tool-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 0;font-size:12px;color:#e2e8f0}" +
         ".selkies-tool-row input[type='checkbox']{accent-color:#38bdf8}" +
         ".selkies-tool-row[data-hidden='1']{display:none}" +
-        ".selkies-tool-row select{min-width:112px;height:26px;padding:0 8px;border-radius:8px;border:1px solid rgba(71,85,105,.92);background:#101826;color:#e2e8f0;font-size:12px}";
+        ".selkies-tool-row select,.selkies-tool-row input[type='text']{min-width:112px;width:132px;height:26px;padding:0 8px;border-radius:8px;border:1px solid rgba(71,85,105,.92);background:#101826;color:#e2e8f0;font-size:12px}" +
+        ".selkies-tool-row input[type='text']:focus{outline:none;border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.15)}";
       document.head.appendChild(style);
     }
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
@@ -6085,6 +6101,9 @@
     var autoSplitToggle = section.querySelector('[data-debug-toggle="auto-split"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var adaptiveSleepIdleSelect = section.querySelector('[data-debug-select="adaptive-sleep-idle-seconds"]');
+    var lanDiscoveryToggle = section.querySelector('[data-debug-toggle="lan-discovery"]');
+    var lanBroadcastNameRow = section.querySelector('[data-debug-row="lan-broadcast-name"]');
+    var lanBroadcastNameInput = section.querySelector('[data-debug-input="lan-broadcast-name"]');
     var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
     var bottomDockPositionSelect = section.querySelector('[data-debug-select="bottom-dock-position"]');
     var idleFocusRow = section.querySelector('[data-debug-row="idle-focus-seconds"]');
@@ -6104,6 +6123,15 @@
     if (adaptiveSleepIdleSelect) {
       adaptiveSleepIdleSelect.value = String(adaptiveSleepIdleSeconds);
       adaptiveSleepIdleSelect.disabled = !adaptiveSleepEnabled;
+    }
+    if (lanDiscoveryToggle) {
+      lanDiscoveryToggle.checked = !!lanDiscoveryEnabled;
+    }
+    if (lanBroadcastNameRow) {
+      lanBroadcastNameRow.setAttribute("data-hidden", lanDiscoveryEnabled ? "0" : "1");
+    }
+    if (lanBroadcastNameInput && document.activeElement !== lanBroadcastNameInput) {
+      lanBroadcastNameInput.value = lanBroadcastName;
     }
     if (bottomClipboardToggle) {
       bottomClipboardToggle.checked = !!bottomActionClipboardButtonsEnabled;
@@ -6277,6 +6305,92 @@
               expiresAt: Date.now() + 3600
             });
           });
+      });
+      section.querySelector('[data-debug-toggle="lan-discovery"]').addEventListener("change", function (event) {
+        var target = event && event.target;
+        var nextValue = !!(target && target.checked);
+        updateNotificationBridgeState({ lan_discovery_enabled: nextValue })
+          .then(function () {
+            setActivityTask("lan-discovery-setting", {
+              title: nextValue ? "\u5df2\u5f00\u542f\u5c40\u57df\u7f51\u5e7f\u64ad" : "\u5df2\u5173\u95ed\u5c40\u57df\u7f51\u5e7f\u64ad",
+              detail: nextValue
+                ? "\u5df2\u4f7f\u7528\u5e7f\u64ad\u540d " + lanBroadcastName + " \u53d1\u5e03 mDNS \u670d\u52a1\uff0c\u5ba2\u6237\u7aef\u53ef\u5728\u5c40\u57df\u7f51\u5185\u53d1\u73b0\u3002"
+                : "\u5c40\u57df\u7f51 mDNS \u670d\u52a1\u5c06\u88ab\u64a4\u9500\uff0c\u516c\u7f51\u8bbf\u95ee\u4e0d\u53d7\u5f71\u54cd\u3002",
+              kind: "success",
+              progress: 100,
+              indeterminate: false,
+              priority: 72,
+              expiresAt: Date.now() + 3600
+            });
+            renderDebugToolsSection();
+          })
+          .catch(function () {
+            lanDiscoveryEnabled = !nextValue;
+            setStoredValue("lan_discovery_enabled", lanDiscoveryEnabled);
+            if (target) target.checked = lanDiscoveryEnabled;
+            setActivityTask("lan-discovery-setting", {
+              title: "\u5c40\u57df\u7f51\u5e7f\u64ad\u8bbe\u7f6e\u5931\u8d25",
+              detail: "\u672a\u80fd\u66f4\u65b0\u540e\u7aef\u5e7f\u64ad\u72b6\u6001\uff0c\u8bbe\u7f6e\u5df2\u56de\u9000\u3002",
+              kind: "error",
+              progress: null,
+              indeterminate: true,
+              priority: 82,
+              expiresAt: Date.now() + 3600
+            });
+            renderDebugToolsSection();
+          });
+      });
+      section.querySelector('[data-debug-input="lan-broadcast-name"]').addEventListener("change", function (event) {
+        var target = event && event.target;
+        var rawValue = String((target && target.value) || "").trim().toUpperCase();
+        if (!/^[A-Z0-9][A-Z0-9_-]{0,31}$/.test(rawValue)) {
+          if (target) target.value = lanBroadcastName;
+          setActivityTask("lan-broadcast-name-setting", {
+            title: "\u5e7f\u64ad\u540d\u683c\u5f0f\u4e0d\u6b63\u786e",
+            detail: "\u8bf7\u4f7f\u7528 1-32 \u4f4d\u5927\u5199\u82f1\u6587\u3001\u6570\u5b57\u3001\u4e0b\u5212\u7ebf\u6216\u8fde\u5b57\u53f7\u3002",
+            kind: "warning",
+            progress: null,
+            indeterminate: true,
+            priority: 78,
+            expiresAt: Date.now() + 3600
+          });
+          return;
+        }
+        if (rawValue === lanBroadcastName) {
+          if (target) target.value = lanBroadcastName;
+          return;
+        }
+        updateNotificationBridgeState({ lan_broadcast_name: rawValue })
+          .then(function () {
+            if (target) target.value = lanBroadcastName;
+            setActivityTask("lan-broadcast-name-setting", {
+              title: "\u5df2\u66f4\u65b0\u5c40\u57df\u7f51\u5e7f\u64ad\u540d",
+              detail: "\u65b0\u5e7f\u64ad\u540d\u4e3a " + lanBroadcastName + "\uff0cmDNS \u670d\u52a1\u5c06\u81ea\u52a8\u91cd\u65b0\u53d1\u5e03\u3002",
+              kind: "success",
+              progress: 100,
+              indeterminate: false,
+              priority: 72,
+              expiresAt: Date.now() + 3200
+            });
+          })
+          .catch(function () {
+            if (target) target.value = lanBroadcastName;
+            setActivityTask("lan-broadcast-name-setting", {
+              title: "\u5e7f\u64ad\u540d\u66f4\u65b0\u5931\u8d25",
+              detail: "\u540e\u7aef\u672a\u63a5\u53d7\u65b0\u7684\u5e7f\u64ad\u540d\u3002",
+              kind: "error",
+              progress: null,
+              indeterminate: true,
+              priority: 82,
+              expiresAt: Date.now() + 3600
+            });
+          });
+      });
+      section.querySelector('[data-debug-input="lan-broadcast-name"]').addEventListener("keydown", function (event) {
+        if (event && event.key === "Enter") {
+          event.preventDefault();
+          event.target.blur();
+        }
       });
       section.querySelector('[data-debug-select="idle-focus-seconds"]').addEventListener("change", function (event) {
         var target = event && event.target;

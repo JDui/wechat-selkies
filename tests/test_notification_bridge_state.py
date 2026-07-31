@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest import mock
 
 
 BRIDGE_PATH = Path(__file__).resolve().parents[1] / "root" / "scripts" / "notification_bridge.py"
+sys.path.insert(0, str(BRIDGE_PATH.parent))
 
 
 class NotificationBridgeStateTests(unittest.TestCase):

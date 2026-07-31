@@ -41,7 +41,7 @@ RUN apt-get update -o Acquire::Retries=5 && \
     libfontconfig1 libdbus-1-3 libnss3 libx11-xcb1 python3-tk stalonetray xprintidle xdotool \
     pulseaudio pulseaudio-utils alsa-utils
 
-RUN pip install --no-cache-dir python-xlib pulsectl
+RUN pip install --no-cache-dir python-xlib pulsectl "zeroconf>=0.132,<1"
 
 # Install WeChat based on target architecture (resolve latest URL/version from official Linux WeChat page)
 RUN case "$TARGETPLATFORM" in \
@@ -221,6 +221,9 @@ ENV LOCAL_LINK_BRIDGE_LOG_PATH="/config/logs/local-link-bridge.log"
 ENV LOCAL_LINK_BRIDGE_LOG_MAX_BYTES="1048576"
 ENV SELKIES_LOCAL_LINK_LOG_PATH="/config/logs/local-link-open.log"
 ENV LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="10800"
+ENV SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED="false"
+ENV SELKIES_LAN_DISCOVERY_DEFAULT_NAME="AXISNSBOX-000"
+ENV SELKIES_LAN_DISCOVERY_STATUS_PATH="/config/state/lan-discovery-status.json"
 ENV ENABLE_STALONETRAY="false"
 ENV WATCHDOG_TRAY="false"
 ENV ENABLE_RIGHT_CLICK_SPLIT="true"
@@ -255,6 +258,8 @@ RUN sed -i 's/\r$//' \
     /scripts/session_auth_bridge.py \
     /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
+    /scripts/lan_discovery_common.py \
+    /scripts/lan_discovery_service.py \
     /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \
     /scripts/gio-wrapper.sh \
@@ -285,6 +290,8 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /scripts/session_auth_bridge.py \
     /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
+    /scripts/lan_discovery_common.py \
+    /scripts/lan_discovery_service.py \
     /scripts/local-link-open-helper.sh \
     /scripts/local_link_bridge.py \
     /scripts/gio-wrapper.sh \
