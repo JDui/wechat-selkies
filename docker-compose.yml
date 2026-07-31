@@ -71,6 +71,7 @@ services:
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
+      - SELKIES_AUTO_SPLIT=false
       - QQ_NICE_LEVEL=-2
       - QQ_WATCHDOG_HANG_DETECT=true
       - QQ_WATCHDOG_FAIL_THRESHOLD=3

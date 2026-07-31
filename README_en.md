@@ -274,6 +274,7 @@ Configure the following environment variables in `docker-compose.yml`:
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `3600` | Default standby seconds for Adaptive Sleep. Valid UI/runtime values: `60`, `900`, `1800`, `2700`, `3600` |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | Adaptive sleep monitor polling interval |
+| `SELKIES_AUTO_SPLIT` | `false` | Initial Auto Split default; UI changes persist in `/config/state/notification-bridge.json` |
 | `SELKIES_CONTAINER_SLEEP` | `false` | Enable PIN-gated in-container sleep; compose enables it by default, but it only starts when `PASSWORD` is set |
 | `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | Legacy fallback only; the Adaptive Sleep UI now controls the active standby window |
 | `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | Startup grace period before in-container sleep can engage |

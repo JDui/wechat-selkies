@@ -156,6 +156,12 @@
   var adaptiveSleepLastActivityPostAt = 0;
   var qqIdleBlurSeconds = sanitizeInt(getStoredValue("qq_idle_blur_seconds"), 600, 0, 1800);
   var lastNotificationActivityReportAt = 0;
+  var autoSplitEnabled = sanitizeBool(getStoredValue("auto_split_enabled"), false);
+  var autoSplitStateLoaded = false;
+  var autoSplitEntryPending = true;
+  var autoSplitAppliedSessionKey = "";
+  var autoSplitTimer = null;
+  var autoSplitAttemptCount = 0;
   var bottomActionDockTimer = null;
   var bottomActionSplitOpen = false;
   var bottomActionDockCollapsed = sanitizeBool(getStoredValue("bottom_action_dock_collapsed"), false);
@@ -705,6 +711,7 @@
           if (WS_SESSION_EPOCH) window.sessionStorage.setItem("selkies_session_epoch", String(WS_SESSION_EPOCH));
         } catch (_storeErr) {}
         recordSessionClientNotification(WS_SESSION_ID, WS_SESSION_EPOCH);
+        scheduleAutoSplitForPinSession(1800);
         return true;
       })
       .catch(function () {
@@ -867,6 +874,7 @@
       activeDataSockets.push(ws);
       ws.addEventListener("open", function () {
         reportClientAwakeState();
+        scheduleAutoSplitForPinSession(1800);
         window.setTimeout(function () {
           requestServerAudio("socket-open");
         }, 600);
@@ -917,6 +925,62 @@
       } catch (_err) {}
     });
     return sent;
+  }
+
+  function scheduleAutoSplitForPinSession(delayMs) {
+    if (!autoSplitEntryPending || !autoSplitStateLoaded || !autoSplitEnabled) return;
+    if (!WS_SESSION_ID || !WS_SESSION_EPOCH) return;
+    var sessionKey = WS_SESSION_ID + "|" + String(WS_SESSION_EPOCH);
+    if (autoSplitAppliedSessionKey === sessionKey || autoSplitTimer) return;
+    if (autoSplitAttemptCount >= 40) {
+      autoSplitEntryPending = false;
+      return;
+    }
+    autoSplitTimer = window.setTimeout(function () {
+      autoSplitTimer = null;
+      if (!autoSplitEntryPending || !autoSplitEnabled || staleSessionHandled) return;
+      var currentSessionKey = WS_SESSION_ID + "|" + String(WS_SESSION_EPOCH);
+      if (currentSessionKey !== sessionKey) {
+        autoSplitAttemptCount = 0;
+        scheduleAutoSplitForPinSession(500);
+        return;
+      }
+      if (!hasOpenDataSocket()) {
+        autoSplitAttemptCount += 1;
+        scheduleAutoSplitForPinSession(500);
+        return;
+      }
+      var root = document.documentElement;
+      var pageWidth = Math.max(1, Number((root && root.clientWidth) || window.innerWidth) || 1);
+      var pageHeight = Math.max(1, Number((root && root.clientHeight) || window.innerHeight) || 1);
+      var landscape = pageWidth >= pageHeight;
+      var mode = landscape ? "lr" : "tb";
+      var activeSide = landscape ? "left" : "top";
+      var sent = sendRawDataCommand(
+        "cmd,python3 /scripts/window_tiler.py split --mode " + mode + " --active-side " + activeSide
+      );
+      if (!sent) {
+        autoSplitAttemptCount += 1;
+        scheduleAutoSplitForPinSession(500);
+        return;
+      }
+      autoSplitAppliedSessionKey = sessionKey;
+      autoSplitEntryPending = false;
+      setActivityTask("auto-split-session", {
+        title: landscape ? "\u5df2\u81ea\u52a8\u5de6\u53f3\u5206\u5c4f" : "\u5df2\u81ea\u52a8\u4e0a\u4e0b\u5206\u5c4f",
+        detail:
+          "\u5df2\u6839\u636e\u5f53\u524d\u9875\u9762 " +
+          Math.round(pageWidth) +
+          "\u00d7" +
+          Math.round(pageHeight) +
+          " \u7684\u5bbd\u9ad8\u6bd4\u5e94\u7528\u7a97\u53e3\u5e03\u5c40\u3002",
+        kind: "success",
+        progress: 100,
+        indeterminate: false,
+        priority: 72,
+        expiresAt: Date.now() + 2800
+      });
+    }, Math.max(0, Number(delayMs) || 0));
   }
 
   function getPrimaryOpenDataSocket() {
@@ -2128,6 +2192,16 @@
     var mode = String(payload.mode || "internal").toLowerCase();
     notificationPassthroughEnabled = mode === "passthrough";
     setStoredValue("notification_passthrough_enabled", notificationPassthroughEnabled);
+    autoSplitEnabled = sanitizeBool(payload.auto_split_enabled, autoSplitEnabled);
+    autoSplitStateLoaded = true;
+    setStoredValue("auto_split_enabled", autoSplitEnabled);
+    if (!autoSplitEnabled) {
+      autoSplitEntryPending = false;
+      if (autoSplitTimer) {
+        window.clearTimeout(autoSplitTimer);
+        autoSplitTimer = null;
+      }
+    }
     adaptiveSleepEnabled = sanitizeBool(payload.adaptive_sleep_enabled, adaptiveSleepEnabled);
     setStoredValue("adaptive_sleep_enabled", adaptiveSleepEnabled);
     adaptiveSleepIdleSeconds = sanitizeAdaptiveSleepIdleSeconds(payload.adaptive_sleep_idle_seconds || adaptiveSleepIdleSeconds);
@@ -2783,6 +2857,7 @@
     if (notificationPollTimer) return;
     reportFrontendInteractionState(true);
     loadNotificationBridgeState().finally(function () {
+      scheduleAutoSplitForPinSession(1800);
       syncUnreadDockState();
       renderDebugToolsSection();
     });
@@ -5965,6 +6040,7 @@
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
       '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
+      '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
@@ -6006,6 +6082,7 @@
     }
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
     var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
+    var autoSplitToggle = section.querySelector('[data-debug-toggle="auto-split"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var adaptiveSleepIdleSelect = section.querySelector('[data-debug-select="adaptive-sleep-idle-seconds"]');
     var bottomClipboardToggle = section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]');
@@ -6017,6 +6094,9 @@
     }
     if (notificationCenterToggle) {
       notificationCenterToggle.checked = !!notificationCenterEnabled;
+    }
+    if (autoSplitToggle) {
+      autoSplitToggle.checked = !!autoSplitEnabled;
     }
     if (adaptiveSleepToggle) {
       adaptiveSleepToggle.checked = !!adaptiveSleepEnabled;
@@ -6078,6 +6158,37 @@
           priority: 70,
           expiresAt: Date.now() + 2400
         });
+      });
+      section.querySelector('[data-debug-toggle="auto-split"]').addEventListener("change", function (event) {
+        var nextValue = !!(event && event.target && event.target.checked);
+        var target = event.target;
+        updateNotificationBridgeState({ auto_split_enabled: nextValue })
+          .then(function () {
+            setActivityTask("auto-split-setting", {
+              title: nextValue ? "\u5df2\u5f00\u542f\u81ea\u52a8\u5206\u5c4f" : "\u5df2\u5173\u95ed\u81ea\u52a8\u5206\u5c4f",
+              detail: nextValue
+                ? "\u4e0b\u6b21\u4ece PIN \u8fdb\u5165\u65f6\uff0c\u5bbd\u5c4f\u5c06\u81ea\u52a8\u5de6\u53f3\u5206\u5c4f\uff0c\u7ad6\u5c4f\u5c06\u81ea\u52a8\u4e0a\u4e0b\u5206\u5c4f\u3002"
+                : "\u4ece PIN \u8fdb\u5165\u540e\u5c06\u4fdd\u7559\u5f53\u524d\u7a97\u53e3\u5e03\u5c40\u3002",
+              kind: "success",
+              progress: 100,
+              indeterminate: false,
+              priority: 72,
+              expiresAt: Date.now() + 3200
+            });
+            renderDebugToolsSection();
+          })
+          .catch(function () {
+            target.checked = autoSplitEnabled;
+            setActivityTask("auto-split-setting", {
+              title: "\u81ea\u52a8\u5206\u5c4f\u8bbe\u7f6e\u5931\u8d25",
+              detail: "\u672a\u80fd\u5c06\u8bbe\u7f6e\u5199\u5165 /config \u6301\u4e45\u5316\u72b6\u6001\u3002",
+              kind: "error",
+              progress: null,
+              indeterminate: true,
+              priority: 82,
+              expiresAt: Date.now() + 3600
+            });
+          });
       });
       section.querySelector('[data-debug-select="bottom-dock-position"]').addEventListener("change", function (event) {
         bottomActionDockPosition = sanitizeDockPosition(event && event.target && event.target.value);

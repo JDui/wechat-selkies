@@ -64,6 +64,12 @@ ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = parse_int_env(
 )
 if ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS not in ADAPTIVE_SLEEP_IDLE_OPTIONS:
     ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = 3600
+AUTO_SPLIT_DEFAULT_ENABLED = os.getenv("SELKIES_AUTO_SPLIT", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 WECHAT_AUDIO_ENABLED = os.getenv("NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED", "true").strip().lower() in {
     "1",
     "true",
@@ -846,6 +852,7 @@ def default_mode_state():
     return {
         "mode": "internal",
         "idle_focus_seconds": IDLE_DEFOCUS_SECONDS,
+        "auto_split_enabled": AUTO_SPLIT_DEFAULT_ENABLED,
         "adaptive_sleep_enabled": False,
         "adaptive_sleep_idle_seconds": ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS,
         "adaptive_sleep_idle_seconds_user_set": False,
@@ -862,6 +869,10 @@ def _read_mode_state_unlocked():
         return state
     state["mode"] = sanitize_mode(payload.get("mode", state["mode"]))
     state["idle_focus_seconds"] = sanitize_idle_focus_seconds(payload.get("idle_focus_seconds", state["idle_focus_seconds"]))
+    state["auto_split_enabled"] = sanitize_bool(
+        payload.get("auto_split_enabled", state["auto_split_enabled"]),
+        state["auto_split_enabled"],
+    )
     state["adaptive_sleep_enabled"] = sanitize_bool(
         payload.get("adaptive_sleep_enabled", state["adaptive_sleep_enabled"]),
         state["adaptive_sleep_enabled"],
@@ -886,13 +897,21 @@ def read_mode_state():
         return dict(_read_mode_state_unlocked())
 
 
-def write_mode_state(mode=None, idle_focus_seconds=None, adaptive_sleep_enabled=None, adaptive_sleep_idle_seconds=None):
+def write_mode_state(
+    mode=None,
+    idle_focus_seconds=None,
+    auto_split_enabled=None,
+    adaptive_sleep_enabled=None,
+    adaptive_sleep_idle_seconds=None,
+):
     with MODE_LOCK:
         state = _read_mode_state_unlocked()
         if mode is not None:
             state["mode"] = sanitize_mode(mode)
         if idle_focus_seconds is not None:
             state["idle_focus_seconds"] = sanitize_idle_focus_seconds(idle_focus_seconds)
+        if auto_split_enabled is not None:
+            state["auto_split_enabled"] = sanitize_bool(auto_split_enabled, state["auto_split_enabled"])
         if adaptive_sleep_enabled is not None:
             state["adaptive_sleep_enabled"] = sanitize_bool(adaptive_sleep_enabled, state["adaptive_sleep_enabled"])
         if adaptive_sleep_idle_seconds is not None:
@@ -935,6 +954,7 @@ def current_state_payload():
         "ok": True,
         "mode": state["mode"],
         "idle_focus_seconds": int(state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0),
+        "auto_split_enabled": bool(state.get("auto_split_enabled", AUTO_SPLIT_DEFAULT_ENABLED)),
         "adaptive_sleep_enabled": bool(state.get("adaptive_sleep_enabled", False)),
         "adaptive_sleep_idle_seconds": sanitize_adaptive_sleep_idle_seconds(
             state.get("adaptive_sleep_idle_seconds", ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS)
@@ -1069,6 +1089,8 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
             apply_notification_mode(updated_state["mode"])
         if "idle_focus_seconds" in payload:
             updated_state = write_mode_state(idle_focus_seconds=payload.get("idle_focus_seconds"))
+        if "auto_split_enabled" in payload:
+            updated_state = write_mode_state(auto_split_enabled=payload.get("auto_split_enabled"))
         if "adaptive_sleep_enabled" in payload:
             updated_state = write_mode_state(adaptive_sleep_enabled=payload.get("adaptive_sleep_enabled"))
         if "adaptive_sleep_idle_seconds" in payload:
@@ -1078,6 +1100,9 @@ class NotificationBridgeHandler(BaseHTTPRequestHandler):
         if updated_state is not None:
             response["mode"] = updated_state["mode"]
             response["idle_focus_seconds"] = int(updated_state.get("idle_focus_seconds", IDLE_DEFOCUS_SECONDS) or 0)
+            response["auto_split_enabled"] = bool(
+                updated_state.get("auto_split_enabled", AUTO_SPLIT_DEFAULT_ENABLED)
+            )
             response["adaptive_sleep_enabled"] = bool(updated_state.get("adaptive_sleep_enabled", False))
             response["adaptive_sleep_idle_seconds"] = sanitize_adaptive_sleep_idle_seconds(
                 updated_state.get("adaptive_sleep_idle_seconds", ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS)
