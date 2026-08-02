@@ -929,6 +929,30 @@
     return sent;
   }
 
+  function selectAutoSplitLayout(pageWidth, pageHeight) {
+    var width = Math.max(1, Number(pageWidth) || 1);
+    var height = Math.max(1, Number(pageHeight) || 1);
+    if (width * 3 > height * 4) {
+      return {
+        mode: "lr",
+        activeSide: "left",
+        title: "\u5df2\u81ea\u52a8\u5de6\u53f3\u5206\u5c4f"
+      };
+    }
+    if (height * 3 > width * 4) {
+      return {
+        mode: "tb",
+        activeSide: "top",
+        title: "\u5df2\u81ea\u52a8\u4e0a\u4e0b\u5206\u5c4f"
+      };
+    }
+    return {
+      mode: "fullscreen",
+      activeSide: "left",
+      title: "\u5df2\u81ea\u52a8\u5168\u90e8\u5168\u5c4f"
+    };
+  }
+
   function scheduleAutoSplitForPinSession(delayMs) {
     if (!autoSplitEntryPending || !autoSplitStateLoaded || !autoSplitEnabled) return;
     if (!WS_SESSION_ID || !WS_SESSION_EPOCH) return;
@@ -955,11 +979,9 @@
       var root = document.documentElement;
       var pageWidth = Math.max(1, Number((root && root.clientWidth) || window.innerWidth) || 1);
       var pageHeight = Math.max(1, Number((root && root.clientHeight) || window.innerHeight) || 1);
-      var landscape = pageWidth >= pageHeight;
-      var mode = landscape ? "lr" : "tb";
-      var activeSide = landscape ? "left" : "top";
+      var layout = selectAutoSplitLayout(pageWidth, pageHeight);
       var sent = sendRawDataCommand(
-        "cmd,python3 /scripts/window_tiler.py split --mode " + mode + " --active-side " + activeSide
+        "cmd,python3 /scripts/window_tiler.py split --mode " + layout.mode + " --active-side " + layout.activeSide
       );
       if (!sent) {
         autoSplitAttemptCount += 1;
@@ -969,13 +991,13 @@
       autoSplitAppliedSessionKey = sessionKey;
       autoSplitEntryPending = false;
       setActivityTask("auto-split-session", {
-        title: landscape ? "\u5df2\u81ea\u52a8\u5de6\u53f3\u5206\u5c4f" : "\u5df2\u81ea\u52a8\u4e0a\u4e0b\u5206\u5c4f",
+        title: layout.title,
         detail:
           "\u5df2\u6839\u636e\u5f53\u524d\u9875\u9762 " +
           Math.round(pageWidth) +
           "\u00d7" +
           Math.round(pageHeight) +
-          " \u7684\u5bbd\u9ad8\u6bd4\u5e94\u7528\u7a97\u53e3\u5e03\u5c40\u3002",
+          " \u7684\u5bbd\u9ad8\u6bd4\u5e94\u7528\u7a97\u53e3\u5e03\u5c40\uff1a\u8d85\u8fc7 4:3 / 3:4 \u9608\u503c\u65f6\u5206\u5c4f\uff0c\u9608\u503c\u5185\u5168\u90e8\u5168\u5c4f\u3002",
         kind: "success",
         progress: 100,
         indeterminate: false,
@@ -6195,7 +6217,7 @@
             setActivityTask("auto-split-setting", {
               title: nextValue ? "\u5df2\u5f00\u542f\u81ea\u52a8\u5206\u5c4f" : "\u5df2\u5173\u95ed\u81ea\u52a8\u5206\u5c4f",
               detail: nextValue
-                ? "\u4e0b\u6b21\u4ece PIN \u8fdb\u5165\u65f6\uff0c\u5bbd\u5c4f\u5c06\u81ea\u52a8\u5de6\u53f3\u5206\u5c4f\uff0c\u7ad6\u5c4f\u5c06\u81ea\u52a8\u4e0a\u4e0b\u5206\u5c4f\u3002"
+                ? "\u4e0b\u6b21\u4ece PIN \u8fdb\u5165\u65f6\uff0c\u5bbd\u9ad8\u6bd4\u8d85\u8fc7 4:3 \u5de6\u53f3\u5206\u5c4f\uff0c\u4f4e\u4e8e 3:4 \u4e0a\u4e0b\u5206\u5c4f\uff0c\u9608\u503c\u5185\u5168\u90e8\u5168\u5c4f\u3002"
                 : "\u4ece PIN \u8fdb\u5165\u540e\u5c06\u4fdd\u7559\u5f53\u524d\u7a97\u53e3\u5e03\u5c40\u3002",
               kind: "success",
               progress: 100,

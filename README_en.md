@@ -40,7 +40,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **AMD GPU Support**: Prefer VAAPI hardware encoding via `/dev/dri` with automatic CPU fallback.
 - **Simplified PIN Login**: Password-only PIN page, no username field.
 - **Improved Image Copy/Paste**: Browser `Ctrl+V` image paste to remote clipboard with optional auto-paste into chat input.
-- **Auto Split Tooling**: Window right-click split plus floating split tool with three modes: left/right half, top/bottom half, and both fullscreen.
+- **Auto Split Tooling**: Window right-click split plus floating split controls; PIN-entry auto layout uses left/right above `4:3`, top/bottom below `3:4`, and fullscreen within the inclusive threshold range.
 - **Dynamic Throttle and Adaptive Sleep**: Idle browser sessions can switch to low bandwidth, low framerate, or low occupancy modes, while disconnected/non-receiving sessions can stop streaming work on the server.
 - **Notification Center**: A collapsible right-side center collects message, clipboard, system, tool, link, and client events while keeping stream bandwidth summaries out of the history list.
 - **LAN Discovery Broadcast**: Enable mDNS from `Miaomiao Toolbox`, choose a broadcast name, and let a desktop client prefer the discovered LAN address before falling back to the public URL.
@@ -275,7 +275,7 @@ Configure the following environment variables in `docker-compose.yml`:
 | `QQ_EXTRA_FLAGS` | `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer` | Extra QQ launch flags to reduce GPU-related hangs |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `3600` | Default standby seconds for Adaptive Sleep. Valid UI/runtime values: `60`, `900`, `1800`, `2700`, `3600` |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | Adaptive sleep monitor polling interval |
-| `SELKIES_AUTO_SPLIT` | `false` | Initial Auto Split default; UI changes persist in `/config/state/notification-bridge.json` |
+| `SELKIES_AUTO_SPLIT` | `false` | Initial Auto Split default; split outside the inclusive `3:4`–`4:3` range and fullscreen inside it; UI changes persist in `/config/state/notification-bridge.json` |
 | `SELKIES_CONTAINER_SLEEP` | `false` | Enable PIN-gated in-container sleep; compose enables it by default, but it only starts when `PASSWORD` is set |
 | `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | Legacy fallback only; the Adaptive Sleep UI now controls the active standby window |
 | `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | Startup grace period before in-container sleep can engage |

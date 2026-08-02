@@ -9,6 +9,16 @@ from unittest import mock
 
 
 BRIDGE_PATH = Path(__file__).resolve().parents[1] / "root" / "scripts" / "notification_bridge.py"
+RUNTIME_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "root"
+    / "usr"
+    / "share"
+    / "selkies"
+    / "selkies-dashboard"
+    / "src"
+    / "selkies-runtime-overrides.js"
+)
 sys.path.insert(0, str(BRIDGE_PATH.parent))
 
 
@@ -38,6 +48,14 @@ class NotificationBridgeStateTests(unittest.TestCase):
             self.assertTrue(updated["auto_split_enabled"])
             self.assertTrue(json.loads(state_path.read_text(encoding="utf-8"))["auto_split_enabled"])
             self.assertTrue(bridge.read_mode_state()["auto_split_enabled"])
+
+    def test_auto_split_uses_strict_four_to_three_thresholds(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("function selectAutoSplitLayout(pageWidth, pageHeight)", source)
+        self.assertIn("width * 3 > height * 4", source)
+        self.assertIn("height * 3 > width * 4", source)
+        self.assertIn('mode: "fullscreen"', source)
 
 
 if __name__ == "__main__":
