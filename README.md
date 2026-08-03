@@ -25,9 +25,9 @@
 - **左侧侧边栏修复**：恢复 Selkies 原生左侧抽屉按钮，避免误把全屏按钮、分屏按钮或底部 Dock 按钮识别成侧边栏按钮。
 - **快捷键**：`Alt + M` 打开 / 关闭左侧侧边栏。
 - **视频软恢复优先**：遇到卡流、疑似画面乱块、解码异常时，先重建视频流和编码 pipeline；连续失败后才执行 X11 重修复。
-- **底部快捷 Bar**：提供剪贴板、微信、QQ、分屏等常用入口，并支持折叠。
+- **底部快捷 Bar**：提供剪贴板、微信、QQ、分屏等常用入口，并支持折叠；收纳后只有三角按钮占用点击区域，其余位置可继续操作远程页面。
 - **分屏工具**：支持左右分屏、上下分屏、全部全屏等布局。
-- **自动分屏**：可在“妙妙小工具”中持久开启；每次从 PIN 进入后，宽高比超过 `4:3` 时左右分屏，低于 `3:4` 时上下分屏，阈值范围内（含边界）全部全屏。
+- **自动分屏**：可在“妙妙小工具”中持久开启；每次从 PIN 进入或点击浮动 Bar 的分屏按钮时，宽高比超过 `4:3` 会直接左右分屏，低于 `3:4` 会直接上下分屏，阈值范围内（含边界）直接全部全屏；关闭此选项时，浮动 Bar 的分屏按钮仍会弹出布局菜单。
 - **图片粘贴增强**：浏览器 `Ctrl + V` 可将图片写入远端剪贴板，并可自动粘贴到聊天输入框。
 - **按需剪贴板同步**：不再监听本机剪贴板；`Ctrl+C` / `Ctrl+X` 会先让远端应用复制/剪切，再收取远端剪贴板，`Ctrl+V` 会先把本机剪贴板写入远端再粘贴。远端剪贴板若由应用自身发生变化，也会自动收剪板，并在底部活动提示中显示进度、成功、无变化或失败状态。
 - **链接本地打开**：微信 / QQ 内点击链接时，浏览器侧显示确认卡片，可用本机浏览器打开并保留历史。
@@ -41,10 +41,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.49.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.5.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.49.tar
+docker load -i wechat-selkies-1.5.tar
 ```
 
 启动：
@@ -59,7 +59,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.49
+  wechat-selkies:1.5
 ```
 
 访问：
@@ -82,7 +82,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.49
+    image: wechat-selkies:1.5
     container_name: wechat-selkies
     init: true
     ports:
@@ -217,7 +217,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.49 \
+  wechat-selkies:1.5 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -273,13 +273,13 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.49 .
+docker build -t wechat-selkies:1.5 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.49.tar wechat-selkies:1.49
+docker save -o wechat-selkies-1.5.tar wechat-selkies:1.5
 ```
 
 ## 故障排查

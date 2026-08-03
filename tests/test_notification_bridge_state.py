@@ -57,6 +57,27 @@ class NotificationBridgeStateTests(unittest.TestCase):
         self.assertIn("height * 3 > width * 4", source)
         self.assertIn('mode: "fullscreen"', source)
 
+    def test_bottom_bar_split_button_runs_auto_layout_directly_when_enabled(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+        handler = source[source.index('if (action === "split-toggle")') :]
+        handler = handler[: handler.index('if (action === "split-lr")')]
+
+        self.assertIn("if (autoSplitEnabled)", handler)
+        self.assertIn("getCurrentPageSize()", handler)
+        self.assertIn("selectAutoSplitLayout(pageSize.width, pageSize.height)", handler)
+        self.assertIn('"python3 /scripts/window_tiler.py split --mode " + layout.mode', handler)
+        self.assertLess(handler.index("if (autoSplitEnabled)"), handler.index("setBottomActionSplitOpen(!bottomActionSplitOpen)"))
+
+    def test_collapsed_bottom_bar_only_keeps_toggle_hit_area(self):
+        source = RUNTIME_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("#selkies-bottom-action-dock-shell[data-collapsed='1']{width:30px;pointer-events:none}", source)
+        self.assertIn(
+            "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-dock-collapsed-toggle"
+            "{opacity:1;transform:translateX(-50%) translateY(0) scale(1);pointer-events:auto}",
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

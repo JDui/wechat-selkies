@@ -953,6 +953,14 @@
     };
   }
 
+  function getCurrentPageSize() {
+    var root = document.documentElement;
+    return {
+      width: Math.max(1, Number((root && root.clientWidth) || window.innerWidth) || 1),
+      height: Math.max(1, Number((root && root.clientHeight) || window.innerHeight) || 1)
+    };
+  }
+
   function scheduleAutoSplitForPinSession(delayMs) {
     if (!autoSplitEntryPending || !autoSplitStateLoaded || !autoSplitEnabled) return;
     if (!WS_SESSION_ID || !WS_SESSION_EPOCH) return;
@@ -976,9 +984,9 @@
         scheduleAutoSplitForPinSession(500);
         return;
       }
-      var root = document.documentElement;
-      var pageWidth = Math.max(1, Number((root && root.clientWidth) || window.innerWidth) || 1);
-      var pageHeight = Math.max(1, Number((root && root.clientHeight) || window.innerHeight) || 1);
+      var pageSize = getCurrentPageSize();
+      var pageWidth = pageSize.width;
+      var pageHeight = pageSize.height;
       var layout = selectAutoSplitLayout(pageWidth, pageHeight);
       var sent = sendRawDataCommand(
         "cmd,python3 /scripts/window_tiler.py split --mode " + layout.mode + " --active-side " + layout.activeSide
@@ -6517,6 +6525,7 @@
       "transition:opacity .22s ease,transform .22s ease}" +
       "#selkies-bottom-action-dock-shell[data-position='top']{top:0;bottom:auto;flex-direction:column-reverse}" +
       "#selkies-bottom-action-dock-shell[data-visible='1']{opacity:1;pointer-events:auto}" +
+      "#selkies-bottom-action-dock-shell[data-collapsed='1']{width:30px;pointer-events:none}" +
       "#selkies-bottom-split-popover{position:absolute;left:50%;bottom:calc(100% + 2px);transform:translateX(-50%) translateY(8px) scale(.96);" +
       "display:flex;flex-direction:column;gap:6px;min-width:164px;padding:8px;" +
       "border:1px solid rgba(51,65,85,.92);border-radius:14px;background:rgba(8,15,28,.92);backdrop-filter:blur(16px);" +
@@ -6691,6 +6700,21 @@
       return;
     }
     if (action === "split-toggle") {
+      if (autoSplitEnabled) {
+        var pageSize = getCurrentPageSize();
+        var layout = selectAutoSplitLayout(pageSize.width, pageSize.height);
+        setBottomActionSplitOpen(false);
+        runBottomDockRemoteCommand(
+          "python3 /scripts/window_tiler.py split --mode " + layout.mode + " --active-side " + layout.activeSide,
+          layout.title,
+          "\u5df2\u6839\u636e\u5f53\u524d\u9875\u9762 " +
+            Math.round(pageSize.width) +
+            "\u00d7" +
+            Math.round(pageSize.height) +
+            " \u7684\u5bbd\u9ad8\u6bd4\u76f4\u63a5\u5e94\u7528\u7a97\u53e3\u5e03\u5c40\u3002"
+        );
+        return;
+      }
       setBottomActionSplitOpen(!bottomActionSplitOpen);
       return;
     }

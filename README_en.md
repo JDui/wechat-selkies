@@ -40,7 +40,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - **AMD GPU Support**: Prefer VAAPI hardware encoding via `/dev/dri` with automatic CPU fallback.
 - **Simplified PIN Login**: Password-only PIN page, no username field.
 - **Improved Image Copy/Paste**: Browser `Ctrl+V` image paste to remote clipboard with optional auto-paste into chat input.
-- **Auto Split Tooling**: Window right-click split plus floating split controls; PIN-entry auto layout uses left/right above `4:3`, top/bottom below `3:4`, and fullscreen within the inclusive threshold range.
+- **Auto Split Tooling**: Window right-click split plus floating split controls; when Auto Split is enabled, both PIN entry and the floating Bar split button directly use left/right above `4:3`, top/bottom below `3:4`, and fullscreen within the inclusive threshold range. With Auto Split disabled, the split button opens the layout menu.
 - **Dynamic Throttle and Adaptive Sleep**: Idle browser sessions can switch to low bandwidth, low framerate, or low occupancy modes, while disconnected/non-receiving sessions can stop streaming work on the server.
 - **Notification Center**: A collapsible right-side center collects message, clipboard, system, tool, link, and client events while keeping stream bandwidth summaries out of the history list.
 - **LAN Discovery Broadcast**: Enable mDNS from `Miaomiao Toolbox`, choose a broadcast name, and let a desktop client prefer the discovered LAN address before falling back to the public URL.
@@ -61,7 +61,7 @@ This project packages the official WeChat/QQ Linux client in a Docker container,
 - A persistent bottom action bar is now built into the browser UI for the most frequent actions: send clipboard, focus WeChat, split windows, focus QQ, and receive clipboard.
 - It is integrated with unread flashing state, window focus controls, bidirectional clipboard sync, and the compact split popover.
 - The split entry keeps only the three high-frequency layouts, which makes the UI lighter and faster to use.
-- The bar can collapse into a single button and auto-restore later, making it practical on smaller screens or during focused reading.
+- The bar can collapse into a single button and auto-restore later; only that triangle button keeps a pointer hit area, so the hidden bar no longer blocks the remote page underneath.
 
 ### Passthrough Notifications
 
