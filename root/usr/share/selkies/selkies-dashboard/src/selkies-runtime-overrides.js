@@ -7728,6 +7728,157 @@
     syncStreamActivity();
   }
 
+  function installSecureContextAudioGuard() {
+    if (window.__selkiesSecureContextAudioGuardInstalled) return;
+    window.__selkiesSecureContextAudioGuardInstalled = true;
+
+    var guardRuntime = window.__SELKIES_RUNTIME__ || {};
+    var httpPort = sanitizeInt(guardRuntime.httpPort, 3000, 1, 65535);
+    var httpsPort = sanitizeInt(guardRuntime.httpsPort, 3001, 1, 65535);
+    var secureBanner = null;
+
+    function audioContextAvailable() {
+      return !!window.isSecureContext && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    }
+
+    function httpsUrlForCurrent() {
+      try {
+        var url = new URL(window.location.href);
+        if (url.protocol !== "http:") return "";
+        url.protocol = "https:";
+        if (String(url.port) === String(httpPort)) {
+          url.port = String(httpsPort);
+        } else if (!url.port) {
+          url.port = String(httpsPort);
+        }
+        return url.href;
+      } catch (_err) {
+        return "";
+      }
+    }
+
+    function removeSecureBanner() {
+      if (secureBanner && secureBanner.parentNode) {
+        secureBanner.parentNode.removeChild(secureBanner);
+      }
+      secureBanner = null;
+    }
+
+    function showSecureBanner(message, targetHref) {
+      if (secureBanner) {
+        var msgEl = secureBanner.querySelector("[data-selkies-secure-msg]");
+        if (msgEl) msgEl.textContent = message;
+        return;
+      }
+      var banner = document.createElement("div");
+      banner.setAttribute("data-selkies-secure-banner", "1");
+      banner.style.cssText = [
+        "position:fixed",
+        "top:14px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "z-index:2147483000",
+        "max-width:min(92vw,640px)",
+        "padding:12px 16px",
+        "border-radius:12px",
+        "border:1px solid rgba(251,191,36,.55)",
+        "background:rgba(30,24,8,.94)",
+        "color:#fde68a",
+        "font:13px/1.5 \"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif",
+        "box-shadow:0 12px 40px rgba(0,0,0,.45)",
+        "display:flex",
+        "align-items:center",
+        "gap:10px",
+        "flex-wrap:wrap",
+        "cursor:default"
+      ].join(";");
+      var text = document.createElement("span");
+      text.setAttribute("data-selkies-secure-msg", "1");
+      text.textContent = message;
+      text.style.flex = "1 1 auto";
+      banner.appendChild(text);
+      if (targetHref) {
+        var link = document.createElement("a");
+        link.href = targetHref;
+        link.textContent = "改用 HTTPS";
+        link.style.cssText = "color:#38bdf8;font-weight:700;text-decoration:underline;white-space:nowrap";
+        banner.appendChild(link);
+      }
+      var close = document.createElement("button");
+      close.textContent = "×";
+      close.setAttribute("aria-label", "关闭");
+      close.style.cssText = "background:none;border:none;color:#f59e0b;font-size:18px;line-height:1;cursor:pointer;padding:0 2px";
+      close.addEventListener("click", removeSecureBanner);
+      banner.appendChild(close);
+      document.body.appendChild(banner);
+      secureBanner = banner;
+    }
+
+    function showSecureToast(message) {
+      var toast = document.createElement("div");
+      toast.textContent = message;
+      toast.style.cssText = [
+        "position:fixed",
+        "bottom:26px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "z-index:2147483001",
+        "padding:10px 16px",
+        "border-radius:10px",
+        "background:rgba(15,23,42,.94)",
+        "color:#e2e8f0",
+        "border:1px solid rgba(148,163,184,.28)",
+        "font:13px/1.5 \"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif",
+        "box-shadow:0 10px 32px rgba(0,0,0,.4)"
+      ].join(";");
+      document.body.appendChild(toast);
+      setTimeout(function () {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 3500);
+    }
+
+    function handleInsecureMicRequest() {
+      var target = httpsUrlForCurrent();
+      if (target && target !== window.location.href) {
+        showSecureToast("麦克风/扬声器需要 HTTPS 安全上下文，正在切换到 HTTPS…");
+        setTimeout(function () {
+          window.location.replace(target);
+        }, 700);
+      } else {
+        showSecureBanner("当前页面不是安全上下文（HTTPS/localhost），浏览器会阻止麦克风与扬声器。请改用 HTTPS 访问。");
+      }
+    }
+
+    function maybeShowInsecureBanner() {
+      if (audioContextAvailable() || !document.body) return;
+      var reason = window.isSecureContext
+        ? "当前浏览器未暴露 navigator.mediaDevices，麦克风/扬声器不可用。"
+        : "当前通过 HTTP 访问（非安全上下文），浏览器禁止使用麦克风/扬声器。";
+      var httpsTarget = httpsUrlForCurrent();
+      showSecureBanner("⚠ " + reason, httpsTarget || "");
+    }
+
+    window.addEventListener(
+      "message",
+      function (event) {
+        var data = event && event.data;
+        if (!data || data.type !== "pipelineControl") return;
+        if (data.pipeline !== "microphone" || !data.enabled) return;
+        if (audioContextAvailable()) return;
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        handleInsecureMicRequest();
+      },
+      true
+    );
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", maybeShowInsecureBanner, { once: true });
+    } else {
+      maybeShowInsecureBanner();
+    }
+  }
+
+  installSecureContextAudioGuard();
   installForcedSelkiesDefaultsGuard();
   primeRuntimeStorageDefaults();
   if (enforcePinOnBrowserReload()) {

@@ -44,6 +44,8 @@ LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
 STANDALONE_UPLOAD_RAW="${SELKIES_UPLOAD_ENABLED:-true}"
 LEGACY_UPLOAD_RAW="${SELKIES_LEGACY_UPLOAD_ENABLED:-false}"
 DRI_NODE_PATH="${DRI_NODE:-/dev/dri/renderD128}"
+LAN_HTTP_PORT_RAW="${SELKIES_LAN_ADVERTISE_HTTP_PORT:-${CUSTOM_PORT:-3000}}"
+LAN_HTTPS_PORT_RAW="${SELKIES_LAN_ADVERTISE_HTTPS_PORT:-${CUSTOM_HTTPS_PORT:-3001}}"
 
 enabled_js="false"
 case "${ENABLED_RAW,,}" in
@@ -65,6 +67,16 @@ esac
 default_framerate="${DEFAULT_FRAMERATE_RAW}"
 if ! [[ "$default_framerate" =~ ^[0-9]+$ ]] || [ "$default_framerate" -lt 1 ] || [ "$default_framerate" -gt 240 ]; then
   default_framerate="48"
+fi
+
+lan_http_port="${LAN_HTTP_PORT_RAW}"
+if ! [[ "$lan_http_port" =~ ^[0-9]+$ ]] || [ "$lan_http_port" -lt 1 ] || [ "$lan_http_port" -gt 65535 ]; then
+  lan_http_port="3000"
+fi
+
+lan_https_port="${LAN_HTTPS_PORT_RAW}"
+if ! [[ "$lan_https_port" =~ ^[0-9]+$ ]] || [ "$lan_https_port" -lt 1 ] || [ "$lan_https_port" -gt 65535 ]; then
+  lan_https_port="3001"
 fi
 
 default_gamepad_js="false"
@@ -314,6 +326,8 @@ window.__SELKIES_RUNTIME__ = {
   audioWatchdog: ${default_audio_watchdog_js},
   audioStartIntervalMs: ${default_audio_start_interval_ms},
   audioPacketStallMs: ${default_audio_packet_stall_ms},
+  httpPort: ${lan_http_port},
+  httpsPort: ${lan_https_port},
   idleCleanupMinutes: ${default_idle_cleanup_minutes},
   adaptiveSleepIdleSeconds: ${default_adaptive_sleep_idle_seconds},
   localLinkOpenEnabled: ${local_link_open_js},
