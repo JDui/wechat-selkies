@@ -41,10 +41,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.52.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.53.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.52.tar
+docker load -i wechat-selkies-1.53.tar
 ```
 
 启动：
@@ -59,7 +59,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.52
+  wechat-selkies:1.53
 ```
 
 访问：
@@ -82,7 +82,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.52
+    image: wechat-selkies:1.53
     container_name: wechat-selkies
     init: true
     ports:
@@ -217,7 +217,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.52 \
+  wechat-selkies:1.53 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -273,13 +273,13 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.52 .
+docker build -t wechat-selkies:1.53 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.52.tar wechat-selkies:1.52
+docker save -o wechat-selkies-1.53.tar wechat-selkies:1.53
 ```
 
 ## 故障排查
