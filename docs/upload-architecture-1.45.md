@@ -21,7 +21,7 @@ The Python data WebSocket loop writes file payloads with synchronous `write`, `f
   -> atomic rename into the upload root
 ```
 
-The main Selkies page does not expose a separate uploader button. Its capture-phase bridge intercepts the existing Selkies file input only after the user selects files, prevents the legacy handler from reading them, opens the uploader window from that user gesture, and transfers the `File` objects over `BroadcastChannel`. The main page otherwise only consumes upload summaries; it does not read or slice file content. The legacy WebSocket upload wrapper is disabled by default and remains available through `SELKIES_LEGACY_UPLOAD_ENABLED=true`.
+The main Selkies page does not expose a separate uploader button. Its capture-phase bridge intercepts the existing Selkies file input only after the user selects files, prevents the legacy handler from reading them, opens the uploader window from that user gesture, and transfers the `File` objects over `BroadcastChannel`. Drag-and-drop is intercepted the same way: a document-level capture handler prevents the browser from navigating to the dropped file, stops the Selkies bundle's legacy data-channel drop handler from firing, and hands `dataTransfer.files` to the uploader window. The main page otherwise only consumes upload summaries; it does not read or slice file content. The legacy WebSocket upload wrapper is disabled by default and remains available through `SELKIES_LEGACY_UPLOAD_ENABLED=true`.
 
 ## API
 

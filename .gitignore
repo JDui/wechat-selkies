@@ -1,6 +1,7 @@
 /config/
 /dist/
 /diagnostics/
+/axiver-client/dist/
 **/__pycache__/
 **/target/
 *.tar
