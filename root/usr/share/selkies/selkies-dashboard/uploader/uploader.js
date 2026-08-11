@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var worker = new Worker("upload-worker.js");
+  var worker = new Worker("upload-worker.js?v=1.54");
   var channel = new BroadcastChannel("selkies-upload-v1");
   var tasks = new Map();
   var seenTransfers = new Set();
@@ -77,11 +77,16 @@
     fileInput.value = "";
   }
 
+  function announceReady() {
+    channel.postMessage({ type: "uploader-ready" });
+  }
+
   worker.onmessage = function (event) {
     var message = event.data || {};
     if (message.type === "ready") {
       serviceStatus.textContent = "上传服务可用";
       serviceStatus.className = "service-status ok";
+      announceReady();
       return;
     }
     if (message.type === "service-error") {
@@ -109,8 +114,6 @@
     addFiles(message.files);
     window.focus();
   };
-  channel.postMessage({ type: "uploader-ready" });
-
   dropZone.addEventListener("click", function () { fileInput.click(); });
   dropZone.addEventListener("keydown", function (event) {
     if (event.key === "Enter" || event.key === " ") {

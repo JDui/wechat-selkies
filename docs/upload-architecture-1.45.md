@@ -1,4 +1,4 @@
-# Standalone upload architecture (1.45)
+# Standalone upload architecture (1.54)
 
 ## Confirmed root causes
 
@@ -11,7 +11,7 @@ The Python data WebSocket loop writes file payloads with synchronous `write`, `f
 ## New data path
 
 ```text
-/uploader/ window
+/uploader/ iframe in an in-page floating panel
   -> Dedicated Worker
   -> HTTP PUT chunks
   -> nginx /upload-api/v1/
@@ -21,7 +21,9 @@ The Python data WebSocket loop writes file payloads with synchronous `write`, `f
   -> atomic rename into the upload root
 ```
 
-The main Selkies page does not expose a separate uploader button. Its capture-phase bridge intercepts the existing Selkies file input only after the user selects files, prevents the legacy handler from reading them, opens the uploader window from that user gesture, and transfers the `File` objects over `BroadcastChannel`. Drag-and-drop is intercepted the same way: a document-level capture handler prevents the browser from navigating to the dropped file, stops the Selkies bundle's legacy data-channel drop handler from firing, and hands `dataTransfer.files` to the uploader window. The main page otherwise only consumes upload summaries; it does not read or slice file content. The legacy WebSocket upload wrapper is disabled by default and remains available through `SELKIES_LEGACY_UPLOAD_ENABLED=true`.
+The main Selkies page's capture-phase bridge intercepts the existing Selkies file input only after the user selects files, prevents the legacy handler from reading them, shows a same-page floating panel containing `/uploader/`, and transfers the `File` objects over `BroadcastChannel`. Drag-and-drop is intercepted the same way: a document-level capture handler prevents the browser from navigating to the dropped file, stops the Selkies bundle's legacy data-channel drop handler from firing, and hands `dataTransfer.files` to the iframe. Closing the panel only hides it; the iframe, Worker, and queue are retained and the panel can be reopened from 【妙妙小工具】. The main page otherwise only consumes upload summaries; it does not read or slice file content.
+
+The persisted 【妙妙小工具】 switch `回退旧版上传工具` is off by default. While enabled, the bridge dynamically leaves `change` and file-drop events untouched so Selkies's native WebSocket path receives them. The runtime then installs the existing FileReader backpressure and WebSocket transport queue wrappers as a safety net. The floating-panel entry is disabled with an explanation until the switch is turned off.
 
 ## API
 
@@ -48,4 +50,4 @@ The old Python path records slow write duration plus total/max write and flush d
 
 ## Migration and rollback
 
-The default is `SELKIES_UPLOAD_ENABLED=true` and `SELKIES_LEGACY_UPLOAD_ENABLED=false`. To temporarily restore the old path, enable the legacy flag. To disable the sidecar entirely, disable standalone upload and enable the legacy flag together.
+The default is `SELKIES_UPLOAD_ENABLED=true` and `SELKIES_LEGACY_UPLOAD_ENABLED=false`. The page-level fallback switch is persisted separately and is intended for temporary rollback without changing container configuration. To disable the sidecar entirely, disable standalone upload and enable the legacy path together.

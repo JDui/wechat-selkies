@@ -173,7 +173,8 @@
   var managedFileTransfers = Object.create(null);
   var fileTransferSockets = typeof WeakMap === "function" ? new WeakMap() : null;
   var uploadTransportStates = [];
-  var LEGACY_UPLOAD_ENABLED = sanitizeBool(runtime.legacyUploadEnabled, false);
+  var legacyUploadFallbackEnabled = sanitizeBool(getStoredValue("legacy_upload_fallback_enabled"), false);
+  var LEGACY_UPLOAD_ENABLED = sanitizeBool(runtime.legacyUploadEnabled, false) || legacyUploadFallbackEnabled;
   var uploadDiagnostics = [];
   var uploadDiagnosticsFlushTimer = null;
   var uploadDiagnosticsSampleTimer = null;
@@ -3212,6 +3213,19 @@
     window.localStorage.setItem(storageKey(name), String(value));
   }
 
+  function applyLegacyUploadFallback(enabled) {
+    legacyUploadFallbackEnabled = !!enabled;
+    setStoredValue("legacy_upload_fallback_enabled", legacyUploadFallbackEnabled);
+    if (typeof window.__selkiesSetLegacyUploadFallback === "function") {
+      window.__selkiesSetLegacyUploadFallback(legacyUploadFallbackEnabled);
+    }
+    LEGACY_UPLOAD_ENABLED = sanitizeBool(runtime.legacyUploadEnabled, false) || legacyUploadFallbackEnabled;
+    if (legacyUploadFallbackEnabled) {
+      installFileUploadReadBackpressure();
+      installFileTransferTransportInterceptor();
+    }
+  }
+
   function setStoredDefault(name, value) {
     if (getStoredValue(name) === null) {
       setStoredValue(name, value);
@@ -6077,13 +6091,16 @@
       '<details class="selkies-link-details">' +
       '<summary class="selkies-link-summary">' +
       '<span class="selkies-link-sidebar-title">\u5999\u5999\u5c0f\u5de5\u5177</span>' +
-      '<span class="selkies-link-summary-meta">\u901a\u77e5/\u526a\u677f/\u5e7f\u64ad</span>' +
+      '<span class="selkies-link-summary-meta">\u901a\u77e5/\u526a\u677f/\u5e7f\u64ad/\u4e0a\u4f20</span>' +
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
       '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
+      '<label class="selkies-tool-row"><span>\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177</span><input type="checkbox" data-debug-toggle="legacy-upload-fallback"></label>' +
+      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="open-uploader">\u6253\u5f00\u4e0a\u4f20\u5de5\u5177</button>' +
+      '<div class="selkies-repair-note" data-debug-note="uploader-entry"></div>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
       '<label class="selkies-tool-row"><span>\u5c40\u57df\u7f51\u5e7f\u64ad</span><input type="checkbox" data-debug-toggle="lan-discovery"></label>' +
@@ -6116,6 +6133,7 @@
         ".selkies-repair-btn{appearance:none;border:1px solid #166534;background:linear-gradient(180deg,#166534,#14532d);color:#ecfdf5;border-radius:10px;padding:9px 10px;font-size:12px;font-weight:800;cursor:pointer;text-align:center}" +
         ".selkies-repair-btn:hover{filter:brightness(1.06)}" +
         ".selkies-repair-btn:active{transform:translateY(1px)}" +
+        ".selkies-repair-btn:disabled{opacity:.55;cursor:not-allowed;filter:none}" +
         ".selkies-repair-btn.secondary{border-color:#334155;background:linear-gradient(180deg,#172554,#111827);color:#e2e8f0}" +
         ".selkies-repair-btn.danger{border-color:#7f1d1d;background:linear-gradient(180deg,#dc2626,#991b1b);color:#fee2e2}" +
         ".selkies-repair-note{font-size:10px;line-height:1.5;color:#94a3b8}" +
@@ -6129,6 +6147,9 @@
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
     var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
     var autoSplitToggle = section.querySelector('[data-debug-toggle="auto-split"]');
+    var legacyUploadToggle = section.querySelector('[data-debug-toggle="legacy-upload-fallback"]');
+    var openUploaderButton = section.querySelector('[data-debug-action="open-uploader"]');
+    var uploaderEntryNote = section.querySelector('[data-debug-note="uploader-entry"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var adaptiveSleepIdleSelect = section.querySelector('[data-debug-select="adaptive-sleep-idle-seconds"]');
     var lanDiscoveryToggle = section.querySelector('[data-debug-toggle="lan-discovery"]');
@@ -6146,6 +6167,25 @@
     }
     if (autoSplitToggle) {
       autoSplitToggle.checked = !!autoSplitEnabled;
+    }
+    if (legacyUploadToggle) {
+      legacyUploadToggle.checked = !!legacyUploadFallbackEnabled;
+      legacyUploadToggle.disabled = window.__selkiesStandaloneUploadAvailable === false;
+    }
+    if (openUploaderButton) {
+      var uploaderAvailable = window.__selkiesStandaloneUploadAvailable !== false
+        && typeof window.__selkiesOpenUploaderPanel === "function";
+      var fallbackActive = !!legacyUploadFallbackEnabled;
+      openUploaderButton.disabled = !uploaderAvailable || fallbackActive;
+      openUploaderButton.textContent = fallbackActive ? "\u6253\u5f00\u4e0a\u4f20\u5de5\u5177\uff08\u56de\u9000\u5df2\u5f00\u542f\uff09" : "\u6253\u5f00\u4e0a\u4f20\u5de5\u5177";
+      openUploaderButton.title = fallbackActive
+        ? "\u5df2\u5f00\u542f\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177\uff1b\u8bf7\u5173\u95ed\u56de\u9000\u540e\u518d\u6253\u5f00\u72ec\u7acb\u4e0a\u4f20\u9762\u677f\u3002"
+        : uploaderAvailable ? "\u5728\u5f53\u524d\u9875\u9762\u6253\u5f00\u4e0a\u4f20\u6d6e\u7a97" : "\u5f53\u524d\u7248\u672c\u4e0d\u652f\u6301\u72ec\u7acb\u4e0a\u4f20\u9762\u677f";
+    }
+    if (uploaderEntryNote) {
+      uploaderEntryNote.textContent = legacyUploadFallbackEnabled
+        ? "\u56de\u9000\u5df2\u5f00\u542f\uff1a\u9009\u62e9\u6216\u62d6\u653e\u6587\u4ef6\u4f1a\u4ea4\u7ed9 Selkies \u539f\u751f WebSocket \u4e0a\u4f20\uff1b\u5173\u95ed\u56de\u9000\u540e\u53ef\u6253\u5f00\u72ec\u7acb\u6d6e\u7a97\u3002"
+        : "\u72ec\u7acb\u4e0a\u4f20\u5de5\u5177\u4f1a\u5728\u9875\u9762\u5185\u6253\u5f00\u6d6e\u7a97\uff1b\u5173\u95ed\u6d6e\u7a97\u4e0d\u4f1a\u4e2d\u65ad\u961f\u5217\uff0c\u53ef\u4ece\u8fd9\u91cc\u518d\u6b21\u6253\u5f00\u3002";
     }
     if (adaptiveSleepToggle) {
       adaptiveSleepToggle.checked = !!adaptiveSleepEnabled;
@@ -6184,6 +6224,34 @@
       section.querySelector("[data-debug-action='wechat-audio-test']").addEventListener("click", function () {
         triggerWechatAudioNotificationTest();
       });
+      section.querySelector("[data-debug-action='open-uploader']").addEventListener("click", function () {
+        if (legacyUploadFallbackEnabled) {
+          setActivityTask("standalone-uploader-entry", {
+            title: "\u72ec\u7acb\u4e0a\u4f20\u5de5\u5177\u6682\u4e0d\u53ef\u7528",
+            detail: "\u8bf7\u5148\u5173\u95ed\u201c\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177\u201d\uff0c\u518d\u4ece\u5999\u5999\u5c0f\u5de5\u5177\u6253\u5f00\u72ec\u7acb\u4e0a\u4f20\u6d6e\u7a97\u3002",
+            kind: "warning",
+            progress: null,
+            indeterminate: true,
+            priority: 78,
+            expiresAt: Date.now() + 3600
+          });
+          renderDebugToolsSection();
+          return;
+        }
+        if (typeof window.__selkiesOpenUploaderPanel === "function") {
+          window.__selkiesOpenUploaderPanel();
+          return;
+        }
+        setActivityTask("standalone-uploader-entry", {
+          title: "\u72ec\u7acb\u4e0a\u4f20\u5de5\u5177\u4e0d\u53ef\u7528",
+          detail: "\u5f53\u524d\u6d4f\u89c8\u5668\u6216\u670d\u52a1\u672a\u63d0\u4f9b BroadcastChannel\uff0c\u5df2\u4fdd\u7559\u65e7\u7248\u4e0a\u4f20\u94fe\u8def\u3002",
+          kind: "error",
+          progress: null,
+          indeterminate: true,
+          priority: 82,
+          expiresAt: Date.now() + 4200
+        });
+      });
       section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]').addEventListener("change", function (event) {
         bottomActionClipboardButtonsEnabled = !!(event && event.target && event.target.checked);
         setStoredValue("bottom_action_clipboard_buttons_enabled", bottomActionClipboardButtonsEnabled);
@@ -6200,6 +6268,22 @@
           priority: 70,
           expiresAt: Date.now() + 2600
         });
+      });
+      section.querySelector('[data-debug-toggle="legacy-upload-fallback"]').addEventListener("change", function (event) {
+        var nextValue = !!(event && event.target && event.target.checked);
+        applyLegacyUploadFallback(nextValue);
+        setActivityTask("legacy-upload-fallback-setting", {
+          title: nextValue ? "\u5df2\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177" : "\u5df2\u6062\u590d\u72ec\u7acb\u5206\u7247\u4e0a\u4f20",
+          detail: nextValue
+            ? "\u4e0b\u6b21\u9009\u62e9\u6216\u62d6\u653e\u6587\u4ef6\u5c06\u76f4\u63a5\u4f7f\u7528\u65e7 WebSocket \u4e0a\u4f20\u94fe\u8def\uff1b\u5df2\u5728\u8fdb\u884c\u7684\u72ec\u7acb\u4e0a\u4f20\u4e0d\u53d7\u5f71\u54cd\u3002"
+            : "\u4e0b\u6b21\u9009\u62e9\u6216\u62d6\u653e\u6587\u4ef6\u5c06\u6062\u590d\u4f7f\u7528\u72ec\u7acb HTTP \u5206\u7247\u4e0a\u4f20\u3002",
+          kind: nextValue ? "warning" : "success",
+          progress: 100,
+          indeterminate: false,
+          priority: 78,
+          expiresAt: Date.now() + 4200
+        });
+        renderDebugToolsSection();
       });
       section.querySelector('[data-debug-toggle="right-notification-center"]').addEventListener("change", function (event) {
         notificationCenterEnabled = !!(event && event.target && event.target.checked);
