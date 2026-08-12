@@ -39,7 +39,18 @@ class UploaderBridgeTests(unittest.TestCase):
         self.assertNotIn("var pendingTransfer = null", source)
 
         uploader_source = UPLOADER.read_text(encoding="utf-8")
-        self.assertIn('new Worker("upload-worker.js?v=1.54")', uploader_source)
+        self.assertIn('new Worker("upload-worker.js?v=1.55")', uploader_source)
+
+    def test_bridge_forwards_worker_diagnostics_and_deduplicates_task_states(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+
+        self.assertIn('message.type === "upload-diagnostic"', source)
+        self.assertIn('__selkiesRecordUploadDiagnostic("upload-worker-"', source)
+        self.assertIn("delete workerDiagnostic.event", source)
+        self.assertIn("workerDiagnostic.workerEvent", source)
+        self.assertIn("uploadTaskDiagnosticKeys", source)
+        self.assertIn('"upload-task-status"', source)
+        self.assertIn("MAX_UPLOAD_TASK_DIAGNOSTICS", source)
 
     def test_fallback_leaves_file_events_for_the_native_path(self):
         source = BRIDGE.read_text(encoding="utf-8")

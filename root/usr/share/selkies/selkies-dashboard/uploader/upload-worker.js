@@ -9,9 +9,33 @@ var tokenState = null;
 var schedulerRunning = false;
 var MAX_RETRIES = 4;
 var MAX_SESSION_RECOVERIES = 5;
+var CHUNK_REQUEST_TIMEOUT_MS = 45000;
+var DIAGNOSTIC_MAX_PATH_LENGTH = 180;
+var DIAGNOSTIC_MAX_MESSAGE_LENGTH = 240;
 
 function api(path) {
   return "../upload-api/v1/" + path;
+}
+
+function boundedString(value, maxLength) {
+  var text = String(value == null ? "" : value);
+  return text.length > maxLength ? text.slice(0, maxLength) + "..." : text;
+}
+
+function publishUploadDiagnostic(eventName, fields) {
+  var payload = Object.assign({
+    event: boundedString(eventName || "upload-worker", 48),
+    timestampMs: Date.now()
+  }, fields || {});
+  payload.path = boundedString(String(payload.path || "upload-api/v1" ).split("?")[0], DIAGNOSTIC_MAX_PATH_LENGTH);
+  if (payload.message != null) payload.message = boundedString(payload.message, DIAGNOSTIC_MAX_MESSAGE_LENGTH);
+  if (payload.errorMessage != null) payload.errorMessage = boundedString(payload.errorMessage, DIAGNOSTIC_MAX_MESSAGE_LENGTH);
+  if (payload.errorName != null) payload.errorName = boundedString(payload.errorName, 48);
+  if (payload.errorCode != null) payload.errorCode = boundedString(payload.errorCode, 64);
+  delete payload.authorization;
+  delete payload.token;
+  delete payload.headers;
+  channel.postMessage({ type: "upload-diagnostic", diagnostic: payload });
 }
 
 function openDatabase() {
@@ -135,6 +159,23 @@ async function refreshRemoteSession(task) {
   }
   if (!response.ok) throw await responseError(response);
   var remote = await response.json();
+  var currentServiceChunkSize = Number(tokenState && tokenState.chunk_size) || 0;
+  if (currentServiceChunkSize > 0
+      && Number(remote.chunk_size) > currentServiceChunkSize
+      && !task.sessionMigrationAttempted) {
+    task.sessionMigrationAttempted = true;
+    try {
+      await authorizedFetch(api("sessions/" + task.sessionId), { method: "DELETE" });
+    } catch (_) {}
+    task.sessionId = null;
+    task.sessionEpoch = 0;
+    task.chunkSize = 0;
+    task.uploadedBytes = 0;
+    task.uploadedChunks = [];
+    await saveTask(task);
+    publish(task);
+    return false;
+  }
   task.chunkSize = remote.chunk_size;
   task.uploadedBytes = remote.uploaded_bytes || 0;
   task.uploadedChunks = remote.uploaded_chunks || [];
@@ -157,6 +198,25 @@ async function responseError(response) {
   error.code = String(payload.error || payload.code || "");
   error.status = response.status;
   return error;
+}
+
+function isRetryableChunkStatus(status) {
+  return status === 401 || status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+}
+
+function isRetryableChunkError(error) {
+  if (!error) return false;
+  if (isStaleSessionError(error)) return false;
+  if (error.timeout === true || error.name === "TypeError" || error.name === "NetworkError") return true;
+  return isRetryableChunkStatus(Number(error.status) || 0);
+}
+
+function uploadErrorMessage(error) {
+  var status = Number(error && error.status) || 0;
+  if (status === 413) return "代理拒绝了上传分片（HTTP 413），请检查外网代理大小限制或启用【回退旧版上传工具】";
+  if (error && error.timeout) return "上传分片超时（45 秒），请检查外网代理或启用【回退旧版上传工具】";
+  if (isRetryableChunkError(error)) return "网络上传失败，请检查外网代理或启用【回退旧版上传工具】";
+  return String((error && error.message) || error || "上传失败");
 }
 
 function isStaleSessionError(error) {
@@ -196,7 +256,28 @@ async function uploadChunk(task, index) {
     if (task.status === "paused" || task.status === "cancelled") throw new DOMException("Aborted", "AbortError");
     if (task.staleSession) throw task.staleError || new Error("stale_session");
     var controller = new AbortController();
+    var timedOut = false;
+    var startedAt = Date.now();
+    var path = "upload-api/v1/sessions/{session}/chunks/" + index;
+    var chunkBytes = Math.max(0, end - start);
     task.controllers.add(controller);
+    var timeoutId = null;
+    var timeoutCleared = false;
+    function clearChunkTimeout() {
+      if (timeoutCleared) return;
+      timeoutCleared = true;
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, CHUNK_REQUEST_TIMEOUT_MS);
+    publishUploadDiagnostic("upload-chunk-attempt", {
+      path: path,
+      chunkIndex: index,
+      chunkBytes: chunkBytes,
+      attempt: attempt + 1
+    });
     try {
       var response = await authorizedFetch(api("sessions/" + task.sessionId + "/chunks/" + index), {
         method: "PUT",
@@ -206,29 +287,85 @@ async function uploadChunk(task, index) {
       });
       if (!response.ok) throw await responseError(response);
       var remote = await response.json();
+      // The server accepted the chunk; don't let a slow local IndexedDB write
+      // turn that successful PUT into a misleading timeout.
+      clearChunkTimeout();
       var previous = task.uploadedBytes;
       task.uploadedBytes = remote.uploaded_bytes;
       task.uploadedChunks = remote.uploaded_chunks;
       updateSpeed(task, task.uploadedBytes - previous);
       await saveTask(task);
       publish(task);
+      publishUploadDiagnostic("upload-chunk-success", {
+        path: path,
+        chunkIndex: index,
+        chunkBytes: chunkBytes,
+        attempt: attempt + 1,
+        durationMs: Date.now() - startedAt,
+        status: response.status
+      });
       return;
     } catch (error) {
-      if (error && error.name === "AbortError") throw error;
+      if (timedOut) {
+        error = new Error("chunk request timed out");
+        error.name = "TimeoutError";
+        error.timeout = true;
+      }
+      if (error && error.name === "AbortError") {
+        if (task.staleSession) throw task.staleError || error;
+        throw error;
+      }
       if (isStaleSessionError(error)) {
         // Stop every in-flight/queued runner as soon as one request proves the
         // session stale.  uploadMissingChunks still all-settles those runners
         // before runTask creates a replacement session.
         task.staleSession = true;
         task.staleError = error;
+        publishUploadDiagnostic("upload-chunk-failure", {
+          path: path,
+          chunkIndex: index,
+          chunkBytes: chunkBytes,
+          attempt: attempt + 1,
+          durationMs: Date.now() - startedAt,
+          status: Number(error && error.status) || 0,
+          errorCode: error && error.code || "stale_session",
+          errorName: error && error.name || "Error",
+          errorMessage: error && error.message || "stale_session",
+          timeout: false
+        });
         task.controllers.forEach(function (controller) { controller.abort(); });
         throw error;
       }
+      var retryable = isRetryableChunkError(error);
       attempt += 1;
-      if (attempt >= MAX_RETRIES) throw error;
+      publishUploadDiagnostic("upload-chunk-failure", {
+        path: path,
+        chunkIndex: index,
+        chunkBytes: chunkBytes,
+        attempt: attempt,
+        durationMs: Date.now() - startedAt,
+        status: Number(error && error.status) || 0,
+        errorCode: error && error.code || "",
+        errorName: error && error.name || "Error",
+        errorMessage: error && error.message || "",
+        timeout: !!(error && error.timeout)
+      });
+      if (!retryable || attempt >= MAX_RETRIES) throw error;
       task.status = "retrying";
       task.error = "分片重试 " + attempt + "/" + MAX_RETRIES;
       publish(task);
+      publishUploadDiagnostic("upload-chunk-retry", {
+        path: path,
+        chunkIndex: index,
+        chunkBytes: chunkBytes,
+        attempt: attempt,
+        durationMs: Date.now() - startedAt,
+        status: Number(error && error.status) || 0,
+        errorCode: error && error.code || "",
+        errorName: error && error.name || "Error",
+        errorMessage: error && error.message || "",
+        timeout: !!(error && error.timeout)
+      });
       await sleep(Math.min(8000, 500 * Math.pow(2, attempt - 1)));
       if (task.status === "paused" || task.status === "cancelled") {
         throw new DOMException("Aborted", "AbortError");
@@ -236,6 +373,7 @@ async function uploadChunk(task, index) {
       task.status = "uploading";
       task.error = "";
     } finally {
+      clearChunkTimeout();
       task.controllers.delete(controller);
     }
   }
@@ -318,7 +456,7 @@ async function runTask(task) {
       task.status = "error";
       task.error = isStaleSessionError(error)
         ? "登录会话持续被其他客户端接管，请关闭其他页面后重试"
-        : String((error && error.message) || error || "上传失败");
+        : uploadErrorMessage(error);
       await saveTask(task);
       publish(task);
       return;
@@ -360,6 +498,7 @@ function makeTask(file, existing) {
     speedBytesPerSecond: 0,
     staleSession: false,
     staleError: null,
+    sessionMigrationAttempted: existing ? !!existing.sessionMigrationAttempted : false,
     controllers: new Set()
   };
 }

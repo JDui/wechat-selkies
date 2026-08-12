@@ -56,7 +56,7 @@ impl Config {
                 .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
                 .unwrap_or(default)
         };
-        let chunk_size = parse("SELKIES_UPLOAD_CHUNK_SIZE", "8388608")? as usize;
+        let chunk_size = parse("SELKIES_UPLOAD_CHUNK_SIZE", "524288")? as usize;
         if !(64 * 1024..=64 * 1024 * 1024).contains(&chunk_size) {
             return Err("SELKIES_UPLOAD_CHUNK_SIZE must be between 64 KiB and 64 MiB".into());
         }

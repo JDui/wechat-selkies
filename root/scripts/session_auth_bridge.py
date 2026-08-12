@@ -40,7 +40,7 @@ UPLOAD_ENABLED = os.environ.get("SELKIES_UPLOAD_ENABLED", "true").strip().lower(
 UPLOAD_ROOT = os.environ.get("SELKIES_UPLOAD_DIR", os.environ.get("FILE_MANAGER_PATH", "/config/uploads"))
 UPLOAD_MAX_FILE_SIZE = int(os.environ.get("SELKIES_UPLOAD_MAX_FILE_SIZE", "2147483648"))
 UPLOAD_TOKEN_TTL_SECONDS = max(30, int(os.environ.get("SELKIES_UPLOAD_TOKEN_TTL_SECONDS", "300")))
-UPLOAD_CHUNK_SIZE = int(os.environ.get("SELKIES_UPLOAD_CHUNK_SIZE", "8388608"))
+UPLOAD_CHUNK_SIZE = int(os.environ.get("SELKIES_UPLOAD_CHUNK_SIZE", "524288"))
 UPLOAD_MAX_CONCURRENCY = int(os.environ.get("SELKIES_UPLOAD_MAX_CONCURRENCY", "3"))
 UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false").strip().lower() in (
     "1",

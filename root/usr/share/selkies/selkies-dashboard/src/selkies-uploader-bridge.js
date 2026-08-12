@@ -10,6 +10,8 @@
   var panelRoot = null;
   var panelFrame = null;
   var panelStyleInstalled = false;
+  var uploadTaskDiagnosticKeys = new Map();
+  var MAX_UPLOAD_TASK_DIAGNOSTICS = 160;
 
   // Keep this key algorithm in lockstep with selkies-runtime-overrides.js.  A
   // page can have several PIN/session origins in local development, so the
@@ -198,9 +200,36 @@
       }
       return;
     }
+    if (message.type === "upload-diagnostic" && message.diagnostic) {
+      if (typeof window.__selkiesRecordUploadDiagnostic === "function") {
+        var workerDiagnostic = Object.assign({}, message.diagnostic);
+        var workerEvent = String(workerDiagnostic.event || "event").slice(0, 48);
+        delete workerDiagnostic.event;
+        workerDiagnostic.workerEvent = workerEvent;
+        window.__selkiesRecordUploadDiagnostic("upload-worker-" + workerEvent, workerDiagnostic);
+      }
+      return;
+    }
     if (message.type !== "upload-summary" || !message.task) return;
     var summary = message.task;
     var status = summary.status;
+    var taskDiagnosticKey = String(summary.localId || "") + "|" + String(status || "") + "|" + String(summary.error || "");
+    if (uploadTaskDiagnosticKeys.get(summary.localId) !== taskDiagnosticKey) {
+      uploadTaskDiagnosticKeys.set(summary.localId, taskDiagnosticKey);
+      if (uploadTaskDiagnosticKeys.size > MAX_UPLOAD_TASK_DIAGNOSTICS) {
+        uploadTaskDiagnosticKeys.delete(uploadTaskDiagnosticKeys.keys().next().value);
+      }
+      if (typeof window.__selkiesRecordUploadDiagnostic === "function") {
+        window.__selkiesRecordUploadDiagnostic("upload-task-status", {
+          localId: String(summary.localId || "").slice(0, 120),
+          fileName: String(summary.fileName || "").slice(0, 180),
+          status: String(status || "").slice(0, 48),
+          error: String(summary.error || "").slice(0, 240),
+          uploadedBytes: Number(summary.uploadedBytes) || 0,
+          size: Number(summary.size) || 0
+        });
+      }
+    }
     var mapped = status === "complete" ? "done" : status === "error" ? "error" : "progress";
     window.postMessage({
       type: "fileUploadStatus",

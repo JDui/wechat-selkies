@@ -1,4 +1,4 @@
-# Standalone upload architecture (1.54)
+# Standalone upload architecture (1.55)
 
 ## Confirmed root causes
 
@@ -38,7 +38,7 @@ Every sidecar request requires a bearer token. Its signed claims bind session ID
 
 ## Memory, disk, and path boundaries
 
-The sidecar acquires a global semaphore before reading a request body. Each body is capped at the configured chunk size, so body memory is bounded by `chunk_size * max_concurrency` plus small protocol/session overhead.
+The sidecar acquires a global semaphore before reading a request body. The default body/chunk size is 512 KiB (configurable with `SELKIES_UPLOAD_CHUNK_SIZE`), so body memory is bounded by `chunk_size * max_concurrency` plus small protocol/session overhead. The browser also times out each chunk PUT after 45 seconds and records bounded, token-free attempt/retry/failure diagnostics.
 
 Targets must be relative paths made only from normal path components. Absolute paths, prefixes, `..`, NUL, symlink parents, and symlink targets are rejected. The configured upload root is canonicalized at startup, `.staging` is on the same filesystem, and completion uses an atomic rename. Optional subdirectory allowlists, maximum file size, and minimum remaining disk space are checked before session creation.
 
