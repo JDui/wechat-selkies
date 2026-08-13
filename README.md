@@ -41,10 +41,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.55.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.56.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.55.tar
+docker load -i wechat-selkies-1.56.tar
 ```
 
 启动：
@@ -59,7 +59,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.55
+  wechat-selkies:1.56
 ```
 
 访问：
@@ -82,7 +82,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.55
+    image: wechat-selkies:1.56
     container_name: wechat-selkies
     init: true
     ports:
@@ -180,14 +180,15 @@ services:
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | 启用 QQ 卡死检测 |
 | `QQ_WATCHDOG_FAIL_THRESHOLD` | `3` | QQ 连续检测失败后重启 |
 
-## 独立文件上传（1.55）
+## 独立文件上传（1.56）
 
-选择或拖放文件后，桥接层会阻止文件进入旧 WebSocket 链路，自动在当前页面打开 `/uploader/` 浮窗并交给新上传模块处理。浮窗关闭只会隐藏并保留 iframe、Worker 和队列，之后可从【妙妙小工具】的“打开上传工具”按钮重新打开。默认 512KiB 分片用于兼容常见外网代理的 1MiB 请求体限制，同时保留 `SELKIES_UPLOAD_CHUNK_SIZE` 覆盖能力。每个分片 PUT 有 45 秒超时，并按网络异常、408/425/429/5xx 等分类退避重试；最终失败会提示检查外网代理或启用【回退旧版上传工具】。Worker 会发送有界、去除 token 的 attempt/success/failure/retry 诊断。文件读取、分片、重试和速度统计运行在 Dedicated Worker 中，分片通过独立 HTTP sidecar 发送，不再进入 Selkies 主数据 WebSocket；刷新后需要重新选择同名、同大小文件以恢复本地 `File` 引用。若 PIN/session epoch 被其他客户端接管，旧任务会停止并发分片、废弃旧 session 后刷新 token 自动重建，连续接管达到上限时会给出明确提示。
+选择或拖放文件后，桥接层会阻止文件进入旧 WebSocket 链路，自动在当前页面打开 `/uploader/` 浮窗并交给新上传模块处理。浮窗关闭只会隐藏并保留 iframe、Worker 和队列，之后可通过侧边栏的“上传文件”按钮重新打开；关闭回退时该按钮使用独立上传面板，开启回退时则交给 Selkies 原生上传链路。默认 512KiB 分片用于兼容常见外网代理的 1MiB 请求体限制，同时保留 `SELKIES_UPLOAD_CHUNK_SIZE` 覆盖能力。每个分片 PUT 有 45 秒超时，并按网络异常、408/425/429/5xx 等分类退避重试；最终失败会提示检查外网代理或启用【回退旧版上传工具】。Worker 会发送有界、去除 token 的 attempt/success/failure/retry 诊断。文件读取、分片、重试和速度统计运行在 Dedicated Worker 中，分片通过独立 HTTP sidecar 发送，不再进入 Selkies 主数据 WebSocket；刷新后需要重新选择同名、同大小文件以恢复本地 `File` 引用。若 PIN/session epoch 被其他客户端接管，旧任务会停止并发分片、废弃旧 session 后刷新 token 自动重建，连续接管达到上限时会给出明确提示。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `SELKIES_UPLOAD_ENABLED` | `true` | 启用独立上传 sidecar，并自动接管原文件上传操作 |
 | `SELKIES_UPLOAD_DIR` | `/config/uploads` | 上传根目录及 `.staging` 所在目录 |
+| `SELKIES_DOWNLOAD_ROOT` | `/` | 下载文件浏览根目录；仅影响侧边栏下载，需保持 PIN 鉴权；`FILE_MANAGER_PATH` 仍用于旧版上传 |
 | `SELKIES_UPLOAD_MAX_FILE_SIZE` | `2147483648` | 单文件最大字节数 |
 | `SELKIES_UPLOAD_CHUNK_SIZE` | `524288` | HTTP 分片大小，范围 64 KiB–64 MiB；可按外网代理限制覆盖 |
 | `SELKIES_UPLOAD_MAX_CONCURRENCY` | `3` | sidecar 同时接收的最大分片数 |
@@ -199,7 +200,7 @@ services:
 | `SELKIES_UPLOAD_ALLOWED_SUBDIRS` | 空 | 可选的逗号分隔目标子目录白名单 |
 | `SELKIES_LEGACY_UPLOAD_ENABLED` | `false` | 启用旧 WebSocket 上传兼容包装 |
 
-“妙妙小工具”中的“回退旧版上传工具”开关默认关闭并持久化到当前页面。开启后，桥接层不会阻止 `change`/拖放事件，文件继续走 Selkies 原生 WebSocket 上传；同时按需安装旧链路的读取 backpressure 和传输队列包装。回退开启时独立上传浮窗入口会禁用，关闭开关后恢复 HTTP 分片上传。
+“妙妙小工具”中的“回退旧版上传工具”开关默认关闭并持久化到当前页面。开启后，桥接层不会阻止 `change`/拖放/侧边栏“上传文件”请求，文件继续走 Selkies 原生 WebSocket 上传；关闭后，侧边栏“上传文件”按钮打开当前页面的独立上传面板。同时按需安装旧链路的读取 backpressure 和传输队列包装。
 
 ## 局域网发现广播（1.48）
 
@@ -219,7 +220,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.55 \
+  wechat-selkies:1.56 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -275,13 +276,13 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.55 .
+docker build -t wechat-selkies:1.56 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.55.tar wechat-selkies:1.55
+docker save -o wechat-selkies-1.56.tar wechat-selkies:1.56
 ```
 
 ## 故障排查

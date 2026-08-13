@@ -16,6 +16,7 @@ CSLEEP="${SELKIES_CONTAINER_SLEEP_PORT:-38083}"
 CUPLOAD="${SELKIES_UPLOAD_PORT:-38084}"
 SFOLDER="${SUBFOLDER:-/}"
 FILE_MANAGER_PATH="${FILE_MANAGER_PATH:-$HOME/Desktop}"
+SELKIES_DOWNLOAD_ROOT="${SELKIES_DOWNLOAD_ROOT:-/}"
 DASHBOARD="${DASHBOARD:-selkies-dashboard}"
 SELKIES_FILE_TRANSFERS="${SELKIES_FILE_TRANSFERS:-upload,download}"
 HARDEN_DESKTOP="${HARDEN_DESKTOP:-false}"
@@ -35,8 +36,26 @@ normalize_subfolder() {
   echo "$folder"
 }
 
+normalize_download_root() {
+  local root="$1"
+  if [ -z "$root" ]; then
+    echo "/"
+    return
+  fi
+  if [[ "$root" != /* ]]; then
+    root="/$root"
+  fi
+  if [ "$root" != "/" ]; then
+    while [[ "$root" == */ ]]; do
+      root="${root%/}"
+    done
+    [ -n "$root" ] || root="/"
+  fi
+  echo "$root"
+}
+
 escape_sed_replacement() {
-  printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
+  printf '%s' "$1" | sed -e 's/[\/&|]/\\&/g'
 }
 
 escape_nginx_double_quoted() {
@@ -52,6 +71,11 @@ prepare_config_logs() {
 prepare_config_logs
 
 SFOLDER="$(normalize_subfolder "$SFOLDER")"
+SELKIES_DOWNLOAD_ROOT="$(normalize_download_root "$SELKIES_DOWNLOAD_ROOT")"
+DOWNLOAD_ALIAS_PATH="$SELKIES_DOWNLOAD_ROOT"
+if [ "$DOWNLOAD_ALIAS_PATH" != "/" ]; then
+  DOWNLOAD_ALIAS_PATH="${DOWNLOAD_ALIAS_PATH}/"
+fi
 PW_PREFIX="$SFOLDER"
 PW_COOKIE_PATH="$SFOLDER"
 PW_ENABLED="0"
@@ -86,7 +110,10 @@ sed -i "s/CAUTH/$CAUTH/g" "${NGINX_CONFIG}"
 sed -i "s/CSLEEP/$CSLEEP/g" "${NGINX_CONFIG}"
 sed -i "s/CUPLOAD/$CUPLOAD/g" "${NGINX_CONFIG}"
 sed -i "s|SUBFOLDER|$SFOLDER|g" "${NGINX_CONFIG}"
-sed -i "s|REPLACE_DOWNLOADS_PATH|$FILE_MANAGER_PATH|g" "${NGINX_CONFIG}"
+sed -i "s|REPLACE_DOWNLOADS_PATH|$(escape_sed_replacement "$DOWNLOAD_ALIAS_PATH")|g" "${NGINX_CONFIG}"
+if [ "$SELKIES_DOWNLOAD_ROOT" != "/" ]; then
+  s6-setuidgid abc mkdir -p "${SELKIES_DOWNLOAD_ROOT}"
+fi
 s6-setuidgid abc mkdir -p "${FILE_MANAGER_PATH}"
 if [[ $SELKIES_FILE_TRANSFERS != *"download"* ]] || [[ ${HARDEN_DESKTOP,,} == "true" ]]; then
   sed -i '/files {/,/^  }/d' "${NGINX_CONFIG}"
@@ -413,7 +440,7 @@ rm -Rf \
 cp -a \
   /usr/share/selkies/"$DASHBOARD" \
   /usr/share/selkies/web
-sed -i "s|REPLACE_DOWNLOADS_PATH|$FILE_MANAGER_PATH|g" /usr/share/selkies/web/nginx/footer.html
+sed -i "s|REPLACE_DOWNLOADS_PATH|$(escape_sed_replacement "$SELKIES_DOWNLOAD_ROOT")|g" /usr/share/selkies/web/nginx/footer.html
 cp \
   /usr/share/selkies/www/icon.png \
   /usr/share/selkies/web/favicon.ico

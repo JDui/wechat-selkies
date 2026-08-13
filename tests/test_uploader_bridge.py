@@ -39,7 +39,7 @@ class UploaderBridgeTests(unittest.TestCase):
         self.assertNotIn("var pendingTransfer = null", source)
 
         uploader_source = UPLOADER.read_text(encoding="utf-8")
-        self.assertIn('new Worker("upload-worker.js?v=1.55")', uploader_source)
+        self.assertIn('new Worker("upload-worker.js?v=1.56")', uploader_source)
 
     def test_bridge_forwards_worker_diagnostics_and_deduplicates_task_states(self):
         source = BRIDGE.read_text(encoding="utf-8")
@@ -60,6 +60,19 @@ class UploaderBridgeTests(unittest.TestCase):
         self.assertIn("__selkiesSetLegacyUploadFallback", source)
         self.assertIn("event.preventDefault()", source)
         self.assertIn("event.stopImmediatePropagation()", source)
+
+    def test_sidebar_request_is_intercepted_only_for_standalone_mode(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+
+        self.assertIn('window.addEventListener("requestFileUpload"', source)
+        self.assertIn("if (!shouldUseStandaloneUpload()) return;", source)
+        self.assertIn("window.__selkiesOpenUploaderPanel();", source)
+        self.assertIn("event.stopImmediatePropagation();", source)
+
+    def test_toolbox_has_no_duplicate_uploader_button(self):
+        source = (BRIDGE.parent / "selkies-runtime-overrides.js").read_text(encoding="utf-8")
+        self.assertNotIn('data-debug-action="open-uploader"', source)
+        self.assertNotIn('data-debug-note="uploader-entry"', source)
 
     def test_drag_drop_is_routed_to_the_standalone_uploader(self):
         source = BRIDGE.read_text(encoding="utf-8")

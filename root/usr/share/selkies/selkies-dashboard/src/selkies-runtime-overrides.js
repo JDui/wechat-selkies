@@ -1351,6 +1351,7 @@
 
   function setHighLoadState(active, source) {
     var key = String(source || "ui");
+    var wasBusy = Object.keys(highLoadStateMap).length > 0 || Date.now() < highLoadBusyUntil;
     if (active) {
       highLoadStateMap[key] = Date.now();
       highLoadBusyUntil = Math.max(highLoadBusyUntil, Date.now() + 16000);
@@ -1359,11 +1360,17 @@
       highLoadBusyUntil = Object.keys(highLoadStateMap).length ? Math.max(highLoadBusyUntil, Date.now() + 900) : 0;
     }
     updateTransportBusyTask();
-    sendRawDataCommand(["HIGH_LOAD_STATE", active ? "1" : "0", key].join(","));
+    var isBusy = Object.keys(highLoadStateMap).length > 0 || Date.now() < highLoadBusyUntil;
+    // Notify the server only when the aggregate state changes.  Progress
+    // updates for an existing source must not repeatedly prune the video queue.
+    if (wasBusy !== isBusy) {
+      sendRawDataCommand(["HIGH_LOAD_STATE", isBusy ? "1" : "0", "client aggregate"].join(","));
+    }
   }
 
   function clearAllHighLoadState(source) {
     var keys = Object.keys(highLoadStateMap);
+    var wasBusy = keys.length > 0 || Date.now() < highLoadBusyUntil;
     highLoadStateMap = Object.create(null);
     highLoadBusyUntil = 0;
     if (highLoadReleaseTimer) {
@@ -1371,10 +1378,9 @@
       highLoadReleaseTimer = null;
     }
     updateTransportBusyTask();
-    for (var i = 0; i < keys.length; i += 1) {
-      sendRawDataCommand(["HIGH_LOAD_STATE", "0", keys[i]].join(","));
+    if (wasBusy || keys.length) {
+      sendRawDataCommand(["HIGH_LOAD_STATE", "0", "client aggregate"].join(","));
     }
-    sendRawDataCommand(["HIGH_LOAD_STATE", "0", String(source || "repair-reset")].join(","));
   }
 
   function scheduleHighLoadRelease(source, delayMs) {
@@ -1727,7 +1733,7 @@
     style.id = "selkies-adaptive-sleep-style";
     style.textContent =
       "#selkies-adaptive-sleep-overlay{position:fixed;inset:0;z-index:10080;display:flex;align-items:center;justify-content:center;" +
-      "background:rgba(2,6,23,.28);opacity:0;pointer-events:none;transition:opacity .28s ease,background-color .6s linear;color:#e5eefb;" +
+      "background:rgba(2,6,23,.42);opacity:0;pointer-events:none;transition:opacity .28s ease;color:#e5eefb;" +
       "font-family:\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}" +
       "#selkies-adaptive-sleep-overlay[data-open='1']{opacity:1;pointer-events:auto}" +
       "#selkies-adaptive-sleep-panel{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;padding:0 24px;max-width:min(92vw,620px)}" +
@@ -1764,12 +1770,10 @@
     var warningSeconds = Math.max(1, Number(adaptiveSleepLastStatus.warning_seconds || 60));
     var remainingSeconds = Math.max(0, (deadlineAt - Date.now()) / 1000);
     var progress = clamp(((warningSeconds - remainingSeconds) / warningSeconds) * 100, 0, 100);
-    var alpha = 0.28 + (0.58 * progress / 100);
     var count = overlay.querySelector("#selkies-adaptive-sleep-count");
     var bar = overlay.querySelector("#selkies-adaptive-sleep-bar span");
     if (count) count.textContent = formatAdaptiveSleepRemaining(remainingSeconds);
     if (bar) bar.style.width = String(progress) + "%";
-    overlay.style.backgroundColor = "rgba(2, 6, 23, " + alpha.toFixed(3) + ")";
     if (remainingSeconds <= 0 && overlay.dataset.sleepRequested !== "1") {
       overlay.dataset.sleepRequested = "1";
       requestContainerSleepNow().finally(function () {
@@ -1792,7 +1796,7 @@
     overlay.setAttribute("data-open", "1");
     renderAdaptiveSleepOverlay();
     if (!adaptiveSleepOverlayTimer) {
-      adaptiveSleepOverlayTimer = window.setInterval(renderAdaptiveSleepOverlay, 500);
+      adaptiveSleepOverlayTimer = window.setInterval(renderAdaptiveSleepOverlay, 1000);
     }
   }
 
@@ -3399,7 +3403,7 @@
       "#selkies-activity-banner{position:fixed;top:14px;left:50%;transform:translateX(-50%) translateY(-18px) scale(.94);" +
       "display:flex;align-items:center;gap:12px;min-width:min(82vw,420px);max-width:min(92vw,620px);" +
       "padding:10px 14px;border-radius:999px;background:rgba(15,23,42,.88);border:1px solid rgba(96,165,250,.28);" +
-      "box-shadow:0 14px 34px rgba(2,6,23,.28);backdrop-filter:blur(10px);color:#e2e8f0;opacity:0;pointer-events:none;" +
+      "box-shadow:0 14px 34px rgba(2,6,23,.28);color:#e2e8f0;opacity:0;pointer-events:none;" +
       "transition:opacity .2s ease,transform .2s ease}" +
       "#selkies-activity-banner[data-open='1']{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0) scale(1)}" +
       ".selkies-activity-banner-pulse{width:10px;height:10px;border-radius:999px;background:#38bdf8;" +
@@ -3472,7 +3476,8 @@
   function setActivityTask(id, taskPatch) {
     if (!id) return;
     var now = Date.now();
-    var current = activityTasks[id] || {
+    var existing = activityTasks[id];
+    var current = existing || {
       id: id,
       title: "",
       detail: "",
@@ -3484,11 +3489,28 @@
       priority: 10,
       expiresAt: 0
     };
-    activityTasks[id] = Object.assign({}, current, taskPatch || {}, {
+    var next = Object.assign({}, current, taskPatch || {}, {
       id: id,
       updatedAt: now
     });
-    recordActivityNotificationHistory(id, activityTasks[id]);
+    var historySignature = [
+      String(next.title || ""),
+      String(next.phase || ""),
+      String(next.kind || "info"),
+      String(next.status || "")
+    ].join("|");
+    var meaningfulHistoryChange = !existing ||
+      String(current.title || "") !== String(next.title || "") ||
+      String(current.phase || "") !== String(next.phase || "") ||
+      String(current.kind || "info") !== String(next.kind || "info") ||
+      String(current.status || "") !== String(next.status || "") ||
+      ((Number(next.progress) >= 100 || next.kind === "success" || next.kind === "error") &&
+        next.__historySignature !== historySignature);
+    next.__historySignature = historySignature;
+    activityTasks[id] = next;
+    if (meaningfulHistoryChange && next.__historySignature !== (existing && existing.__historySignature)) {
+      recordActivityNotificationHistory(id, next);
+    }
     scheduleActivityRender();
   }
 
@@ -4535,6 +4557,10 @@
         completionTimer: null
       };
       managedFileTransfers[key] = state;
+      if (state.active && dynamicLatencyApplied) {
+        suppressDynamicLatency(6000);
+        restoreDynamicLatency();
+      }
       return state;
     }
 
@@ -4611,7 +4637,7 @@
           (totalBytes ? " (" + formatBytes(totalBytes) + ")" : "") +
           (isRecentlyInteractive(1800)
             ? "\uff0c\u68c0\u6d4b\u5230\u4ea4\u4e92\uff0c\u4e0a\u4f20\u6b63\u5728\u4e3a\u64cd\u4f5c\u54cd\u5e94\u8ba9\u51fa\u5e26\u5bbd\u3002"
-            : "\uff0c\u65e0\u4ea4\u4e92\u65f6\u53ef\u80fd\u8fdb\u5165\u4e0d\u6d3b\u8dc3\u9650\u5e27\u3002");
+            : "\uff0c\u540e\u53f0\u4e0a\u4f20\u7ee7\u7eed\uff0c\u4f46\u4e0d\u4f1a\u4e3b\u52a8\u8ba9\u89c6\u9891\u8fdb\u5165\u95f2\u7f6e\u9650\u5e27\u3002");
       }
 
       setActivityTask(taskId, {
@@ -4642,6 +4668,7 @@
       if (!payload || typeof payload !== "object") return;
       var name = String(payload.fileName || payload.name || "\u6587\u4ef6\u4f20\u8f93");
       var state = ensureManagedFileTransfer(name, payload.fileSize || payload.totalBytes, "upload");
+      if (payload.transport === "http-sidecar") state.transport = "http-sidecar";
       var totalBytes = Math.max(state.totalBytes || 0, Number(payload.fileSize || payload.totalBytes) || 0);
       var receivedBytes = Math.max(0, Number(payload.receivedBytes || payload.bytesReceived) || 0);
       cancelManagedTransferCompletion(state);
@@ -4653,7 +4680,7 @@
         state.active = true;
         state.status = "start";
         state.receivedBytes = 0;
-        setHighLoadState(true, "file upload");
+        if (state.transport !== "http-sidecar") setHighLoadState(true, "file upload");
         renderManagedFileTransfer(state);
         return;
       }
@@ -4661,7 +4688,7 @@
       if (payload.status === "progress") {
         state.active = true;
         state.status = "progress";
-        setHighLoadState(true, "file upload");
+        if (state.transport !== "http-sidecar") setHighLoadState(true, "file upload");
         renderManagedFileTransfer(state);
         return;
       }
@@ -5889,7 +5916,8 @@
     if (!lastVideoPipelineActive) return;
     if (!hasVisibleStreamSurface()) return;
     if (streamRecoveryInFlight || streamRecoveryStage > 0) return;
-    if (isTransportBusy() && !(window.__selkiesHasActiveFileTransfer && window.__selkiesHasActiveFileTransfer())) return;
+    if (isTransportBusy()) return;
+    if (window.__selkiesHasActiveFileTransfer && window.__selkiesHasActiveFileTransfer()) return;
     if (lastDynamicLatencyConfigSignature !== getDynamicLatencyConfigSignature(config)) {
       syncDynamicLatencySettingsToBackend();
     }
@@ -6099,8 +6127,6 @@
       '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
       '<label class="selkies-tool-row"><span>\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177</span><input type="checkbox" data-debug-toggle="legacy-upload-fallback"></label>' +
-      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="open-uploader">\u6253\u5f00\u4e0a\u4f20\u5de5\u5177</button>' +
-      '<div class="selkies-repair-note" data-debug-note="uploader-entry"></div>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
       '<label class="selkies-tool-row"><span>\u5c40\u57df\u7f51\u5e7f\u64ad</span><input type="checkbox" data-debug-toggle="lan-discovery"></label>' +
@@ -6148,8 +6174,6 @@
     var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
     var autoSplitToggle = section.querySelector('[data-debug-toggle="auto-split"]');
     var legacyUploadToggle = section.querySelector('[data-debug-toggle="legacy-upload-fallback"]');
-    var openUploaderButton = section.querySelector('[data-debug-action="open-uploader"]');
-    var uploaderEntryNote = section.querySelector('[data-debug-note="uploader-entry"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
     var adaptiveSleepIdleSelect = section.querySelector('[data-debug-select="adaptive-sleep-idle-seconds"]');
     var lanDiscoveryToggle = section.querySelector('[data-debug-toggle="lan-discovery"]');
@@ -6171,21 +6195,6 @@
     if (legacyUploadToggle) {
       legacyUploadToggle.checked = !!legacyUploadFallbackEnabled;
       legacyUploadToggle.disabled = window.__selkiesStandaloneUploadAvailable === false;
-    }
-    if (openUploaderButton) {
-      var uploaderAvailable = window.__selkiesStandaloneUploadAvailable !== false
-        && typeof window.__selkiesOpenUploaderPanel === "function";
-      var fallbackActive = !!legacyUploadFallbackEnabled;
-      openUploaderButton.disabled = !uploaderAvailable || fallbackActive;
-      openUploaderButton.textContent = fallbackActive ? "\u6253\u5f00\u4e0a\u4f20\u5de5\u5177\uff08\u56de\u9000\u5df2\u5f00\u542f\uff09" : "\u6253\u5f00\u4e0a\u4f20\u5de5\u5177";
-      openUploaderButton.title = fallbackActive
-        ? "\u5df2\u5f00\u542f\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177\uff1b\u8bf7\u5173\u95ed\u56de\u9000\u540e\u518d\u6253\u5f00\u72ec\u7acb\u4e0a\u4f20\u9762\u677f\u3002"
-        : uploaderAvailable ? "\u5728\u5f53\u524d\u9875\u9762\u6253\u5f00\u4e0a\u4f20\u6d6e\u7a97" : "\u5f53\u524d\u7248\u672c\u4e0d\u652f\u6301\u72ec\u7acb\u4e0a\u4f20\u9762\u677f";
-    }
-    if (uploaderEntryNote) {
-      uploaderEntryNote.textContent = legacyUploadFallbackEnabled
-        ? "\u56de\u9000\u5df2\u5f00\u542f\uff1a\u9009\u62e9\u6216\u62d6\u653e\u6587\u4ef6\u4f1a\u4ea4\u7ed9 Selkies \u539f\u751f WebSocket \u4e0a\u4f20\uff1b\u5173\u95ed\u56de\u9000\u540e\u53ef\u6253\u5f00\u72ec\u7acb\u6d6e\u7a97\u3002"
-        : "\u72ec\u7acb\u4e0a\u4f20\u5de5\u5177\u4f1a\u5728\u9875\u9762\u5185\u6253\u5f00\u6d6e\u7a97\uff1b\u5173\u95ed\u6d6e\u7a97\u4e0d\u4f1a\u4e2d\u65ad\u961f\u5217\uff0c\u53ef\u4ece\u8fd9\u91cc\u518d\u6b21\u6253\u5f00\u3002";
     }
     if (adaptiveSleepToggle) {
       adaptiveSleepToggle.checked = !!adaptiveSleepEnabled;
@@ -6223,34 +6232,6 @@
       });
       section.querySelector("[data-debug-action='wechat-audio-test']").addEventListener("click", function () {
         triggerWechatAudioNotificationTest();
-      });
-      section.querySelector("[data-debug-action='open-uploader']").addEventListener("click", function () {
-        if (legacyUploadFallbackEnabled) {
-          setActivityTask("standalone-uploader-entry", {
-            title: "\u72ec\u7acb\u4e0a\u4f20\u5de5\u5177\u6682\u4e0d\u53ef\u7528",
-            detail: "\u8bf7\u5148\u5173\u95ed\u201c\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177\u201d\uff0c\u518d\u4ece\u5999\u5999\u5c0f\u5de5\u5177\u6253\u5f00\u72ec\u7acb\u4e0a\u4f20\u6d6e\u7a97\u3002",
-            kind: "warning",
-            progress: null,
-            indeterminate: true,
-            priority: 78,
-            expiresAt: Date.now() + 3600
-          });
-          renderDebugToolsSection();
-          return;
-        }
-        if (typeof window.__selkiesOpenUploaderPanel === "function") {
-          window.__selkiesOpenUploaderPanel();
-          return;
-        }
-        setActivityTask("standalone-uploader-entry", {
-          title: "\u72ec\u7acb\u4e0a\u4f20\u5de5\u5177\u4e0d\u53ef\u7528",
-          detail: "\u5f53\u524d\u6d4f\u89c8\u5668\u6216\u670d\u52a1\u672a\u63d0\u4f9b BroadcastChannel\uff0c\u5df2\u4fdd\u7559\u65e7\u7248\u4e0a\u4f20\u94fe\u8def\u3002",
-          kind: "error",
-          progress: null,
-          indeterminate: true,
-          priority: 82,
-          expiresAt: Date.now() + 4200
-        });
       });
       section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]').addEventListener("change", function (event) {
         bottomActionClipboardButtonsEnabled = !!(event && event.target && event.target.checked);

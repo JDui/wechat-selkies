@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var worker = new Worker("upload-worker.js?v=1.55");
+  var worker = new Worker("upload-worker.js?v=1.56");
   var channel = new BroadcastChannel("selkies-upload-v1");
   var tasks = new Map();
   var seenTransfers = new Set();

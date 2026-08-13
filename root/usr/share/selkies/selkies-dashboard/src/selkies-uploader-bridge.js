@@ -81,7 +81,7 @@
     var style = document.createElement("style");
     style.id = "selkies-uploader-panel-style";
     style.textContent =
-      ".selkies-uploader-panel{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;background:rgba(2,6,23,.42);backdrop-filter:blur(2px)}" +
+      ".selkies-uploader-panel{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;background:rgba(2,6,23,.42)}" +
       ".selkies-uploader-panel[hidden]{display:none!important}" +
       ".selkies-uploader-panel-card{display:flex;flex-direction:column;width:min(760px,calc(100vw - 24px));height:min(720px,calc(100vh - 24px));min-height:360px;overflow:hidden;background:#0f172a;border:1px solid rgba(148,163,184,.42);border-radius:16px;box-shadow:0 24px 80px rgba(2,6,23,.58)}" +
       ".selkies-uploader-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:0 14px;background:linear-gradient(180deg,#172554,#0f172a);color:#e2e8f0;font:700 14px/1.2 system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}" +
@@ -161,6 +161,18 @@
   window.__selkiesLegacyUploadFallbackEnabled = legacyFallbackEnabled();
   window.__selkiesSetLegacyUploadFallback = setLegacyFallbackEnabled;
 
+  // The native sidebar dispatches this event before opening its hidden file
+  // input.  Capture it at the window boundary so standalone mode opens the
+  // in-page uploader directly; fallback/unavailable mode deliberately leaves
+  // the event untouched for Selkies' original handler.
+  window.addEventListener("requestFileUpload", function (event) {
+    if (!shouldUseStandaloneUpload()) return;
+    if (typeof window.__selkiesOpenUploaderPanel !== "function") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.__selkiesOpenUploaderPanel();
+  }, true);
+
   if (!standaloneUploadAvailable) return;
   var channel = new BroadcastChannel("selkies-upload-v1");
 
@@ -238,7 +250,8 @@
         fileName: summary.fileName,
         fileSize: summary.size,
         receivedBytes: summary.uploadedBytes,
-        message: summary.error || ""
+        message: summary.error || "",
+        transport: "http-sidecar"
       }
     }, window.location.origin);
   };
