@@ -41,10 +41,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.56.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.57.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.56.tar
+docker load -i wechat-selkies-1.57.tar
 ```
 
 启动：
@@ -59,7 +59,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.56
+  wechat-selkies:1.57
 ```
 
 访问：
@@ -82,7 +82,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.56
+    image: wechat-selkies:1.57
     container_name: wechat-selkies
     init: true
     ports:
@@ -180,7 +180,7 @@ services:
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | 启用 QQ 卡死检测 |
 | `QQ_WATCHDOG_FAIL_THRESHOLD` | `3` | QQ 连续检测失败后重启 |
 
-## 独立文件上传（1.56）
+## 独立文件上传（1.57）
 
 选择或拖放文件后，桥接层会阻止文件进入旧 WebSocket 链路，自动在当前页面打开 `/uploader/` 浮窗并交给新上传模块处理。浮窗关闭只会隐藏并保留 iframe、Worker 和队列，之后可通过侧边栏的“上传文件”按钮重新打开；关闭回退时该按钮使用独立上传面板，开启回退时则交给 Selkies 原生上传链路。默认 512KiB 分片用于兼容常见外网代理的 1MiB 请求体限制，同时保留 `SELKIES_UPLOAD_CHUNK_SIZE` 覆盖能力。每个分片 PUT 有 45 秒超时，并按网络异常、408/425/429/5xx 等分类退避重试；最终失败会提示检查外网代理或启用【回退旧版上传工具】。Worker 会发送有界、去除 token 的 attempt/success/failure/retry 诊断。文件读取、分片、重试和速度统计运行在 Dedicated Worker 中，分片通过独立 HTTP sidecar 发送，不再进入 Selkies 主数据 WebSocket；刷新后需要重新选择同名、同大小文件以恢复本地 `File` 引用。若 PIN/session epoch 被其他客户端接管，旧任务会停止并发分片、废弃旧 session 后刷新 token 自动重建，连续接管达到上限时会给出明确提示。
 
@@ -188,7 +188,7 @@ services:
 | --- | --- | --- |
 | `SELKIES_UPLOAD_ENABLED` | `true` | 启用独立上传 sidecar，并自动接管原文件上传操作 |
 | `SELKIES_UPLOAD_DIR` | `/config/uploads` | 上传根目录及 `.staging` 所在目录 |
-| `SELKIES_DOWNLOAD_ROOT` | `/` | 下载文件浏览根目录；仅影响侧边栏下载，需保持 PIN 鉴权；`FILE_MANAGER_PATH` 仍用于旧版上传 |
+| `SELKIES_DOWNLOAD_ROOT` | `/config` | 下载文件浏览根目录；默认仅浏览 `/config`，自定义绝对路径仍可用；`FILE_MANAGER_PATH` 仍用于旧版上传 |
 | `SELKIES_UPLOAD_MAX_FILE_SIZE` | `2147483648` | 单文件最大字节数 |
 | `SELKIES_UPLOAD_CHUNK_SIZE` | `524288` | HTTP 分片大小，范围 64 KiB–64 MiB；可按外网代理限制覆盖 |
 | `SELKIES_UPLOAD_MAX_CONCURRENCY` | `3` | sidecar 同时接收的最大分片数 |
@@ -220,7 +220,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.56 \
+  wechat-selkies:1.57 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -276,13 +276,13 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.56 .
+docker build -t wechat-selkies:1.57 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.56.tar wechat-selkies:1.56
+docker save -o wechat-selkies-1.57.tar wechat-selkies:1.57
 ```
 
 ## 故障排查

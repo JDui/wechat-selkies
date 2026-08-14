@@ -1,0 +1,67 @@
+<section class="download-browser-tools" id="download-browser-tools"
+  data-download-browser
+  data-download-root-b64="REPLACE_DOWNLOADS_PATH_B64"
+  data-download-prefix="SUBFOLDERfiles/">
+  <div class="download-browser-heading">
+    <strong>下载目录</strong>
+    <span class="download-browser-root" data-download-root-label></span>
+  </div>
+  <div class="download-browser-actions">
+    <a class="download-browser-link" data-download-root-link href="SUBFOLDERfiles/">回到下载根目录</a>
+    <button class="download-browser-button" data-download-favorite-toggle type="button">收藏当前目录</button>
+  </div>
+  <p class="download-browser-status" data-download-status role="status" aria-live="polite"></p>
+  <div class="download-browser-favorites" data-download-favorites hidden>
+    <div class="download-browser-favorites-title">已收藏目录</div>
+    <ul class="download-browser-favorites-list" data-download-favorites-list></ul>
+  </div>
+</section>
+<style>
+  .download-browser-tools {
+    box-sizing: border-box;
+    margin: 20px auto 12px;
+    max-width: 960px;
+    padding: 14px 16px;
+    border: 1px solid rgba(148, 163, 184, .22);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, .92);
+    color: #e2e8f0;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .download-browser-heading,
+  .download-browser-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+  }
+  .download-browser-heading { justify-content: space-between; }
+  .download-browser-root { color: #94a3b8; font-size: 12px; overflow-wrap: anywhere; }
+  .download-browser-actions { margin-top: 10px; }
+  .download-browser-link,
+  .download-browser-button,
+  .download-browser-remove {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 5px 10px;
+    border: 1px solid rgba(148, 163, 184, .34);
+    border-radius: 8px;
+    background: rgba(30, 41, 59, .86);
+    color: #e0f2fe;
+    font: inherit;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .download-browser-link:hover,
+  .download-browser-button:hover,
+  .download-browser-remove:hover { border-color: #38bdf8; background: rgba(14, 116, 144, .42); }
+  .download-browser-status { min-height: 1.5em; margin: 8px 0 0; color: #fbbf24; font-size: 12px; }
+  .download-browser-favorites { margin-top: 10px; }
+  .download-browser-favorites-title { color: #cbd5e1; font-weight: 600; }
+  .download-browser-favorites-list { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
+  .download-browser-favorite { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .download-browser-favorite-link { min-width: 0; overflow-wrap: anywhere; color: #bae6fd; }
+  .download-browser-remove { min-height: 25px; padding: 2px 7px; color: #fecdd3; font-size: 12px; }
+</style>
+<script src="SUBFOLDERnginx/download-browser.js?v=1.57" defer></script>

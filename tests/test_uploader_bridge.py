@@ -39,7 +39,7 @@ class UploaderBridgeTests(unittest.TestCase):
         self.assertNotIn("var pendingTransfer = null", source)
 
         uploader_source = UPLOADER.read_text(encoding="utf-8")
-        self.assertIn('new Worker("upload-worker.js?v=1.56")', uploader_source)
+        self.assertIn('new Worker("upload-worker.js?v=1.57")', uploader_source)
 
     def test_bridge_forwards_worker_diagnostics_and_deduplicates_task_states(self):
         source = BRIDGE.read_text(encoding="utf-8")

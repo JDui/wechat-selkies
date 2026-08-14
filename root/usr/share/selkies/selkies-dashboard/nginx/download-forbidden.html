@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>无法访问下载目录</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #e2e8f0; font: 16px/1.6 system-ui, sans-serif; }
+    main { width: min(92vw, 480px); padding: 28px; border: 1px solid #334155; border-radius: 16px; background: #1e293b; box-shadow: 0 20px 60px #02061799; }
+    h1 { margin: 0 0 10px; font-size: 22px; }
+    p { margin: 0 0 20px; color: #cbd5e1; }
+    nav { display: flex; flex-wrap: wrap; gap: 10px; }
+    a, button { padding: 9px 13px; border: 1px solid #475569; border-radius: 9px; background: #334155; color: #e0f2fe; font: inherit; text-decoration: none; cursor: pointer; }
+    a:hover, button:hover { border-color: #38bdf8; background: #0e7490; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>无法访问此下载目录</h1>
+    <p>目录不存在、不可读，或当前会话没有访问权限。请返回上一级后重试。</p>
+    <nav>
+      <button type="button" id="download-go-back">返回上一级</button>
+      <a href="SUBFOLDERfiles/">返回下载根目录</a>
+    </nav>
+  </main>
+  <script>
+    document.getElementById("download-go-back").addEventListener("click", function () {
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = "SUBFOLDERfiles/";
+      }
+    });
+  </script>
+</body>
+</html>
