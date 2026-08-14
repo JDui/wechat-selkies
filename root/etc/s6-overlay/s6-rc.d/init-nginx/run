@@ -20,6 +20,29 @@ SELKIES_DOWNLOAD_ROOT="${SELKIES_DOWNLOAD_ROOT:-/config}"
 DASHBOARD="${DASHBOARD:-selkies-dashboard}"
 SELKIES_FILE_TRANSFERS="${SELKIES_FILE_TRANSFERS:-upload,download}"
 HARDEN_DESKTOP="${HARDEN_DESKTOP:-false}"
+DOWNLOADS_ENABLED="false"
+
+if [[ $SELKIES_FILE_TRANSFERS == *"download"* ]] && [[ ${HARDEN_DESKTOP,,} != "true" ]]; then
+  DOWNLOADS_ENABLED="true"
+  if ! id -u abc >/dev/null 2>&1; then
+    echo "init-nginx: download access requires the abc user, but abc does not exist" >&2
+    exit 1
+  fi
+  NGINX_MAIN_CONFIG="/etc/nginx/nginx.conf"
+  if [ ! -f "$NGINX_MAIN_CONFIG" ]; then
+    echo "init-nginx: cannot patch nginx worker user; missing $NGINX_MAIN_CONFIG" >&2
+    exit 1
+  fi
+  if grep -Eq '^user[[:space:]]+[^;]+;' "$NGINX_MAIN_CONFIG"; then
+    sed -i -E '0,/^user[[:space:]]+[^;]+;/s//user abc;/' "$NGINX_MAIN_CONFIG"
+  else
+    sed -i '1i user abc;' "$NGINX_MAIN_CONFIG"
+  fi
+  if ! grep -Eq '^user[[:space:]]+abc[[:space:]]*;' "$NGINX_MAIN_CONFIG"; then
+    echo "init-nginx: failed to set nginx worker user to abc in $NGINX_MAIN_CONFIG" >&2
+    exit 1
+  fi
+fi
 
 normalize_subfolder() {
   local folder="$1"
@@ -116,8 +139,12 @@ if [ "$SELKIES_DOWNLOAD_ROOT" != "/" ]; then
   s6-setuidgid abc mkdir -p "${SELKIES_DOWNLOAD_ROOT}"
 fi
 s6-setuidgid abc mkdir -p "${FILE_MANAGER_PATH}"
-if [[ $SELKIES_FILE_TRANSFERS != *"download"* ]] || [[ ${HARDEN_DESKTOP,,} == "true" ]]; then
-  sed -i '/files {/,/^  }/d' "${NGINX_CONFIG}"
+if [ "$DOWNLOADS_ENABLED" != "true" ]; then
+  sed -i \
+    -e '/^[[:space:]]*location = .*files[[:space:]]*{/,/^[[:space:]]*}/d' \
+    -e '/^[[:space:]]*location = .*files\/ssl[[:space:]]*{/,/^[[:space:]]*}/d' \
+    -e '/^[[:space:]]*location .*files\/[[:space:]]*{/,/^[[:space:]]*}/d' \
+    "${NGINX_CONFIG}"
 fi
 if [ -n "${DISABLE_IPV6+x}" ]; then
   sed -i '/listen \[::\]/d' "${NGINX_CONFIG}"

@@ -11,10 +11,14 @@ class DownloadRootConfigTests(unittest.TestCase):
         self.assertEqual(source.count("alias REPLACE_DOWNLOADS_PATH;"), 2)
         self.assertEqual(source.count("location = SUBFOLDERfiles {"), 2)
         self.assertEqual(source.count("return 301 SUBFOLDERfiles/;"), 2)
+        self.assertEqual(source.count("location = SUBFOLDERfiles/ssl {"), 2)
+        self.assertEqual(source.count("location SUBFOLDERfiles/ssl/ {"), 2)
+        self.assertEqual(source.count("location SUBFOLDERfiles/. {"), 2)
+        self.assertEqual(source.count("return 403;"), 6)
         self.assertEqual(source.count("location SUBFOLDERfiles/ {"), 2)
         self.assertNotIn("location SUBFOLDERfiles {", source)
-        self.assertEqual(source.count("error_page 403 =403 SUBFOLDERnginx/download-forbidden.html;"), 2)
-        self.assertEqual(source.count("error_page 401 =200 PW_PREFIXauth/_pin_page;"), 2)
+        self.assertEqual(source.count("error_page 403 =403 SUBFOLDERnginx/download-forbidden.html;"), 8)
+        self.assertEqual(source.count("error_page 401 =200 PW_PREFIXauth/_pin_page;"), 8)
 
     def test_init_defaults_download_root_without_repurposing_upload_path(self):
         source = (ROOT / "root" / "etc" / "s6-overlay" / "s6-rc.d" / "init-nginx" / "run").read_text(encoding="utf-8")
@@ -31,6 +35,12 @@ class DownloadRootConfigTests(unittest.TestCase):
         self.assertIn('s6-setuidgid abc mkdir -p "${FILE_MANAGER_PATH}"', source)
         self.assertIn("REPLACE_DOWNLOADS_PATH_B64", source)
         self.assertIn("/usr/share/selkies/web/nginx/footer.html", source)
+        self.assertIn('DOWNLOADS_ENABLED="false"', source)
+        self.assertIn('if [[ $SELKIES_FILE_TRANSFERS == *"download"* ]] && [[ ${HARDEN_DESKTOP,,} != "true" ]]; then', source)
+        self.assertIn('id -u abc', source)
+        self.assertIn('NGINX_MAIN_CONFIG="/etc/nginx/nginx.conf"', source)
+        self.assertIn("user abc;", source)
+        self.assertNotRegex(source, r"(?:chmod|chown)[^\n]*xwechat_files")
 
     def test_browser_overlay_uses_safe_relative_favorites(self):
         footer = (ROOT / "root" / "usr" / "share" / "selkies" / "selkies-dashboard" / "nginx" / "footer.html").read_text(encoding="utf-8")
@@ -66,6 +76,10 @@ class DownloadRootConfigTests(unittest.TestCase):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("| `SELKIES_DOWNLOAD_ROOT` | `/config` |", readme)
+        self.assertIn("abc", readme)
+        self.assertIn("ssl", readme)
+        self.assertIn("根级隐藏目录", readme)
+        self.assertIn("PIN", readme)
         self.assertIn("SELKIES_DOWNLOAD_ROOT=${SELKIES_DOWNLOAD_ROOT:-/config}", compose)
         self.assertIn('ENV SELKIES_DOWNLOAD_ROOT="/config"', dockerfile)
 
