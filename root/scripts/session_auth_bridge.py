@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import time
+import threading
 import base64
 import urllib.error
 import urllib.request
@@ -48,6 +49,66 @@ UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false
     "yes",
     "on",
 )
+PREFERENCES_PATH = Path(os.environ.get("SELKIES_UI_PREFERENCES_PATH", "/config/state/ui-preferences.json"))
+PREFERENCES_LOCK = threading.Lock()
+TOOL_PREFERENCES = {
+    "notification_center_enabled", "legacy_upload_fallback_enabled",
+    "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
+    "bottom_action_dock_collapsed",
+}
+
+
+def read_preferences():
+    try:
+        payload = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except FileNotFoundError:
+        return {}
+
+
+def update_preferences(patch):
+    clean = {}
+    for key, value in patch.items():
+        if key in TOOL_PREFERENCES:
+            if key == "bottom_action_dock_position":
+                if value not in ("top", "bottom"):
+                    raise ValueError("Invalid dock position")
+                clean[key] = value
+            elif isinstance(value, bool) or value in ("true", "false"):
+                clean[key] = value is True or value == "true"
+            else:
+                raise ValueError("Invalid toggle")
+        elif key.startswith("download_favorites:") and len(key) <= 2048:
+            if not isinstance(value, list) or len(value) > 20:
+                raise ValueError("Invalid favorites")
+            entries = []
+            for item in value:
+                if not isinstance(item, dict):
+                    raise ValueError("Invalid favorite")
+                path, name = item.get("path"), item.get("name")
+                if (not isinstance(path, str) or len(path) > 4096 or
+                    path.startswith("/") or "\\" in path or "\x00" in path or
+                    (path and any(part in ("", ".", "..") for part in path.split("/"))) or
+                    not isinstance(name, str) or not name.strip() or len(name) > 80):
+                    raise ValueError("Invalid favorite path or name")
+                if not any(entry["path"] == path for entry in entries):
+                    entries.append({"path": path, "name": name.strip()})
+            clean[key] = entries
+        else:
+            raise ValueError("Unknown preference")
+    with PREFERENCES_LOCK:
+        state = read_preferences()
+        state.update(clean)
+        body = json.dumps(state, ensure_ascii=False)
+        if len(body.encode("utf-8")) > 262144:
+            raise ValueError("Preferences are too large")
+        PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = PREFERENCES_PATH.with_suffix(".tmp")
+        temporary.write_text(body, encoding="utf-8")
+        temporary.replace(PREFERENCES_PATH)
+        return state
+
+
 DIAGNOSTICS_LOG_PATH = Path(
     os.environ.get("SELKIES_UPLOAD_DIAGNOSTICS_LOG_PATH", "/config/logs/upload-diagnostics.jsonl")
 )
@@ -316,6 +377,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/preferences":
+            if not request_has_valid_session(self):
+                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False})
+                return
+            try:
+                self.send_json(HTTPStatus.OK, {"ok": True, "preferences": read_preferences()})
+            except (OSError, ValueError):
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False})
+            return
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"ok": True})
             return
@@ -356,6 +426,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/preferences":
+            if not request_has_valid_session(self):
+                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False})
+                return
+            patch = self.read_json_body()
+            if patch is None:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False})
+                return
+            try:
+                state = update_preferences(patch)
+                self.send_json(HTTPStatus.OK, {"ok": True, "preferences": state})
+            except ValueError:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False})
+            except OSError:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False})
+            return
         if path == "/upload-token":
             if not UPLOAD_ENABLED:
                 self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "disabled": True})

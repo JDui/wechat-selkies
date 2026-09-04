@@ -133,13 +133,14 @@ def read_sleep_mode_config():
     ):
         idle_seconds = 3600
     return {
+        "sleep_settings_updated_at": normalize_timestamp(payload.get("sleep_settings_updated_at")),
         "adaptive_sleep_enabled": mode_bool(payload.get("adaptive_sleep_enabled"), False),
         "adaptive_sleep_idle_seconds": idle_seconds,
     }
 
 
 def write_frontend_activity(ts=None):
-    timestamp = normalize_timestamp(ts, time.time()) or time.time()
+    timestamp = time.time()  # Browser clocks may differ by minutes or hours.
     try:
         FRONTEND_ACTIVITY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -211,9 +212,8 @@ def awake_clients_snapshot(now=None):
 
 
 def idle_reference(now, last_interaction_at):
-    if last_interaction_at > 0:
-        return max(last_interaction_at, started_at), "frontend-interaction"
-    return started_at, "manager-start"
+    settings_at = min(now, read_sleep_mode_config()["sleep_settings_updated_at"])
+    return max(last_interaction_at, started_at, settings_at), "server-activity-or-settings"
 
 
 def write_state(payload):
@@ -466,6 +466,7 @@ def leave_sleep(reason="pin"):
             "resumed_count": resumed,
         }
         write_state(payload)
+        write_frontend_activity()
         if pids:
             log(f"left internal sleep reason={reason} resumed={resumed}/{len(pids)}")
         return True
@@ -481,62 +482,63 @@ def monitor_loop():
     while True:
         time.sleep(CHECK_SECONDS)
         try:
-            config = read_sleep_mode_config()
-            adaptive_enabled = bool(config["adaptive_sleep_enabled"])
-            idle_seconds = int(config["adaptive_sleep_idle_seconds"])
-            if not is_feature_enabled() or not adaptive_enabled:
-                if read_state().get("sleeping"):
-                    leave_sleep("disabled")
-                clear_pending_sleep("disabled")
-                idle_since = 0.0
-                continue
-            state = read_state()
-            if state.get("sleeping"):
-                continue
-            now = time.time()
-            if now - started_at < STARTUP_GRACE_SECONDS:
-                clear_pending_sleep("startup grace")
-                idle_since = 0.0
-                continue
+            with state_lock:
+                config = read_sleep_mode_config()
+                adaptive_enabled = bool(config["adaptive_sleep_enabled"])
+                idle_seconds = int(config["adaptive_sleep_idle_seconds"])
+                if not is_feature_enabled() or not adaptive_enabled:
+                    if read_state().get("sleeping"):
+                        leave_sleep("disabled")
+                    clear_pending_sleep("disabled")
+                    idle_since = 0.0
+                    continue
+                state = read_state()
+                if state.get("sleeping"):
+                    continue
+                now = time.time()
+                if now - started_at < STARTUP_GRACE_SECONDS:
+                    clear_pending_sleep("startup grace")
+                    idle_since = 0.0
+                    continue
 
-            last_interaction_at = latest_frontend_interaction_at()
-            reference_at, reference_reason = idle_reference(now, last_interaction_at)
-            awake_state = awake_clients_snapshot(now)
-            pending_started_at = normalize_timestamp(state.get("warning_started_at"), 0.0)
-            if state.get("pending_sleep") and last_interaction_at > pending_started_at:
-                clear_pending_sleep("client interaction")
-                idle_since = 0.0
-                continue
+                last_interaction_at = latest_frontend_interaction_at()
+                reference_at, reference_reason = idle_reference(now, last_interaction_at)
+                awake_state = awake_clients_snapshot(now)
+                pending_started_at = normalize_timestamp(state.get("warning_started_at"), 0.0)
+                if state.get("pending_sleep") and last_interaction_at > pending_started_at:
+                    clear_pending_sleep("client interaction")
+                    idle_since = 0.0
+                    continue
 
-            idle_for = now - reference_at
-            if idle_for < idle_seconds:
-                clear_pending_sleep("client interaction")
-                idle_since = 0.0
-                continue
+                idle_for = now - reference_at
+                if idle_for < idle_seconds:
+                    clear_pending_sleep("client interaction")
+                    idle_since = 0.0
+                    continue
 
-            if state.get("pending_sleep") and not awake_state["any_awake"]:
-                log(
-                    "sleep warning skipped because no awake clients remain "
-                    f"idle_for={idle_for:.1f} reference={reference_reason}"
-                )
-                enter_sleep("idle timeout no awake clients")
-                continue
-
-            if not state.get("pending_sleep"):
-                if not awake_state["any_awake"]:
+                if state.get("pending_sleep") and not awake_state["any_awake"]:
                     log(
-                        "idle timeout reached with no awake clients "
+                        "sleep warning skipped because no awake clients remain "
                         f"idle_for={idle_for:.1f} reference={reference_reason}"
                     )
                     enter_sleep("idle timeout no awake clients")
                     continue
-                begin_pending_sleep(idle_seconds, last_interaction_at)
-                idle_since = now
-                continue
 
-            deadline_at = normalize_timestamp(state.get("warning_deadline_at"), 0.0)
-            if deadline_at > 0 and now >= deadline_at:
-                enter_sleep("idle interaction timeout")
+                if not state.get("pending_sleep"):
+                    if not awake_state["any_awake"]:
+                        log(
+                            "idle timeout reached with no awake clients "
+                            f"idle_for={idle_for:.1f} reference={reference_reason}"
+                        )
+                        enter_sleep("idle timeout no awake clients")
+                        continue
+                    begin_pending_sleep(idle_seconds, last_interaction_at)
+                    idle_since = now
+                    continue
+
+                deadline_at = normalize_timestamp(state.get("warning_deadline_at"), 0.0)
+                if deadline_at > 0 and now >= deadline_at:
+                    enter_sleep("idle interaction timeout")
         except Exception as exc:
             log(f"monitor error: {exc}")
 
@@ -574,10 +576,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
                 except Exception:
                     payload = {}
-            recorded_at = write_frontend_activity(
-                payload.get("ts") or payload.get("interaction_at") or payload.get("last_interaction_at") or time.time()
-            )
-            clear_pending_sleep("client interaction")
+            with state_lock:
+                recorded_at = write_frontend_activity()
+                clear_pending_sleep("client interaction")
             response = status_payload()
             response["recorded_interaction_at"] = recorded_at
             self.send_json(HTTPStatus.OK, response)

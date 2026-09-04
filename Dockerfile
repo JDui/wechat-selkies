@@ -181,7 +181,7 @@ ENV QQ_WATCHDOG_X11_TIMEOUT="2"
 ENV SELKIES_ENABLE_BINARY_CLIPBOARD="true"
 ENV SELKIES_PASTE_IMAGE="true"
 ENV SELKIES_ENCODER="x264enc,x264enc-striped,jpeg"
-ENV SELKIES_DEFAULT_FRAMERATE="48"
+ENV SELKIES_DEFAULT_FRAMERATE="30"
 ENV SELKIES_DISABLE_GAMEPAD="true"
 ENV SELKIES_DEFAULT_BINARY_CLIPBOARD="true"
 ENV SELKIES_DEFAULT_ENCODER="x264enc"
@@ -252,6 +252,7 @@ RUN sed -i 's/\r$//' \
     /defaults/menu.xml \
     /scripts/start.sh \
     /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run \
+    /etc/s6-overlay/s6-rc.d/svc-pulseaudio/type \
     /scripts/process-watchdog.sh \
     /scripts/ensure-audio-service.sh \
     /scripts/run-notification-bridge.sh \

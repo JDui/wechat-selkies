@@ -37,14 +37,22 @@
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
 
+## 1.59 更新
+
+- 默认帧率为 30 FPS，已有用户手动设置的帧率保持不变。
+- 待机从服务端最近收到的交互、唤醒或休眠设置变更开始计算；达到完整待机时长后再显示 60 秒确认倒计时，浏览器时钟差异不会提前触发休眠。
+- 优化视频数据拷贝与事件循环调度，将 GPU 状态查询移到工作线程，鼠标输入不再逐事件等待 X11 同步响应；H.264 队列溢出时重置采集与解码，避免丢失参考帧后持续卡画面。
+- 妙妙小工具的开关、位置、通知、广播和休眠设置持久保存到 `/config/state`，升级镜像时保留 `/config` 即可恢复；按钮触发的一次性测试不作为设置保存。
+- 下载窗口采用文件列表与快捷访问标签；收藏支持自定义名称，改名和删除位于标签的 `⋯` 菜单，收藏按下载根目录隔离并持久保存。旧浏览器收藏会在首次打开时迁移。
+
 ## 快速开始
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.57.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.59.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.57.tar
+docker load -i wechat-selkies-1.59.tar
 ```
 
 启动：
@@ -59,7 +67,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.57
+  wechat-selkies:1.59
 ```
 
 访问：
@@ -82,7 +90,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.57
+    image: wechat-selkies:1.59
     container_name: wechat-selkies
     init: true
     ports:
@@ -153,7 +161,7 @@ services:
 | `SELKIES_PASTE_IMAGE_AUTO_PASTE` | `true` | 写入远端剪贴板后自动 Ctrl+V |
 | `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | 可选编码器列表 |
 | `SELKIES_DEFAULT_ENCODER` | `x264enc` | 默认编码器；`x264enc` 优先 VAAPI，`x264enc-striped` 为 CPU 分片模式 |
-| `SELKIES_DEFAULT_FRAMERATE` | `48` | 默认帧率 |
+| `SELKIES_DEFAULT_FRAMERATE` | `30` | 默认帧率 |
 | `SELKIES_DEFAULT_USE_CPU` | `false` | 优先尝试硬件编码，失败时回退 CPU |
 | `SELKIES_DEFAULT_H264_STREAMING_MODE` | `true` | 默认开启 H264 streaming mode |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | 默认 H264 CRF |
@@ -222,7 +230,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.57 \
+  wechat-selkies:1.59 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -278,13 +286,13 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.57 .
+docker build -t wechat-selkies:1.59 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.57.tar wechat-selkies:1.57
+docker save -o wechat-selkies-1.59.tar wechat-selkies:1.59
 ```
 
 ## 故障排查

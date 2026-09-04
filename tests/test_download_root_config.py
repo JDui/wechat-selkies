@@ -47,7 +47,7 @@ class DownloadRootConfigTests(unittest.TestCase):
         browser = (ROOT / "root" / "usr" / "share" / "selkies" / "selkies-dashboard" / "nginx" / "download-browser.js").read_text(encoding="utf-8")
         self.assertIn('data-download-root-b64="REPLACE_DOWNLOADS_PATH_B64"', footer)
         self.assertIn('data-download-prefix="SUBFOLDERfiles/"', footer)
-        self.assertIn('src="SUBFOLDERnginx/download-browser.js?v=1.57"', footer)
+        self.assertIn('src="SUBFOLDERnginx/download-browser.js?v=1.59"', footer)
         self.assertIn("localStorage", browser)
         self.assertIn("MAX_FAVORITES = 20", browser)
         self.assertIn("normalizeRelativePath", browser)

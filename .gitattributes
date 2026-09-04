@@ -1,3 +1,4 @@
 *.sh text eol=lf
 root/etc/cont-init.d/* text eol=lf
 root/etc/s6-overlay/s6-rc.d/**/run text eol=lf
+root/etc/s6-overlay/s6-rc.d/**/type text eol=lf

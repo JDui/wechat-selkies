@@ -2,7 +2,7 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   driAvailable: false,
   preferredEncoder: "x264enc",
   encoderMode: "CPU",
-  defaultFramerate: 48,
+  defaultFramerate: 30,
   defaultUseCpu: false,
   defaultH264StreamingMode: true,
   defaultUsePaintOverQuality: false,

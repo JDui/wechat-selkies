@@ -1,67 +1,57 @@
 <section class="download-browser-tools" id="download-browser-tools"
-  data-download-browser
-  data-download-root-b64="REPLACE_DOWNLOADS_PATH_B64"
-  data-download-prefix="SUBFOLDERfiles/">
-  <div class="download-browser-heading">
-    <strong>下载目录</strong>
-    <span class="download-browser-root" data-download-root-label></span>
-  </div>
+  data-download-browser data-download-root-b64="REPLACE_DOWNLOADS_PATH_B64" data-download-prefix="SUBFOLDERfiles/">
   <div class="download-browser-actions">
-    <a class="download-browser-link" data-download-root-link href="SUBFOLDERfiles/">回到下载根目录</a>
-    <button class="download-browser-button" data-download-favorite-toggle type="button">收藏当前目录</button>
+    <a class="download-browser-link" data-download-root-link href="SUBFOLDERfiles/">⌂ 根目录</a>
+    <span class="download-browser-root" data-download-root-label></span>
+    <button class="download-browser-button" data-download-favorite-toggle type="button">☆ 收藏此文件夹</button>
   </div>
-  <p class="download-browser-status" data-download-status role="status" aria-live="polite"></p>
-  <div class="download-browser-favorites" data-download-favorites hidden>
-    <div class="download-browser-favorites-title">已收藏目录</div>
+  <div class="download-browser-favorites" data-download-favorites>
+    <div class="download-browser-favorites-title">快捷访问 <span>常用文件夹</span></div>
     <ul class="download-browser-favorites-list" data-download-favorites-list></ul>
   </div>
+  <p class="download-browser-status" data-download-status role="status" aria-live="polite"></p>
 </section>
 <style>
-  .download-browser-tools {
-    box-sizing: border-box;
-    margin: 20px auto 12px;
-    max-width: 960px;
-    padding: 14px 16px;
-    border: 1px solid rgba(148, 163, 184, .22);
-    border-radius: 12px;
-    background: rgba(15, 23, 42, .92);
-    color: #e2e8f0;
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  .download-browser-heading,
-  .download-browser-actions {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px 12px;
-  }
-  .download-browser-heading { justify-content: space-between; }
-  .download-browser-root { color: #94a3b8; font-size: 12px; overflow-wrap: anywhere; }
-  .download-browser-actions { margin-top: 10px; }
-  .download-browser-link,
-  .download-browser-button,
-  .download-browser-remove {
-    display: inline-flex;
-    align-items: center;
-    min-height: 30px;
-    padding: 5px 10px;
-    border: 1px solid rgba(148, 163, 184, .34);
-    border-radius: 8px;
-    background: rgba(30, 41, 59, .86);
-    color: #e0f2fe;
-    font: inherit;
-    text-decoration: none;
-    cursor: pointer;
-  }
-  .download-browser-link:hover,
-  .download-browser-button:hover,
-  .download-browser-remove:hover { border-color: #38bdf8; background: rgba(14, 116, 144, .42); }
-  .download-browser-status { min-height: 1.5em; margin: 8px 0 0; color: #fbbf24; font-size: 12px; }
-  .download-browser-favorites { margin-top: 10px; }
-  .download-browser-favorites-title { color: #cbd5e1; font-weight: 600; }
-  .download-browser-favorites-list { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
-  .download-browser-favorite { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .download-browser-favorite-link { min-width: 0; overflow-wrap: anywhere; color: #bae6fd; }
-  .download-browser-remove { min-height: 25px; padding: 2px 7px; color: #fecdd3; font-size: 12px; }
+  :root { color-scheme: dark; }
+  body { margin: 0 auto !important; max-width: 1120px !important; padding: 32px 24px !important; background: #0b1120 !important; color: #dbe5f3 !important; font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif !important; }
+  h1 { margin: 0 0 22px !important; font-size: 26px !important; letter-spacing: .02em; color: #f1f5f9 !important; }
+  body > hr { display: none; }
+  table { width: 100% !important; border-collapse: collapse !important; background: #111b2e !important; border-radius: 12px; }
+  th, td { padding: 13px 16px !important; border-bottom: 1px solid #223047 !important; text-align: left; }
+  th { color: #93a4bc !important; font-size: 12px; }
+  tr { background: transparent !important; }
+  tr:hover { background: #19273e !important; }
+  td a { color: #c4ddff !important; text-decoration: none; overflow-wrap: anywhere; }
+  .download-browser-tools { margin: 0 0 24px; color: #dbe5f3; }
+  .download-browser-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 16px; background: #111b2e; border: 1px solid #26344b; border-radius: 12px; }
+  .download-browser-root { flex: 1; min-width: 120px; overflow-wrap: anywhere; color: #93a4bc; font: 12px/1.6 ui-monospace, monospace; }
+  .download-browser-link, .download-browser-button { padding: 8px 12px; border: 1px solid #34465e; border-radius: 8px; background: #1a2b44; color: #c4ddff !important; font: inherit; text-decoration: none; cursor: pointer; }
+  .download-browser-button:disabled { opacity: .55; cursor: default; }
+  .download-browser-favorites { margin-top: 20px; }
+  .download-browser-favorites-title { font-size: 13px; font-weight: 650; }
+  .download-browser-favorites-title span { margin-left: 8px; color: #6f829e; font-weight: 400; font-size: 12px; }
+  .download-browser-favorites-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+  .download-browser-favorite { display: flex; align-items: center; max-width: 100%; border: 1px solid #2b3b54; border-radius: 8px; background: #142137; }
+  .download-browser-favorite-link { display: block; padding: 7px 12px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c4ddff !important; text-decoration: none; }
+  .download-browser-favorite-link[aria-current] { color: #7dd3fc !important; }
+  .download-browser-menu { position: relative; border-left: 1px solid #2b3b54; }
+  .download-browser-menu summary { padding: 7px 12px; cursor: pointer; list-style: none; }
+  .download-browser-menu summary::-webkit-details-marker { display: none; }
+  .download-browser-menu-actions { position: absolute; right: 0; top: 100%; z-index: 10; min-width: 130px; padding: 5px; background: #1c2b43; border: 1px solid #40516b; border-radius: 10px; box-shadow: 0 8px 24px #0006; }
+  .download-browser-menu-actions button { display: block; width: 100%; padding: 9px 12px; border: 0; background: transparent; color: #dbe5f3; text-align: left; border-radius: 6px; cursor: pointer; font: inherit; white-space: nowrap; }
+  .download-browser-menu-actions button:hover { background: #2b405e; }
+  .download-browser-menu-actions .download-browser-remove { color: #fda4af; }
+  .download-browser-empty { color: #6f829e; padding: 8px 0; }
+  .download-browser-status { margin: 10px 0 0; font-size: 12px; }
+  .download-browser-status:empty { display: none; }
+  .download-browser-rename { width: min(360px, calc(100vw - 64px)); padding: 24px; border: 1px solid #40516b; border-radius: 14px; background: #142137; color: #dbe5f3; }
+  .download-browser-rename::backdrop { background: #020617b3; }
+  .download-browser-rename label { display: flex; flex-direction: column; gap: 10px; }
+  .download-browser-rename input { padding: 10px; border: 1px solid #40516b; border-radius: 8px; background: #0b1120; color: #f1f5f9; font: inherit; }
+  .download-browser-rename form > div { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+  .download-browser-rename button { padding: 8px 14px; border: 1px solid #40516b; border-radius: 8px; background: #223651; color: #dbe5f3; font: inherit; cursor: pointer; }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+  @media (max-width: 600px) { body { padding: 18px 12px !important; } th, td { padding: 10px 6px !important; } .download-browser-root { order: 3; flex-basis: 100%; } .download-browser-button { margin-left: auto; } }
 </style>
-<script src="SUBFOLDERnginx/download-browser.js?v=1.57" defer></script>
+<script src="SUBFOLDERsrc/selkies-preferences.js?v=1.59" defer></script>
+<script src="SUBFOLDERnginx/download-browser.js?v=1.59" defer></script>

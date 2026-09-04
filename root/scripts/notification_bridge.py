@@ -66,7 +66,7 @@ RAW_LOG_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_RAW_LOG_PATH", "/conf
 RAW_LOG_MAX_BYTES = parse_int_env("NOTIFICATION_BRIDGE_RAW_LOG_MAX_BYTES", 10 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024)
 AWAKE_STATE_PATH = pathlib.Path(os.getenv("SELKIES_AWAKE_STATE_PATH", "/tmp/selkies-client-awake.json"))
 FRONTEND_ACTIVITY_STATE_PATH = pathlib.Path(
-    os.getenv("SELKIES_FRONTEND_ACTIVITY_STATE_PATH", "/tmp/selkies-frontend-activity.json")
+    os.getenv("SELKIES_NOTIFICATION_ACTIVITY_STATE_PATH", "/tmp/selkies-notification-activity.json")
 )
 IDLE_DEFOCUS_SECONDS = parse_int_env("NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS", 600, 0, 1800)
 ADAPTIVE_SLEEP_IDLE_OPTIONS = {60, 900, 1800, 2700, 3600}
@@ -560,13 +560,8 @@ def read_awake_state():
 
 
 def set_frontend_interaction_at(raw_ts):
-    try:
-        value = float(raw_ts)
-    except Exception:
-        value = time.time()
-    if value > 10_000_000_000:
-        value = value / 1000.0
-    value = max(0.0, value)
+    # Measure inactivity using server receipt time, never the browser clock.
+    value = time.time()
     with FRONTEND_ACTIVITY_LOCK:
         global LAST_FRONTEND_INTERACTION_AT
         LAST_FRONTEND_INTERACTION_AT = value
@@ -888,6 +883,7 @@ def _read_mode_state_unlocked():
         payload = json.loads(MODE_STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
         return state
+    state["sleep_settings_updated_at"] = payload.get("sleep_settings_updated_at", 0)
     state["mode"] = sanitize_mode(payload.get("mode", state["mode"]))
     state["idle_focus_seconds"] = sanitize_idle_focus_seconds(payload.get("idle_focus_seconds", state["idle_focus_seconds"]))
     state["auto_split_enabled"] = sanitize_bool(
@@ -958,6 +954,8 @@ def write_mode_state(
                 lan_broadcast_name,
                 state["lan_broadcast_name"],
             )
+        if adaptive_sleep_enabled is not None or adaptive_sleep_idle_seconds is not None:
+            state["sleep_settings_updated_at"] = time.time()
         MODE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = MODE_STATE_PATH.with_suffix(MODE_STATE_PATH.suffix + ".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")

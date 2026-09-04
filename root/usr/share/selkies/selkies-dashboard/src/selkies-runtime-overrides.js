@@ -5,6 +5,7 @@
   installMediaPlaybackWakeGuard();
 
   var runtime = window.__SELKIES_RUNTIME__ || {};
+  var toolPreferencesReady = false;
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
   var CPU_ONLY_ENCODERS = new Set(["jpeg", "x264enc-striped"]);
   var STABLE_ENCODERS = new Set(["x264enc", "x264enc-striped", "jpeg"]);
@@ -1570,7 +1571,7 @@
     lastFrontendInteractionAt = Date.now();
     reportFrontendInteractionState(false);
     postContainerSleepActivity(false);
-    scheduleAdaptiveSleepIdleWarning();
+    if (!adaptiveSleepIdleTimer) scheduleAdaptiveSleepIdleWarning();
     if (passthroughIdleTimer) {
       window.clearTimeout(passthroughIdleTimer);
       passthroughIdleTimer = null;
@@ -1768,18 +1769,13 @@
     var overlay = ensureAdaptiveSleepOverlay();
     var deadlineAt = Number(adaptiveSleepLastStatus.warning_deadline_at || 0) * 1000;
     var warningSeconds = Math.max(1, Number(adaptiveSleepLastStatus.warning_seconds || 60));
-    var remainingSeconds = Math.max(0, (deadlineAt - Date.now()) / 1000);
+    var remainingSeconds = Math.max(0, Number(adaptiveSleepLastStatus.warning_remaining_seconds || 0) -
+      (performance.now() - adaptiveSleepLastStatus.receivedAt) / 1000);
     var progress = clamp(((warningSeconds - remainingSeconds) / warningSeconds) * 100, 0, 100);
     var count = overlay.querySelector("#selkies-adaptive-sleep-count");
     var bar = overlay.querySelector("#selkies-adaptive-sleep-bar span");
     if (count) count.textContent = formatAdaptiveSleepRemaining(remainingSeconds);
     if (bar) bar.style.width = String(progress) + "%";
-    if (remainingSeconds <= 0 && overlay.dataset.sleepRequested !== "1") {
-      overlay.dataset.sleepRequested = "1";
-      requestContainerSleepNow().finally(function () {
-        forcePinLogin();
-      });
-    }
   }
 
   function showAdaptiveSleepOverlay(status) {
@@ -1787,6 +1783,7 @@
     var previousDeadline = Number((adaptiveSleepLastStatus && adaptiveSleepLastStatus.warning_deadline_at) || 0);
     var nextDeadline = Number(nextStatus.warning_deadline_at || 0);
     var resetSleepRequest = !adaptiveSleepOverlayVisible || Math.abs(nextDeadline - previousDeadline) > 0.25;
+    nextStatus.receivedAt = performance.now();
     adaptiveSleepLastStatus = nextStatus;
     adaptiveSleepOverlayVisible = true;
     var overlay = ensureAdaptiveSleepOverlay();
@@ -1832,21 +1829,8 @@
   }
 
   function beginLocalAdaptiveSleepWarning() {
-    if (!adaptiveSleepEnabled) return;
-    var now = Date.now();
-    if (now - lastFrontendInteractionAt < adaptiveSleepIdleSeconds * 1000) {
-      scheduleAdaptiveSleepIdleWarning();
-      return;
-    }
-    showAdaptiveSleepOverlay({
-      ok: true,
-      adaptive_sleep_enabled: true,
-      pending_sleep: true,
-      local_warning: true,
-      warning_started_at: now / 1000,
-      warning_deadline_at: (now + 60000) / 1000,
-      warning_seconds: 60
-    });
+    // No local deadline may override server activity or server settings.
+    pollAdaptiveSleepStatus();
   }
 
   function cancelAdaptiveSleepWarning(event) {
@@ -1862,9 +1846,7 @@
 
   function applyAdaptiveSleepStatus(status) {
     if (!status || !status.ok) {
-      if (!(adaptiveSleepLastStatus && adaptiveSleepLastStatus.local_warning)) {
-        hideAdaptiveSleepOverlay();
-      }
+      hideAdaptiveSleepOverlay();
       return;
     }
     if (status.sleeping) {
@@ -1873,11 +1855,10 @@
       return;
     }
     if (!status.adaptive_sleep_enabled || !status.pending_sleep) {
-      if (!(adaptiveSleepLastStatus && adaptiveSleepLastStatus.local_warning)) {
-        hideAdaptiveSleepOverlay();
-      }
+      hideAdaptiveSleepOverlay();
       return;
     }
+    if (Date.now() - lastFrontendInteractionAt < 1500) return;
     showAdaptiveSleepOverlay(status);
   }
 
@@ -3198,7 +3179,12 @@
   }
 
   function storagePrefix() {
-    return window.location.href.split("#")[0].replace(/[^a-zA-Z0-9._-]/g, "_");
+    // Match the dashboard bundle exactly; its legacy regex retains URL punctuation.
+    return nativeSelkiesStoragePrefix();
+  }
+
+  function legacyStorageKey(name) {
+    return window.location.href.split("#")[0].replace(/[^a-zA-Z0-9._-]/g, "_") + "_" + name;
   }
 
   function storageKey(name) {
@@ -3206,15 +3192,70 @@
   }
 
   function getStoredValue(name) {
-    return window.localStorage.getItem(storageKey(name));
+    try {
+      var previous = window.localStorage.getItem(storageKey(name));
+      if (previous === null) {
+        previous = window.localStorage.getItem(legacyStorageKey(name));
+        if (previous !== null) window.localStorage.setItem(storageKey(name), previous);
+      }
+      if (!isPersistentToolPreference(name)) return previous;
+      var stable = "selkies.preferences:" + appBasePath() + ":" + name;
+      var value = window.localStorage.getItem(stable);
+      if (value === null) {
+        value = previous;
+        if (value !== null) window.localStorage.setItem(stable, value);
+      }
+      return value;
+    } catch (_err) { return null; }
   }
 
   function setStoredValue(name, value) {
-    if (value === null || value === undefined) {
-      window.localStorage.removeItem(storageKey(name));
-      return;
+    var changed = getStoredValue(name) !== String(value);
+    try {
+      var stable = "selkies.preferences:" + appBasePath() + ":" + name;
+      if (value === null || value === undefined) {
+        window.localStorage.removeItem(stable);
+        window.localStorage.removeItem(storageKey(name));
+        window.localStorage.removeItem(legacyStorageKey(name));
+      } else {
+        if (isPersistentToolPreference(name)) window.localStorage.setItem(stable, String(value));
+        window.localStorage.setItem(storageKey(name), String(value));
+      }
+    } catch (_err) {}
+    if (changed && toolPreferencesReady && window.selkiesPreferences && isPersistentToolPreference(name)) {
+      window.selkiesPreferences.save(name, value);
     }
-    window.localStorage.setItem(storageKey(name), String(value));
+  }
+
+  function isPersistentToolPreference(name) {
+    return ["notification_center_enabled", "legacy_upload_fallback_enabled",
+      "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
+      "bottom_action_dock_collapsed"].indexOf(name) !== -1;
+  }
+
+  async function loadPersistentToolPreferences() {
+    if (!window.selkiesPreferences) return;
+    try {
+      var preferences = await window.selkiesPreferences.load();
+      ["notification_center_enabled", "legacy_upload_fallback_enabled",
+        "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
+        "bottom_action_dock_collapsed"].forEach(function (name) {
+        if (Object.prototype.hasOwnProperty.call(preferences, name)) {
+          try {
+            window.localStorage.setItem("selkies.preferences:" + appBasePath() + ":" + name, String(preferences[name]));
+            window.localStorage.setItem(storageKey(name), String(preferences[name]));
+          } catch (_err) {}
+        } else if (getStoredValue(name) !== null) {
+          window.selkiesPreferences.save(name, getStoredValue(name));
+        }
+      });
+      notificationCenterEnabled = sanitizeBool(preferences.notification_center_enabled, notificationCenterEnabled);
+      bottomActionClipboardButtonsEnabled = sanitizeBool(preferences.bottom_action_clipboard_buttons_enabled, bottomActionClipboardButtonsEnabled);
+      bottomActionDockCollapsed = sanitizeBool(preferences.bottom_action_dock_collapsed, bottomActionDockCollapsed);
+      bottomActionDockPosition = sanitizeDockPosition(preferences.bottom_action_dock_position || bottomActionDockPosition);
+      applyLegacyUploadFallback(sanitizeBool(preferences.legacy_upload_fallback_enabled, legacyUploadFallbackEnabled));
+    } catch (_err) { /* Cached settings remain usable while disconnected. */ }
+    finally { toolPreferencesReady = true; }
   }
 
   function applyLegacyUploadFallback(enabled) {
@@ -3305,7 +3346,7 @@
   }
 
   function applyRuntimeDefaults() {
-    var frameRate = sanitizeInt(runtime.defaultFramerate, 48, 1, 240);
+    var frameRate = sanitizeInt(runtime.defaultFramerate, 30, 1, 240);
     var binaryClipboard = sanitizeBool(runtime.defaultBinaryClipboard, true);
     var defaultUseCpu = sanitizeBool(runtime.defaultUseCpu, false);
     var defaultStreamingMode = sanitizeBool(runtime.defaultH264StreamingMode, true);
@@ -5686,7 +5727,7 @@
       enabled: sanitizeBool(getStoredValue("dynamic_low_latency_enabled"), sanitizeBool(runtime.dynamicLowLatencyEnabled, true)),
       mode: mode,
       holdMs: sanitizeInt(getStoredValue("dynamic_low_latency_hold_ms"), sanitizeInt(runtime.dynamicLowLatencyHoldMs, 15000, 300, 30000), 300, 30000),
-      fps: modeUsesFramerate(mode) ? fps : sanitizeInt(getStoredValue("framerate"), sanitizeInt(runtime.defaultFramerate, 48, 1, 240), 1, 240),
+      fps: modeUsesFramerate(mode) ? fps : sanitizeInt(getStoredValue("framerate"), sanitizeInt(runtime.defaultFramerate, 30, 1, 240), 1, 240),
       strength: strength,
       crf: crf,
       samplePercent: samplePercent,
@@ -6957,6 +6998,7 @@
     var lastMoveAt = 0;
     var lastKeyAt = 0;
     function markInteraction(phase) {
+      noteFrontendInteraction();
       var config = getDynamicLatencyConfig();
       var now = Date.now();
       var motionInterval = Math.max(16, Math.round(1000 / Math.max(8, config.fps || 36)));
@@ -6975,7 +7017,6 @@
         }
         lastKeyAt = now;
       }
-      noteFrontendInteraction();
       noteUiInteraction();
       markDynamicLatencyInteractive(phase);
     }
@@ -6987,7 +7028,7 @@
     document.addEventListener("pointermove", function (event) {
       if (!hasVisibleStreamSurface()) return;
       if (!event) return;
-      if (!event.buttons && Math.abs(Number(event.movementX) || 0) + Math.abs(Number(event.movementY) || 0) < 3) {
+      if (!event.buttons && Math.abs(Number(event.movementX) || 0) + Math.abs(Number(event.movementY) || 0) === 0) {
         return;
       }
       markInteraction("\u9f20\u6807\u79fb\u52a8");
@@ -6996,7 +7037,7 @@
       markInteraction("\u6eda\u8f6e\u6eda\u52a8");
     }, { capture: true, passive: true });
     document.addEventListener("keydown", function (event) {
-      if (event && event.repeat) return;
+      if (event && event.repeat) { noteFrontendInteraction(); return; }
       clearUnreadOnPrimaryInteraction();
       if (isFormLikeElement(event.target)) {
         markInteraction("\u6587\u672c\u8f93\u5165");
@@ -7737,7 +7778,8 @@
     });
   }
 
-  function boot() {
+  async function boot() {
+    await loadPersistentToolPreferences();
     injectBadgeStyle();
     installForcedSelkiesDefaultsGuard();
     primeRuntimeStorageDefaults();
