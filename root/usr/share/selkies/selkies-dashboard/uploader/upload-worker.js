@@ -603,20 +603,3 @@ onmessage = async function (event) {
     await cancelTask(task);
   }
 };
-
-setInterval(function () {
-  var values = Array.from(tasks.values());
-  var activeRequests = 0;
-  values.forEach(function (task) {
-    activeRequests += task.controllers ? task.controllers.size : 0;
-  });
-  channel.postMessage({
-    type: "worker-diagnostics",
-    metrics: {
-      taskCount: values.length,
-      queuedTasks: values.filter(function (task) { return task.status === "queued"; }).length,
-      activeRequests: activeRequests,
-      pausedTasks: values.filter(function (task) { return task.status === "paused"; }).length
-    }
-  });
-}, 5000);

@@ -31,6 +31,18 @@
   var RENDER_STALL_WATCHDOG = sanitizeBool(runtime.renderStallWatchdog, true);
   var RENDER_STALL_THRESHOLD_MS = sanitizeInt(runtime.renderStallThresholdMs, 12000, 5000, 120000);
   var RENDER_STALL_COOLDOWN_MS = sanitizeInt(runtime.renderStallCooldownMs, 25000, 8000, 300000);
+  // Hard cap for any "rebuilding stream" activity.  Without it a stuck rebuild banner
+  // can outlive the recovery attempt itself and never be dismissed.
+  var STREAM_REBUILD_MAX_MS = sanitizeInt(runtime.streamRebuildMaxMs, 24000, 8000, 180000);
+  // Number of in-place (non-reload) pipeline restarts attempted before giving up.
+  var STREAM_RECOVER_HARD_STAGES = sanitizeInt(runtime.streamRecoverHardStages, 2, 0, 4);
+  // A full page reset is only allowed after this many in-place recoveries already failed.
+  var PAGE_STALL_RELOAD_MIN_RECOVERS = sanitizeInt(runtime.pageStallReloadMinRecovers, 2, 0, 6);
+  // Grace window before an already-scheduled full reset actually fires; a recovery inside
+  // the window cancels it, so the reset becomes a true last resort.
+  var FULL_RESET_GRACE_MS = sanitizeInt(runtime.fullResetGraceMs, 9000, 3000, 60000);
+  // How long the stream must stay healthy before the recovery ladder is reset to stage 0.
+  var RECOVER_LADDER_RESET_MS = sanitizeInt(runtime.recoverLadderResetMs, 120000, 30000, 900000);
   var AUDIO_WATCHDOG = sanitizeBool(runtime.audioWatchdog, true);
   var AUDIO_START_INTERVAL_MS = sanitizeInt(runtime.audioStartIntervalMs, 8000, 2000, 60000);
   var AUDIO_PACKET_STALL_MS = sanitizeInt(runtime.audioPacketStallMs, 15000, 5000, 120000);
@@ -95,6 +107,11 @@
   var lastAudioPipelineActive = true;
   var highLoadReleaseTimer = null;
   var streamRestartVerifyTimer = null;
+  var streamRebuildWatchdogTimer = null;
+  var softRecoverAttempts = 0;
+  var healthySinceMs = Date.now();
+  var pendingFullResetTimer = null;
+  var autoRebuildTimerIds = [];
   var highLoadStateMap = Object.create(null);
   var highLoadBusyUntil = 0;
   var pipelineResetNoticeTimer = null;
@@ -178,9 +195,9 @@
   var LEGACY_UPLOAD_ENABLED = sanitizeBool(runtime.legacyUploadEnabled, false) || legacyUploadFallbackEnabled;
   var uploadDiagnostics = [];
   var uploadDiagnosticsFlushTimer = null;
-  var uploadDiagnosticsSampleTimer = null;
-  var uploadDiagnosticsLongTaskCount = 0;
-  var uploadDiagnosticsLongTaskMaxMs = 0;
+  // Only abnormal events reach the diagnostics log now; periodic heartbeats
+  // were dropped so /config/logs/upload-diagnostics.jsonl stays small.
+  var UPLOAD_DIAGNOSTICS_LONG_TASK_MIN_MS = 250;
   var UPLOAD_QUEUE_HIGH_WATER_CHUNKS = sanitizeInt(runtime.uploadQueueHighWaterChunks, 4, 1, 64);
   var UPLOAD_BUFFERED_HIGH_WATER_BYTES = sanitizeInt(runtime.uploadBufferedHighWaterBytes, 4 * 1024 * 1024, 256 * 1024, 64 * 1024 * 1024);
   var UPLOAD_READ_GATE_DELAY_MS = sanitizeInt(runtime.uploadReadGateDelayMs, 35, 5, 250);
@@ -188,6 +205,21 @@
   var CLIPBOARD_BUFFERED_HIGH_WATER_BYTES = sanitizeInt(runtime.clipboardBufferedHighWaterBytes, 2 * 1024 * 1024, 256 * 1024, 64 * 1024 * 1024);
   var CLIPBOARD_SEND_YIELD_MS = sanitizeInt(runtime.clipboardSendYieldMs, 12, 0, 250);
   var managedClipboardNativeSender = null;
+  // Input sampling governor. The 1x baseline is 60 Hz for relative movement
+  // (trackpad / pointer-lock, sent as "m2,") and 125 Hz for absolute pointer
+  // movement (sent as "m,"). The user slider scales that baseline 0.5x-2x.
+  var INPUT_SAMPLING_RELATIVE_BASE_HZ = 60;
+  var INPUT_SAMPLING_ABSOLUTE_BASE_HZ = 125;
+  var INPUT_SAMPLING_MIN_MULTIPLIER = 0.5;
+  var INPUT_SAMPLING_MAX_MULTIPLIER = 2;
+  // Wire format is "m|x,y,button_mask,scroll_magnitude" (5 comma separated
+  // fields, no trailing field). Wheel notches reuse the "m2," prefix but carry
+  // a non-zero scroll_magnitude, so they are discrete events, not pointer
+  // samples: coalescing or rewriting them desynchronises buttons 4/5 and the
+  // server falls back to Alt+Left / Alt+Right navigation. They must always be
+  // forwarded verbatim. Bits 3/4/6/7 are the wheel buttons (up/down/left/right).
+  var INPUT_SAMPLING_SCROLL_BUTTON_MASK = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7);
+  var inputSamplingMultiplier = sanitizeInputSamplingMultiplier(getStoredValue("input_sampling_multiplier"));
   var managedClipboardSenderInstalled = false;
   var debugNotificationTargetAt = 0;
   var debugNotificationTimeout = null;
@@ -767,6 +799,147 @@
     }
   }
 
+  function sanitizeInputSamplingMultiplier(value) {
+    var numeric = Number(value);
+    if (!isFinite(numeric) || numeric <= 0) return 1;
+    numeric = Math.round(numeric * 100) / 100;
+    if (numeric < INPUT_SAMPLING_MIN_MULTIPLIER) return INPUT_SAMPLING_MIN_MULTIPLIER;
+    if (numeric > INPUT_SAMPLING_MAX_MULTIPLIER) return INPUT_SAMPLING_MAX_MULTIPLIER;
+    return numeric;
+  }
+
+  function inputSamplingBaseHz(message) {
+    var text = String(message || "");
+    if (text.indexOf("m2,") === 0) return INPUT_SAMPLING_RELATIVE_BASE_HZ;
+    if (text.indexOf("m,") === 0) return INPUT_SAMPLING_ABSOLUTE_BASE_HZ;
+    return 0;
+  }
+
+  function formatInputSamplingRates(multiplier) {
+    var scale = sanitizeInputSamplingMultiplier(multiplier);
+    return "\u89e6\u63a7\u677f " + Math.round(INPUT_SAMPLING_RELATIVE_BASE_HZ * scale) +
+      "Hz / \u9f20\u6807 " + Math.round(INPUT_SAMPLING_ABSOLUTE_BASE_HZ * scale) + "Hz";
+  }
+
+  function formatInputSamplingLabel(multiplier) {
+    var text = sanitizeInputSamplingMultiplier(multiplier).toFixed(2);
+    if (text.slice(-1) === "0") text = text.slice(0, -1);
+    return text + "\u00d7";
+  }
+
+  // Rate governor for outgoing pointer messages. Intermediate samples are
+  // coalesced into the next slot, but the trailing sample and every button
+  // transition are always delivered immediately, so clicks never wait and the
+  // final pointer position is never dropped.
+  //
+  // Only continuous pointer samples are governed. Discrete wheel notches
+  // (non-zero scroll_magnitude, or a wheel button bit in the mask) bypass the
+  // governor entirely and are forwarded byte-for-byte, because the server
+  // derives "scroll up/down" versus "Alt+Left/Alt+Right" purely from the
+  // scroll_magnitude field.
+  function createInputSampler(ws, nativeSend) {
+    var pendingAbsolute = null;
+    var pendingRelative = null;
+    var flushTimer = null;
+    var lastFlushAt = Date.now();
+    var lastMaskSent = 0;
+
+    function emit(message) {
+      try {
+        nativeSend.call(ws, message);
+      } catch (_err) {}
+    }
+
+    function flush() {
+      if (flushTimer !== null) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (pendingRelative) {
+        var relative = pendingRelative;
+        pendingRelative = null;
+        lastMaskSent = relative.mask;
+        emit("m2," + relative.dx + "," + relative.dy + "," + relative.mask + "," + relative.scroll);
+      } else if (pendingAbsolute) {
+        var absolute = pendingAbsolute;
+        pendingAbsolute = null;
+        lastMaskSent = absolute.mask;
+        emit("m," + absolute.x + "," + absolute.y + "," + absolute.mask + "," + absolute.scroll);
+      }
+      lastFlushAt = Date.now();
+    }
+
+    function hasPending() {
+      return !!(pendingRelative || pendingAbsolute);
+    }
+
+    function scheduleFlush() {
+      if (flushTimer !== null) return;
+      var baseHz = pendingRelative ? INPUT_SAMPLING_RELATIVE_BASE_HZ : INPUT_SAMPLING_ABSOLUTE_BASE_HZ;
+      var targetHz = baseHz * inputSamplingMultiplier;
+      if (!(targetHz > 0)) {
+        flush();
+        return;
+      }
+      var wait = (1000 / targetHz) - (Date.now() - lastFlushAt);
+      if (wait <= 0) {
+        flush();
+        return;
+      }
+      flushTimer = window.setTimeout(function () {
+        flushTimer = null;
+        flush();
+      }, wait);
+    }
+
+    return {
+      send: function (message) {
+        var baseHz = inputSamplingBaseHz(message);
+        if (!baseHz) {
+          if (hasPending()) flush();
+          return false;
+        }
+        var parts = String(message).split(",");
+        if (parts.length < 5) {
+          if (hasPending()) flush();
+          return false;
+        }
+        var mask = Number(parts[3]) || 0;
+        var scroll = Number(parts[4]) || 0;
+        // Discrete wheel event: never coalesce, never rewrite. Flush whatever
+        // pointer sample is pending first so ordering stays monotonic, then let
+        // the original payload through untouched.
+        if (scroll !== 0 || (mask & INPUT_SAMPLING_SCROLL_BUTTON_MASK) !== 0) {
+          if (hasPending()) flush();
+          return false;
+        }
+        var maskChanged = mask !== lastMaskSent;
+        if (message.indexOf("m2,") === 0) {
+          var dx = Number(parts[1]) || 0;
+          var dy = Number(parts[2]) || 0;
+          if (pendingRelative) {
+            pendingRelative.dx += dx;
+            pendingRelative.dy += dy;
+            pendingRelative.mask = mask;
+          } else {
+            pendingRelative = { dx: dx, dy: dy, mask: mask, scroll: scroll };
+          }
+          pendingAbsolute = null;
+        } else {
+          pendingAbsolute = { x: Number(parts[1]) || 0, y: Number(parts[2]) || 0, mask: mask, scroll: scroll };
+          pendingRelative = null;
+        }
+        if (maskChanged) {
+          flush();
+        } else {
+          scheduleFlush();
+        }
+        return true;
+      },
+      flush: flush
+    };
+  }
+
   function installSingleSessionWebSocketGuard() {
     var NativeWebSocket = window.WebSocket;
     if (!NativeWebSocket || NativeWebSocket.__selkiesSingleSessionWrapped) return;
@@ -781,8 +954,13 @@
       try {
         var nativeSend = ws.send;
         if (nativeSend && !nativeSend.__selkiesForcedSettingsWrapped) {
+          var inputSampler = createInputSampler(ws, nativeSend);
           var wrappedSend = function (data) {
-            return nativeSend.call(ws, sanitizeOutgoingWebSocketPayload(data));
+            var payload = sanitizeOutgoingWebSocketPayload(data);
+            if (typeof payload === "string" && inputSampler.send(payload)) {
+              return;
+            }
+            return nativeSend.call(ws, payload);
           };
           wrappedSend.__selkiesForcedSettingsWrapped = true;
           ws.send = wrappedSend;
@@ -1243,7 +1421,8 @@
   function isClientPageAwake() {
     if (!hasOpenDataSocket()) return false;
     if (document.hidden) return false;
-    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    // Keyboard focus is not a sleep signal. A stream left visible on a second
+    // monitor must keep receiving frames while the user works in another app.
     return true;
   }
 
@@ -2698,6 +2877,33 @@
     }, 10 * 60 * 1000);
   }
 
+  function protectSidebarWheel(root) {
+    if (!root || root.__selkiesWheelProtected) return;
+    root.__selkiesWheelProtected = true;
+    root.addEventListener("wheel", function (event) {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+    }, { passive: true });
+  }
+
+  function bindNativeSidebarWheelProtection() {
+    if (!document.body || window.__selkiesSidebarWheelProtectionInstalled) return;
+    window.__selkiesSidebarWheelProtectionInstalled = true;
+
+    function bindAll() {
+      var sidebars = document.querySelectorAll(".sidebar");
+      for (var i = 0; i < sidebars.length; i += 1) {
+        protectSidebarWheel(sidebars[i]);
+      }
+    }
+
+    bindAll();
+    if (typeof MutationObserver === "function") {
+      new MutationObserver(bindAll).observe(document.body, { childList: true, subtree: true });
+    }
+  }
+
   function ensureNotificationCenterStyle() {
     if (document.getElementById("selkies-notification-center-style")) return;
     var style = document.createElement("style");
@@ -2719,7 +2925,7 @@
       ".selkies-notification-center-bandwidth [data-bandwidth='sep']{color:#475569}" +
       ".selkies-notification-center-bandwidth [data-bandwidth='total']{color:#cbd5e1}" +
       ".selkies-notification-center-count{font-size:11px;color:#93c5fd}" +
-      ".selkies-notification-center-list{flex:1;overflow:auto;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;scrollbar-color:#64748b rgba(15,23,42,.55);scrollbar-gutter:stable}" +
+      ".selkies-notification-center-list{flex:1;overflow:auto;overscroll-behavior:contain;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;scrollbar-color:#64748b rgba(15,23,42,.55);scrollbar-gutter:stable}" +
       ".selkies-notification-center-list::-webkit-scrollbar{width:9px;height:9px}" +
       ".selkies-notification-center-list::-webkit-scrollbar-track{background:rgba(15,23,42,.55);border-radius:999px}" +
       ".selkies-notification-center-list::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#64748b,#475569);border:2px solid rgba(15,23,42,.85);border-radius:999px}" +
@@ -2760,6 +2966,12 @@
       '<div class="selkies-notification-center-footer"><button type="button" class="selkies-notification-center-clear">\u4e00\u952e\u6e05\u7406</button></div>' +
       "</aside>";
     document.body.appendChild(root);
+    // Keep wheel input that starts inside the panel from reaching any outer
+    // handler. The remote input overlay runs preventDefault() on wheel, so if it
+    // ever sees these events the panel looks like it "cannot scroll". We never
+    // call preventDefault ourselves, so the panel's own list still scrolls
+    // natively; this only stops the event from travelling further up.
+    protectSidebarWheel(root);
     root.querySelector("#selkies-notification-center-toggle").addEventListener("click", function () {
       notificationCenterOpen = !notificationCenterOpen;
       setStoredValue("notification_center_open", notificationCenterOpen);
@@ -2820,6 +3032,44 @@
     return item;
   }
 
+  // Rebuilding a scrollable list with innerHTML="" collapses its scrollHeight for
+  // one frame; the browser then clamps scrollTop back to 0, so the list visibly
+  // jumps to the top on every refresh tick. The notification list re-renders
+  // every 3s and the link history every 2s, which is exactly why scrolling them
+  // bounced back. Skip the rebuild when the content is unchanged, and otherwise
+  // preserve (or stick to) the scroll offset.
+  function renderScrollableList(list, signature, renderContent) {
+    if (!list) return;
+    if (list.dataset.renderSignature === signature && list.firstChild) {
+      return;
+    }
+    list.dataset.renderSignature = signature;
+    var previousScrollTop = list.scrollTop;
+    var previousScrollHeight = list.scrollHeight;
+    // Only a list that already had content can have been scrolled to its bottom.
+    // Without this guard an empty list (scrollHeight 0) reads as "at the bottom"
+    // and the first render would pin the fresh content to the end.
+    var wasAtBottom =
+      previousScrollHeight > 0 &&
+      previousScrollHeight - list.clientHeight - previousScrollTop <= 2;
+    list.innerHTML = "";
+    if (typeof renderContent === "function") renderContent(list);
+    // scrollTop is clamped against the *new* content height, so restore it only
+    // after the fresh nodes are in place.
+    list.scrollTop = wasAtBottom ? list.scrollHeight : previousScrollTop;
+  }
+
+  // Cheap change detector: the raw entries plus a time bucket so derived labels
+  // such as "3 分钟前" still refresh at a bounded rate.
+  function scrollListSignature(items, timeBucketMs) {
+    var bucket = timeBucketMs > 0 ? Math.floor(Date.now() / timeBucketMs) : 0;
+    try {
+      return bucket + "|" + JSON.stringify(items || []);
+    } catch (_err) {
+      return "unserializable:" + String(Date.now());
+    }
+  }
+
   function renderNotificationCenterHistory() {
     var root = ensureNotificationCenter();
     if (!root) return;
@@ -2831,18 +3081,18 @@
     if (count) count.textContent = String(historyItems.length) + "/" + String(NOTIFICATION_HISTORY_LIMIT);
     var list = root.querySelector(".selkies-notification-center-list");
     if (!list) return;
-    list.innerHTML = "";
-    if (!historyItems.length) {
-      var empty = document.createElement("div");
-      empty.className = "selkies-notification-center-empty";
-      empty.textContent = "\u6682\u65f6\u8fd8\u6ca1\u6709\u901a\u77e5\u5386\u53f2\u3002";
-      list.appendChild(empty);
-      renderLocalLinkHistory();
-      return;
-    }
-    for (var i = 0; i < historyItems.length; i += 1) {
-      list.appendChild(createNotificationCenterItem(historyItems[i]));
-    }
+    renderScrollableList(list, scrollListSignature(historyItems, 60000), function (target) {
+      if (!historyItems.length) {
+        var empty = document.createElement("div");
+        empty.className = "selkies-notification-center-empty";
+        empty.textContent = "\u6682\u65f6\u8fd8\u6ca1\u6709\u901a\u77e5\u5386\u53f2\u3002";
+        target.appendChild(empty);
+        return;
+      }
+      for (var i = 0; i < historyItems.length; i += 1) {
+        target.appendChild(createNotificationCenterItem(historyItems[i]));
+      }
+    });
     renderLocalLinkHistory();
   }
 
@@ -2990,7 +3240,87 @@
     }, 5000);
   }
 
-  function restartStreamingPipelines(reason) {
+  function clearAutoRebuildTimers() {
+    while (autoRebuildTimerIds.length) {
+      window.clearTimeout(autoRebuildTimerIds.pop());
+    }
+  }
+
+  // Rebuilds the video/audio pipelines without touching the page lifecycle.  This is the
+  // preferred recovery path: it keeps the WebSocket session, clipboard and UI state intact.
+  function runInPlacePipelineRestart() {
+    clearAutoRebuildTimers();
+    sendRawDataCommand("STOP_VIDEO");
+    sendRawDataCommand("STOP_AUDIO");
+    sendRawDataCommand("RESET_IO_MODULES");
+    sendRawDataCommand("kr");
+    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+    sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
+    autoRebuildTimerIds.push(
+      window.setTimeout(function () {
+        if (lastVideoPipelineActive) return;
+        sendRawDataCommand("START_VIDEO");
+        autoRebuildTimerIds.push(
+          window.setTimeout(function () {
+            sendRawDataCommand("START_AUDIO");
+          }, 180)
+        );
+        autoRebuildTimerIds.push(
+          window.setTimeout(function () {
+            if (lastVideoPipelineActive) return;
+            sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+            sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
+          }, 2200)
+        );
+      }, 2200)
+    );
+  }
+
+  // Schedules a full page reset behind a grace window.  If the stream recovers before the
+  // window elapses the reset is cancelled, so a reload only happens when it is really needed.
+  function scheduleGuardedFullReset(reason, stalledForMs) {
+    if (pendingFullResetTimer) return true;
+    var now = Date.now();
+    if (now - getLastPageStallReloadAt() < PAGE_STALL_COOLDOWN_MS) return false;
+    markPageStallReloadAt(now);
+    var reloadReason = String(reason || "guarded-reset") + ":" + String(Math.round(stalledForMs || 0));
+    setStoredValue("page_reload_reason", reloadReason);
+    recordUploadDiagnostic("page-reload-scheduled", {
+      reason: reloadReason,
+      stalledForMs: Math.round(stalledForMs || 0),
+      softRecoverAttempts: softRecoverAttempts,
+      stage: streamRecoveryStage
+    });
+    setActivityTask("stream-reconfig", {
+      title: "\u5373\u5c06\u91cd\u7f6e\u9875\u9762\u4ee5\u6062\u590d\u63a8\u6d41",
+      detail:
+        "\u81ea\u52a8\u91cd\u5efa\u591a\u6b21\u672a\u6210\u529f\uff0c\u5373\u5c06\u5b8c\u6574\u5237\u65b0\u9875\u9762\uff1b\u671f\u95f4\u82e5\u753b\u9762\u6062\u590d\u4f1a\u81ea\u52a8\u53d6\u6d88\u3002",
+      phase: "\u9875\u9762\u91cd\u7f6e",
+      kind: "warning",
+      progress: null,
+      indeterminate: true,
+      priority: 98,
+      startedAt: now
+    });
+    pendingFullResetTimer = window.setTimeout(function () {
+      pendingFullResetTimer = null;
+      var framesFlowing = lastFrameProgressAt && Date.now() - lastFrameProgressAt < 3000;
+      if (framesFlowing || (lastVideoPipelineActive && !isStreamLikelyStalled())) {
+        recordUploadDiagnostic("page-reload-cancelled", { reason: reloadReason });
+        finishStreamRecoveryActivity("\u5df2\u53d6\u6d88\u9875\u9762\u91cd\u7f6e\uff0c\u63a8\u6d41\u5df2\u6062\u590d\u3002", "success", 2400);
+        return;
+      }
+      recordUploadDiagnostic("page-reload", { reason: reloadReason, stalledForMs: Math.round(stalledForMs || 0) });
+      flushUploadDiagnostics();
+      try {
+        window.location.reload();
+      } catch (_err) {}
+    }, FULL_RESET_GRACE_MS);
+    return true;
+  }
+
+  function restartStreamingPipelines(reason, options) {
+    var allowFullReset = !!(options && options.allowReload);
     if (streamRestartTimer) {
       window.clearTimeout(streamRestartTimer);
       streamRestartTimer = null;
@@ -2999,6 +3329,7 @@
       window.clearTimeout(streamRestartVerifyTimer);
       streamRestartVerifyTimer = null;
     }
+    clearAutoRebuildTimers();
     noteUiInteraction();
     clearAllHighLoadState("stream restart");
     imeCompositionActive = false;
@@ -3029,6 +3360,7 @@
       priority: 96,
       startedAt: Date.now()
     });
+    armStreamRebuildWatchdog();
     resetClientClipboardRuntime();
     sendRawDataCommand("RESET_IO_MODULES");
     sendRawDataCommand("kr");
@@ -3040,12 +3372,18 @@
     }, 240);
     streamRestartTimer = window.setTimeout(function () {
       streamRestartTimer = null;
-      if (lastVideoPipelineActive) return;
+      if (lastVideoPipelineActive) {
+        finishStreamRecoveryActivity("\u63a8\u6d41\u7cfb\u7edf\u5df2\u6062\u590d\u3002", "success", 1800);
+        return;
+      }
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
       sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
       streamRestartVerifyTimer = window.setTimeout(function () {
         streamRestartVerifyTimer = null;
-        if (lastVideoPipelineActive) return;
+        if (lastVideoPipelineActive) {
+          finishStreamRecoveryActivity("\u63a8\u6d41\u7cfb\u7edf\u5df2\u6062\u590d\u3002", "success", 1800);
+          return;
+        }
         sendRawDataCommand("STOP_VIDEO");
         sendRawDataCommand("STOP_AUDIO");
         window.setTimeout(function () {
@@ -3054,8 +3392,21 @@
             sendRawDataCommand("START_AUDIO");
           }, 180);
           window.setTimeout(function () {
-            if (lastVideoPipelineActive) return;
-            window.location.reload();
+            if (lastVideoPipelineActive) {
+              finishStreamRecoveryActivity("\u63a8\u6d41\u7cfb\u7edf\u5df2\u6062\u590d\u3002", "success", 1800);
+              return;
+            }
+            // A full page reset tears down the whole session, so it stays a last resort:
+            // it is only scheduled (never immediate) and can still be cancelled in the
+            // grace window if the stream comes back.
+            if (allowFullReset && scheduleGuardedFullReset("pipeline-restart-failed", STREAM_REBUILD_MAX_MS)) {
+              return;
+            }
+            finishStreamRecoveryActivity(
+              "\u5c31\u5730\u91cd\u5efa\u5df2\u5b8c\u6210\uff1b\u82e5\u753b\u9762\u4ecd\u65e0\u6cd5\u6062\u590d\uff0c\u53ef\u5728\u4fa7\u8fb9\u680f\u70b9\u51fb\u91cd\u4fee\u590d\u3002",
+              "warning",
+              5000
+            );
           }, 2600);
         }, 260);
       }, 2600);
@@ -3230,7 +3581,7 @@
   function isPersistentToolPreference(name) {
     return ["notification_center_enabled", "legacy_upload_fallback_enabled",
       "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
-      "bottom_action_dock_collapsed"].indexOf(name) !== -1;
+      "bottom_action_dock_collapsed", "input_sampling_multiplier"].indexOf(name) !== -1;
   }
 
   async function loadPersistentToolPreferences() {
@@ -3239,7 +3590,7 @@
       var preferences = await window.selkiesPreferences.load();
       ["notification_center_enabled", "legacy_upload_fallback_enabled",
         "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
-        "bottom_action_dock_collapsed"].forEach(function (name) {
+        "bottom_action_dock_collapsed", "input_sampling_multiplier"].forEach(function (name) {
         if (Object.prototype.hasOwnProperty.call(preferences, name)) {
           try {
             window.localStorage.setItem("selkies.preferences:" + appBasePath() + ":" + name, String(preferences[name]));
@@ -3253,6 +3604,9 @@
       bottomActionClipboardButtonsEnabled = sanitizeBool(preferences.bottom_action_clipboard_buttons_enabled, bottomActionClipboardButtonsEnabled);
       bottomActionDockCollapsed = sanitizeBool(preferences.bottom_action_dock_collapsed, bottomActionDockCollapsed);
       bottomActionDockPosition = sanitizeDockPosition(preferences.bottom_action_dock_position || bottomActionDockPosition);
+      if (Object.prototype.hasOwnProperty.call(preferences, "input_sampling_multiplier")) {
+        applyInputSamplingMultiplier(preferences.input_sampling_multiplier, { persist: false });
+      }
       applyLegacyUploadFallback(sanitizeBool(preferences.legacy_upload_fallback_enabled, legacyUploadFallbackEnabled));
     } catch (_err) { /* Cached settings remain usable while disconnected. */ }
     finally { toolPreferencesReady = true; }
@@ -3387,6 +3741,7 @@
     setStoredDefault("dynamic_low_latency_disable_paint_over", dynamicThrottleMode === "idle-low-occupancy");
     setStoredDefault("bottom_action_clipboard_buttons_enabled", false);
     setStoredDefault("bottom_action_dock_position", bottomActionDockPosition);
+    setStoredDefault("input_sampling_multiplier", inputSamplingMultiplier);
     setStoredValue("ui_show_sidebar", true);
     setStoredValue("ui_show_core_buttons", true);
     setStoredValue("ui_sidebar_show_fullscreen", true);
@@ -3428,11 +3783,40 @@
     }
   }
 
+  // 1.63: restore the requested defaults - video framerate back to 30 and the
+  // display UI scaling to 100% (96 DPI).
+  //
+  // Both values live under the dashboard bundle's own localStorage keys, and
+  // primeRuntimeStorageDefaults() runs synchronously from this classic script,
+  // i.e. before the deferred bundle module reads them, so writing here does take
+  // effect on this very page load.
+  //
+  // On scaling: when nothing is stored the bundle derives a HiDPI default of
+  // round(devicePixelRatio * 4) * 24 DPI, which is 192 (= 200%) on a 2x screen.
+  // Seeding 96 pins the default at 100% on every display.
+  //
+  // Both writes are guarded by one-shot markers, so a value the user picks later
+  // in the sidebar is never fought.
+  function migrateStreamAndDisplayDefaultsOnce() {
+    var framerateMigrationKey = "default_framerate_30_v1";
+    if (getStoredValue(framerateMigrationKey) === null) {
+      setStoredValue("framerate", 30);
+      setStoredValue(framerateMigrationKey, "1");
+    }
+
+    var scalingMigrationKey = "default_scaling_dpi_96_v1";
+    if (getStoredValue(scalingMigrationKey) === null) {
+      setStoredValue("scaling_dpi", 96);
+      setStoredValue(scalingMigrationKey, "1");
+    }
+  }
+
   function primeRuntimeStorageDefaults() {
     initUseCpuHint();
     applyRuntimeDefaults();
     migrateUseCpuPreferenceOnce();
     migrateVideoDefaultsOnce();
+    migrateStreamAndDisplayDefaultsOnce();
   }
 
   function ensureActivityStyle() {
@@ -3753,9 +4137,60 @@
     }
   }
 
+  var BODY_STATUS_EXCLUDE_IDS = [
+    "selkies-activity-layer",
+    "selkies-notification-center",
+    "selkies-local-link-prompt",
+    "selkies-adaptive-sleep-overlay",
+    "selkies-bottom-action-dock-shell",
+    "selkies-sidebar-toolbox-group",
+    "selkies-dynamic-latency-section",
+    "selkies-debug-tools-section",
+    "selkies-link-history-section"
+  ];
+  var bodyStatusTextCache = { at: 0, text: "" };
+
+  // Read the page text that belongs to the native UI only.  Our own injected overlays must be
+  // excluded, otherwise a banner that literally prints "waiting for stream" keeps the stall
+  // detector permanently armed and the rebuild notice can never be dismissed.
+  //
+  // Exclude them with `visibility: hidden`, NOT `display: none`. This scan runs on several
+  // watchdogs (1s / 3s / 4s / 5s, cached for 400ms), and two of the excluded nodes — the
+  // "动态节流" and "妙妙小工具" cards — live inside the settings sidebar. `display: none`
+  // removes their box, so the sidebar's scrollHeight collapsed for the duration of every scan;
+  // the browser clamps `scrollTop` the moment content shrinks, and it is never restored, so the
+  // sidebar snapped back above those two cards. `innerText` (which drives the scan) already
+  // skips `visibility: hidden` subtrees, and unlike `display` it leaves layout — and therefore
+  // the user's scroll offset — completely untouched.
+  function readBodyStatusText() {
+    if (!document || !document.body) return "";
+    var now = Date.now();
+    if (bodyStatusTextCache.text && now - bodyStatusTextCache.at < 400) {
+      return bodyStatusTextCache.text;
+    }
+    var hidden = [];
+    for (var i = 0; i < BODY_STATUS_EXCLUDE_IDS.length; i += 1) {
+      var element = document.getElementById(BODY_STATUS_EXCLUDE_IDS[i]);
+      if (!element || element.style.visibility === "hidden") continue;
+      hidden.push({ element: element, visibility: element.style.visibility });
+      element.style.visibility = "hidden";
+    }
+    var text = "";
+    try {
+      text = String(document.body.innerText || document.body.textContent || "");
+    } catch (_err) {
+      text = String(document.body.textContent || "");
+    }
+    for (var j = 0; j < hidden.length; j += 1) {
+      hidden[j].element.style.visibility = hidden[j].visibility;
+    }
+    bodyStatusTextCache = { at: now, text: text };
+    return text;
+  }
+
   function isWaitingForStreamVisible() {
     if (!document || !document.body) return false;
-    var text = String(document.body.innerText || document.body.textContent || "");
+    var text = readBodyStatusText();
     return text.indexOf("Waiting for stream") >= 0 || text.indexOf("\u7b49\u5f85\u89c6\u9891\u6d41") >= 0;
   }
 
@@ -4000,13 +4435,57 @@
     return String(status.innerText || status.textContent || "").trim();
   }
 
+  function isRebuildActivitySettled(task) {
+    if (!task) return true;
+    return task.kind === "success" || task.kind === "error" || Number(task.progress) >= 100;
+  }
+
   function noteFrameProgress() {
     lastFrameProgressAt = Date.now();
     lastRenderProgressAt = lastFrameProgressAt;
     waitingSinceMs = 0;
     if (streamRecoveryInFlight || streamRecoveryStage > 0) {
       finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
+      return;
     }
+    // Frames are flowing again, so any rebuild notice that is still pending must be closed.
+    // Without this the "rebuilding stream" banner survives successful recoveries forever.
+    var pending = activityTasks["stream-reconfig"];
+    if (pending && !isRebuildActivitySettled(pending)) {
+      finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
+    }
+  }
+
+  function clearStreamRebuildWatchdog() {
+    if (!streamRebuildWatchdogTimer) return;
+    window.clearTimeout(streamRebuildWatchdogTimer);
+    streamRebuildWatchdogTimer = null;
+  }
+
+  // Guarantees that a rebuild notice never outlives its recovery attempt.
+  function armStreamRebuildWatchdog() {
+    clearStreamRebuildWatchdog();
+    streamRebuildWatchdogTimer = window.setTimeout(function () {
+      streamRebuildWatchdogTimer = null;
+      var task = activityTasks["stream-reconfig"];
+      if (!task || isRebuildActivitySettled(task)) return;
+      if (!isStreamLikelyStalled()) {
+        finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
+        return;
+      }
+      finishStreamRecoveryActivity(
+        "\u81ea\u52a8\u91cd\u5efa\u5df2\u8d85\u65f6\uff0c\u5df2\u505c\u6b62\u7b49\u5f85\uff1b\u753b\u9762\u4ecd\u5f02\u5e38\u65f6\u53ef\u5728\u4fa7\u8fb9\u680f\u70b9\u51fb\u91cd\u4fee\u590d\u3002",
+        "warning",
+        5000
+      );
+    }, STREAM_REBUILD_MAX_MS);
+  }
+
+  function cancelPendingFullReset() {
+    if (!pendingFullResetTimer) return false;
+    window.clearTimeout(pendingFullResetTimer);
+    pendingFullResetTimer = null;
+    return true;
   }
 
   function clearStreamRecoveryNoticeTimer() {
@@ -4017,6 +4496,11 @@
 
   function finishStreamRecoveryActivity(detail, kind, ttlMs) {
     clearStreamRecoveryNoticeTimer();
+    clearStreamRebuildWatchdog();
+    // A stream that is producing frames never needs a full page reset.
+    if (kind === "success") {
+      cancelPendingFullReset();
+    }
     streamRecoveryInFlight = false;
     streamRecoveryStage = 0;
     waitingSinceMs = 0;
@@ -4109,12 +4593,37 @@
     waitingSinceMs = 0;
     streamRecoveryInFlight = true;
     streamRecoveryStage += 1;
-    if (streamRecoveryStage <= Math.max(1, VIDEO_SOFT_RECOVER_LIMIT)) {
+    softRecoverAttempts += 1;
+    var softLimit = Math.max(1, VIDEO_SOFT_RECOVER_LIMIT);
+    var hardLimit = softLimit + Math.max(0, STREAM_RECOVER_HARD_STAGES);
+    if (streamRecoveryStage <= softLimit) {
+      // Stage 1..N: lightweight in-place rebuild of the streaming session.
       sendRawDataCommand("RESET_IO_MODULES");
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
       window.setTimeout(function () {
         streamRecoveryInFlight = false;
       }, 900);
+      return;
+    }
+    if (streamRecoveryStage <= hardLimit) {
+      // Stage N+1..M: restart the video/audio pipelines in place.  Still no page reload.
+      runInPlacePipelineRestart();
+      setActivityTask("stream-reconfig", {
+        title: "\u6b63\u5728\u91cd\u5efa\u63a8\u6d41\u7ba1\u7ebf",
+        detail:
+          "\u8f7b\u91cf\u6062\u590d\u672a\u7a33\u5b9a\uff0c\u6b63\u5728\u5c31\u5730\u91cd\u542f\u89c6\u9891\u4e0e\u97f3\u9891\u7ba1\u7ebf\uff0c\u4e0d\u4f1a\u5237\u65b0\u9875\u9762\u3002",
+        phase: "\u7ba1\u7ebf\u91cd\u542f",
+        kind: "warning",
+        progress: null,
+        indeterminate: true,
+        priority: 96,
+        startedAt: now
+      });
+      armStreamRebuildWatchdog();
+      markRecoverTimestamp(now);
+      window.setTimeout(function () {
+        streamRecoveryInFlight = false;
+      }, 1400);
       return;
     }
     setActivityTask("stream-reconfig", {
@@ -4151,11 +4660,20 @@
       }
       if (!isStreamLikelyStalled()) {
         waitingSinceMs = 0;
+        var now = Date.now();
+        if (!healthySinceMs) healthySinceMs = now;
         if (streamRecoveryStage > 0 && !streamRecoveryInFlight) {
           finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
         }
+        // Once the stream has been healthy long enough the escalation ladder starts over,
+        // so the next incident gets the full set of automatic rebuild attempts again.
+        if (now - healthySinceMs >= RECOVER_LADDER_RESET_MS) {
+          softRecoverAttempts = 0;
+          streamRecoveryStage = 0;
+        }
         return;
       }
+      healthySinceMs = 0;
       if (waitingSinceMs === 0) {
         waitingSinceMs = Date.now();
         return;
@@ -4214,80 +4732,44 @@
     });
   }
 
-  function sampleUploadDiagnostics() {
-    var heap = window.performance && window.performance.memory ? window.performance.memory : null;
-    var bufferedAmount = 0;
-    for (var i = 0; i < activeDataSockets.length; i += 1) {
-      bufferedAmount += Math.max(0, Number(activeDataSockets[i] && activeDataSockets[i].bufferedAmount) || 0);
-    }
-    var queuedChunks = 0;
-    var activeUploads = 0;
-    for (var j = 0; j < uploadTransportStates.length; j += 1) {
-      var state = uploadTransportStates[j];
-      if (!state) continue;
-      queuedChunks += state.queue ? state.queue.length : 0;
-      if (state.uploadState) activeUploads += 1;
-    }
-    recordUploadDiagnostic("browser-sample", {
-      jsHeapUsedBytes: heap ? Number(heap.usedJSHeapSize || 0) : null,
-      jsHeapTotalBytes: heap ? Number(heap.totalJSHeapSize || 0) : null,
-      jsHeapLimitBytes: heap ? Number(heap.jsHeapSizeLimit || 0) : null,
-      bufferedAmountBytes: bufferedAmount,
-      legacyUploadQueueChunks: queuedChunks,
-      legacyActiveUploads: activeUploads,
-      longTaskCount: uploadDiagnosticsLongTaskCount,
-      longTaskMaxMs: Math.round(uploadDiagnosticsLongTaskMaxMs)
-    });
-    uploadDiagnosticsLongTaskCount = 0;
-    uploadDiagnosticsLongTaskMaxMs = 0;
-  }
-
   function startUploadDiagnostics() {
-    if (uploadDiagnosticsSampleTimer) return;
+    if (uploadDiagnosticsFlushTimer) return;
     window.__selkiesRecordUploadDiagnostic = recordUploadDiagnostic;
     var previousReloadReason = getStoredValue("page_reload_reason");
     if (previousReloadReason) {
       recordUploadDiagnostic("previous-page-reload", { reason: previousReloadReason });
       setStoredValue("page_reload_reason", "");
     }
-    uploadDiagnosticsSampleTimer = window.setInterval(sampleUploadDiagnostics, 5000);
     uploadDiagnosticsFlushTimer = window.setInterval(flushUploadDiagnostics, 15000);
     window.addEventListener("pagehide", function () {
       flushUploadDiagnostics();
     });
-    sampleUploadDiagnostics();
   }
 
-  function runSilentStreamSoftRecover(source) {
+  function runSilentStreamSoftRecover(source, deep) {
     var now = Date.now();
     if (streamRecoveryInFlight) return false;
     if (now - pageStallSoftRecoverAt < Math.min(60000, PAGE_STALL_THRESHOLD_MS)) return false;
     pageStallSoftRecoverAt = now;
     waitingSinceMs = 0;
+    softRecoverAttempts += 1;
+    markRecoverTimestamp(now);
+    if (deep) {
+      runInPlacePipelineRestart();
+      return true;
+    }
     sendRawDataCommand("RESET_IO_MODULES");
     sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-    markRecoverTimestamp(now);
     return true;
   }
 
+  // Full page reset policy: only after the stall has lasted long enough AND in-place
+  // rebuilds have already been tried.  Even then it is scheduled, not executed, so a
+  // recovery inside the grace window cancels it.
   function maybeReloadForPageStall(stalledForMs, source) {
     if (stalledForMs < PAGE_STALL_RELOAD_THRESHOLD_MS) return false;
-    var now = Date.now();
-    if (now - getLastPageStallReloadAt() < PAGE_STALL_COOLDOWN_MS) return false;
-    markPageStallReloadAt(now);
-    var reloadReason = String(source || "page-stall") + ":" + String(Math.round(stalledForMs));
-    setStoredValue("page_reload_reason", reloadReason);
-    recordUploadDiagnostic("page-reload", {
-      reason: reloadReason,
-      stalledForMs: Math.round(stalledForMs)
-    });
-    flushUploadDiagnostics();
-    try {
-      window.location.reload();
-      return true;
-    } catch (_err) {
-      return false;
-    }
+    if (softRecoverAttempts < Math.max(0, PAGE_STALL_RELOAD_MIN_RECOVERS)) return false;
+    return scheduleGuardedFullReset(String(source || "page-stall"), stalledForMs);
   }
 
   function checkPageStallHealth() {
@@ -4312,7 +4794,11 @@
       (loopWasBlocked && hasVisibleStreamSurface());
     if (!shouldRecover) return;
 
-    runSilentStreamSoftRecover(loopWasBlocked ? "event-loop-lag" : "stream-stall");
+    // Escalate in place first: lightweight rebuild, then a deeper pipeline restart, and only
+    // then consider a full page reset (which itself is deferred and cancellable).  The deep
+    // rebuild starts one step before the reset gate so it always gets a real chance first.
+    var deepRebuild = softRecoverAttempts >= Math.max(1, PAGE_STALL_RELOAD_MIN_RECOVERS - 1);
+    runSilentStreamSoftRecover(loopWasBlocked ? "event-loop-lag" : "stream-stall", deepRebuild);
     maybeReloadForPageStall(Math.max(frameStalledFor, streamStalledFor), "stream-stall");
   }
 
@@ -4515,12 +5001,12 @@
           for (var i = 0; i < entries.length; i += 1) {
             worst = Math.max(worst, entries[i].duration || 0);
           }
-          uploadDiagnosticsLongTaskCount += entries.length;
-          uploadDiagnosticsLongTaskMaxMs = Math.max(uploadDiagnosticsLongTaskMaxMs, worst);
-          recordUploadDiagnostic("long-task", {
-            count: entries.length,
-            worstDurationMs: Math.round(worst)
-          });
+          if (worst >= UPLOAD_DIAGNOSTICS_LONG_TASK_MIN_MS) {
+            recordUploadDiagnostic("long-task", {
+              count: entries.length,
+              worstDurationMs: Math.round(worst)
+            });
+          }
           if (worst < 150) return;
           setActivityTask("browser-busy", {
             title: "\u6d4f\u89c8\u5668\u6b63\u5fd9",
@@ -5464,7 +5950,8 @@
     var style = document.createElement("style");
     style.id = "selkies-forced-control-style";
     style.textContent =
-      "#touch-gamepad-host,[data-selkies-native-gamepad-hidden='1']{display:none!important}";
+      "#touch-gamepad-host,[data-selkies-native-gamepad-hidden='1']{display:none!important}" +
+      ".sidebar{overscroll-behavior:contain}";
     document.head.appendChild(style);
   }
 
@@ -5626,7 +6113,11 @@
       host.style.display = "none";
     }
 
-    var sidebarHost = findLocalLinkSidebarHost();
+    // Use the pinned host for the same reason as the toolbox cards: resolving
+    // again on every tick can land on a *different* element while the sidebar
+    // is mid-transition, and this pass hides containers — a wrong host would
+    // hide the wrong section (and change the scroll height under the user).
+    var sidebarHost = resolveSidebarHost();
     if (!sidebarHost) return;
 
     var exactTexts = [
@@ -5981,6 +6472,107 @@
     }
   }
 
+  // The native sidebar is rebuilt by the upstream React tree, and its
+  // visibility/geometry changes while the user scrolls or collapses it. Asking
+  // `findLocalLinkSidebarHost()` from scratch on every timer tick therefore
+  // returned *different* elements over time, and each render did
+  // `host.appendChild(section)` — which physically moved "动态节流" and
+  // "妙妙小工具" out of the sidebar (or between two different hosts).
+  //
+  // Those two blocks are the largest thing we append, so detaching them shrinks
+  // the sidebar's `scrollHeight`; the browser immediately clamps `scrollTop`,
+  // and when the nodes come back the offset is not restored. The user sees the
+  // sidebar "回弹到这之前" exactly when they scroll down to those sections.
+  //
+  // Pin the host: keep reusing the cached element until it is really detached
+  // from the document, instead of re-resolving on every tick.
+  var sidebarHostCache = null;
+
+  function resolveSidebarHost() {
+    if (sidebarHostCache && sidebarHostCache.isConnected) return sidebarHostCache;
+    sidebarHostCache = findLocalLinkSidebarHost();
+    return sidebarHostCache;
+  }
+
+  var SIDEBAR_TOOLBOX_GROUP_ID = "selkies-sidebar-toolbox-group";
+
+  function ensureSidebarToolboxGroupStyle() {
+    if (!document.head || document.getElementById("selkies-sidebar-toolbox-group-style")) return;
+    var style = document.createElement("style");
+    style.id = "selkies-sidebar-toolbox-group-style";
+    style.textContent =
+      // Both cards keep their own border/background; the group only stacks them
+      // and pins them to a single, stable slot in the sidebar.
+      ".selkies-sidebar-toolbox-group{display:flex;flex-direction:column;overflow-anchor:none}" +
+      // Scroll anchoring re-adjusts `scrollTop` whenever content above it
+      // resizes. Our sections update their own labels on a timer, so anchoring
+      // can fight the user's scroll position for a frame and look like a bounce.
+      ".selkies-sidebar-toolbox-group,.selkies-sidebar-toolbox-group *{overflow-anchor:none}";
+    document.head.appendChild(style);
+  }
+
+  function ensureSidebarToolboxGroup() {
+    var group = document.getElementById(SIDEBAR_TOOLBOX_GROUP_ID);
+    if (group) return group;
+    group = document.createElement("div");
+    group.id = SIDEBAR_TOOLBOX_GROUP_ID;
+    group.className = "selkies-sidebar-toolbox-group";
+    return group;
+  }
+
+  // Find the element that actually scrolls the sidebar, starting from the
+  // injected node. The host itself is often *not* the scroller: upstream wraps
+  // the control list in an inner overflow container.
+  function findSidebarScrollContainer(from) {
+    var node = from;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (node.scrollHeight > node.clientHeight + 1) {
+        var style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+        var overflowY = style ? style.overflowY : "";
+        if (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") {
+          return node;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  // Re-attaching a node resets the scroller's offset (scrollHeight briefly
+  // collapses, so scrollTop is clamped). Capture the offset before the DOM work
+  // and put it back synchronously afterwards — no rAF, so nothing paints in
+  // between and the user never sees the jump.
+  function withSidebarScrollPreserved(from, mutate) {
+    var scroller = findSidebarScrollContainer(from);
+    // Fall back to the host itself: some builds make the outer container the
+    // scroller even though it reports no overflow mid-transition.
+    var target = scroller || (from && from.parentElement) || null;
+    var anchorTop = target ? target.scrollTop : 0;
+    mutate();
+    if (target && target.scrollTop !== anchorTop) {
+      target.scrollTop = anchorTop;
+    }
+  }
+
+  // Mount `section` inside the shared toolbox group (never straight into the
+  // sidebar), then keep the group attached to the pinned host. Grouping means
+  // the sidebar only ever gains/loses one node, so the two cards can no longer
+  // re-order against each other on independent timer ticks.
+  function mountSidebarToolboxSection(section) {
+    if (!section) return null;
+    var host = resolveSidebarHost();
+    if (!host) return null;
+    ensureSidebarToolboxGroupStyle();
+    var group = ensureSidebarToolboxGroup();
+    if (section.parentElement !== group || group.parentElement !== host) {
+      withSidebarScrollPreserved(section, function () {
+        if (section.parentElement !== group) group.appendChild(section);
+        if (group.parentElement !== host) host.appendChild(group);
+      });
+    }
+    return host;
+  }
+
   function ensureDynamicLatencySection() {
     var section = document.getElementById("selkies-dynamic-latency-section");
     if (section) return section;
@@ -6008,13 +6600,11 @@
   }
 
   function renderDynamicLatencySection() {
-    var host = findLocalLinkSidebarHost();
+    var host = resolveSidebarHost();
     if (!host) return;
     ensureLocalLinkUiStyle();
     var section = ensureDynamicLatencySection();
-    if (section.parentElement !== host) {
-      host.appendChild(section);
-    }
+    mountSidebarToolboxSection(section);
     if (!document.getElementById("selkies-dll-style")) {
       var style = document.createElement("style");
       style.id = "selkies-dll-style";
@@ -6031,6 +6621,20 @@
     }
 
     var config = getDynamicLatencyConfig();
+    // This renderer is re-run every 6s purely to pick up out-of-band changes.
+    // Writing the same values back into the DOM every tick still mutates text
+    // nodes and attributes, which schedules layout for the whole sidebar on
+    // every tick — right next to the list the user is scrolling. Skip the tick
+    // entirely when nothing changed so an idle sidebar is genuinely idle.
+    var renderSignature = [
+      config.enabled ? "1" : "0",
+      config.mode,
+      config.holdMs,
+      config.fps,
+      config.strength
+    ].join("|");
+    if (section.dataset.renderSignature === renderSignature) return;
+    section.dataset.renderSignature = renderSignature;
     section.querySelector('[data-dll="enabled"]').checked = config.enabled;
     section.querySelector('[data-dll="mode"]').value = config.mode;
     section.querySelector('[data-dll="hold"]').value = String(config.holdMs);
@@ -6134,7 +6738,10 @@
       sendRawDataCommand("cmd,/scripts/recover-xstack.sh");
     }, 220);
     window.setTimeout(function () {
-      restartStreamingPipelines("\u5df2\u6267\u884c\u4fee\u590d\uff0c\u6b63\u5728\u91cd\u7f6e\u8f93\u5165\u8f93\u51fa\u6a21\u5757\u3001\u7f16\u7801\u5668\u5e76\u91cd\u542f\u63a8\u6d41\u7cfb\u7edf\u3002");
+      restartStreamingPipelines(
+        "\u5df2\u6267\u884c\u4fee\u590d\uff0c\u6b63\u5728\u91cd\u7f6e\u8f93\u5165\u8f93\u51fa\u6a21\u5757\u3001\u7f16\u7801\u5668\u5e76\u91cd\u542f\u63a8\u6d41\u7cfb\u7edf\u3002",
+        { allowReload: true }
+      );
     }, 1180);
 
     setActivityTask("repair-ime-clipboard", {
@@ -6174,6 +6781,8 @@
       '<label class="selkies-tool-row" data-debug-row="lan-broadcast-name"><span>\u5e7f\u64ad\u540d</span><input type="text" maxlength="32" spellcheck="false" autocomplete="off" placeholder="AXISNSBOX-000" data-debug-input="lan-broadcast-name"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
+      '<label class="selkies-tool-row selkies-tool-row-slider"><span>\u8f93\u5165\u91c7\u6837\u589e\u5e45</span><div class="selkies-tool-slider"><input type="range" min="50" max="200" step="10" data-debug-range="input-sampling-multiplier"><span class="selkies-tool-value" data-debug-value="input-sampling-multiplier"></span></div></label>' +
+      '<div class="selkies-repair-note" data-debug-note="input-sampling"></div>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
@@ -6184,14 +6793,36 @@
     return section;
   }
 
+  function applyInputSamplingMultiplier(value, options) {
+    inputSamplingMultiplier = sanitizeInputSamplingMultiplier(value);
+    var range = document.querySelector('[data-debug-range="input-sampling-multiplier"]');
+    var label = document.querySelector('[data-debug-value="input-sampling-multiplier"]');
+    var note = document.querySelector('[data-debug-note="input-sampling"]');
+    if (range) range.value = String(Math.round(inputSamplingMultiplier * 100));
+    if (label) label.textContent = formatInputSamplingLabel(inputSamplingMultiplier);
+    if (note) note.textContent = formatInputSamplingRates(inputSamplingMultiplier);
+    if (!options || options.persist !== false) {
+      setStoredValue("input_sampling_multiplier", inputSamplingMultiplier);
+    }
+    if (options && options.notify) {
+      setActivityTask("input-sampling-multiplier", {
+        title: "\u5df2\u8c03\u6574\u8f93\u5165\u91c7\u6837\u589e\u5e45",
+        detail: formatInputSamplingLabel(inputSamplingMultiplier) + " \u00b7 " + formatInputSamplingRates(inputSamplingMultiplier),
+        kind: "success",
+        progress: 100,
+        indeterminate: false,
+        priority: 62,
+        expiresAt: Date.now() + 2400
+      });
+    }
+  }
+
   function renderDebugToolsSection() {
-    var host = findLocalLinkSidebarHost();
+    var host = resolveSidebarHost();
     if (!host) return;
     ensureLocalLinkUiStyle();
     var section = ensureDebugToolsSection();
-    if (section.parentElement !== host) {
-      host.appendChild(section);
-    }
+    mountSidebarToolboxSection(section);
     if (!document.getElementById("selkies-toolbox-style")) {
       var style = document.createElement("style");
       style.id = "selkies-toolbox-style";
@@ -6208,9 +6839,33 @@
         ".selkies-tool-row input[type='checkbox']{accent-color:#38bdf8}" +
         ".selkies-tool-row[data-hidden='1']{display:none}" +
         ".selkies-tool-row select,.selkies-tool-row input[type='text']{min-width:112px;width:132px;height:26px;padding:0 8px;border-radius:8px;border:1px solid rgba(71,85,105,.92);background:#101826;color:#e2e8f0;font-size:12px}" +
-        ".selkies-tool-row input[type='text']:focus{outline:none;border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.15)}";
+        ".selkies-tool-row input[type='text']:focus{outline:none;border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.15)}" +
+        ".selkies-tool-row-slider{display:flex;flex-direction:column;align-items:stretch;gap:6px}" +
+        ".selkies-tool-slider{display:flex;align-items:center;gap:8px}" +
+        ".selkies-tool-slider input[type='range']{flex:1;min-width:0;accent-color:#38bdf8}" +
+        ".selkies-tool-value{font-size:11px;color:#93c5fd;min-width:46px;text-align:right}";
       document.head.appendChild(style);
     }
+    // Same reasoning as the dynamic-latency card: this runs every 6s and would
+    // otherwise rewrite a dozen controls inside the sidebar list the user is
+    // scrolling. Only touch the DOM when a value really moved.
+    var debugSignature = [
+      notificationPassthroughEnabled ? "1" : "0",
+      notificationCenterEnabled ? "1" : "0",
+      autoSplitEnabled ? "1" : "0",
+      legacyUploadFallbackEnabled ? "1" : "0",
+      window.__selkiesStandaloneUploadAvailable === false ? "1" : "0",
+      adaptiveSleepEnabled ? "1" : "0",
+      adaptiveSleepIdleSeconds,
+      lanDiscoveryEnabled ? "1" : "0",
+      lanBroadcastName,
+      bottomActionClipboardButtonsEnabled ? "1" : "0",
+      bottomActionDockPosition,
+      qqIdleBlurSeconds,
+      Math.round(inputSamplingMultiplier * 100)
+    ].join("|");
+    if (section.dataset.renderSignature === debugSignature) return;
+    section.dataset.renderSignature = debugSignature;
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
     var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
     var autoSplitToggle = section.querySelector('[data-debug-toggle="auto-split"]');
@@ -6224,6 +6879,9 @@
     var bottomDockPositionSelect = section.querySelector('[data-debug-select="bottom-dock-position"]');
     var idleFocusRow = section.querySelector('[data-debug-row="idle-focus-seconds"]');
     var idleFocusSelect = section.querySelector('[data-debug-select="idle-focus-seconds"]');
+    var inputSamplingRange = section.querySelector('[data-debug-range="input-sampling-multiplier"]');
+    var inputSamplingLabel = section.querySelector('[data-debug-value="input-sampling-multiplier"]');
+    var inputSamplingNote = section.querySelector('[data-debug-note="input-sampling"]');
     if (notificationToggle) {
       notificationToggle.checked = !!notificationPassthroughEnabled;
     }
@@ -6266,8 +6924,26 @@
       idleFocusSelect.disabled = !notificationPassthroughEnabled;
       idleFocusSelect.value = String(qqIdleBlurSeconds);
     }
+    if (inputSamplingRange) {
+      inputSamplingRange.value = String(Math.round(inputSamplingMultiplier * 100));
+    }
+    if (inputSamplingLabel) {
+      inputSamplingLabel.textContent = formatInputSamplingLabel(inputSamplingMultiplier);
+    }
+    if (inputSamplingNote) {
+      inputSamplingNote.textContent = formatInputSamplingRates(inputSamplingMultiplier);
+    }
     if (!section.dataset.bound) {
       section.dataset.bound = "1";
+      var inputSamplingSlider = section.querySelector('[data-debug-range="input-sampling-multiplier"]');
+      if (inputSamplingSlider) {
+        inputSamplingSlider.addEventListener("input", function (event) {
+          applyInputSamplingMultiplier(Number(event.target.value) / 100, { persist: false });
+        });
+        inputSamplingSlider.addEventListener("change", function (event) {
+          applyInputSamplingMultiplier(Number(event.target.value) / 100, { notify: true });
+        });
+      }
       section.querySelector("[data-debug-action='notification-test']").addEventListener("click", function () {
         triggerPassthroughNotificationTest();
       });
@@ -6937,7 +7613,7 @@
       function (event) {
         if (!event || !document.body) return;
         if (Date.now() < sidebarAutoCollapseLockUntil) return;
-        var host = findLocalLinkSidebarHost();
+        var host = resolveSidebarHost();
         if (!isSidebarExpanded(host)) return;
         var toggle = findSidebarToggleButton();
         var target = event.target;
@@ -7090,7 +7766,7 @@
       ".selkies-link-sidebar-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}" +
       ".selkies-link-sidebar-title{font-size:12px;font-weight:700;color:#e2e8f0}" +
       ".selkies-link-sidebar-clear{appearance:none;border:0;background:transparent;color:#93c5fd;cursor:pointer;font-size:11px}" +
-      ".selkies-link-history-list{display:flex;flex-direction:column;gap:8px;max-height:220px;overflow:auto}" +
+      ".selkies-link-history-list{display:flex;flex-direction:column;gap:8px;max-height:220px;overflow:auto;overscroll-behavior:contain}" +
       ".selkies-link-history-empty{font-size:11px;color:#94a3b8}" +
       ".selkies-link-history-item{padding:10px 11px;border:1px solid rgba(51,65,85,.9);border-radius:10px;background:rgba(15,23,42,.55)}" +
       ".selkies-link-history-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}" +
@@ -7469,20 +8145,19 @@
 
     var list = section.querySelector(".selkies-link-history-list");
     if (!list) return;
-    list.innerHTML = "";
-
-    var historyItems = getLocalLinkHistory();
-    if (!historyItems.length) {
-      var empty = document.createElement("div");
-      empty.className = "selkies-link-history-empty";
-      empty.textContent = "\u6682\u65f6\u8fd8\u6ca1\u6709\u94fe\u63a5\u8df3\u8f6c\u8bb0\u5f55\u3002";
-      list.appendChild(empty);
-      return;
-    }
-
-    for (var i = 0; i < historyItems.length && i < 20; i += 1) {
-      list.appendChild(createHistoryEntryElement(historyItems[i]));
-    }
+    var historyItems = getLocalLinkHistory().slice(0, 20);
+    renderScrollableList(list, scrollListSignature(historyItems, 60000), function (target) {
+      if (!historyItems.length) {
+        var empty = document.createElement("div");
+        empty.className = "selkies-link-history-empty";
+        empty.textContent = "\u6682\u65f6\u8fd8\u6ca1\u6709\u94fe\u63a5\u8df3\u8f6c\u8bb0\u5f55\u3002";
+        target.appendChild(empty);
+        return;
+      }
+      for (var i = 0; i < historyItems.length; i += 1) {
+        target.appendChild(createHistoryEntryElement(historyItems[i]));
+      }
+    });
   }
 
   function startLocalLinkHistoryMount() {
@@ -7674,7 +8349,7 @@
       reportClientAwakeState();
     });
     window.addEventListener("blur", function () {
-      reportClientAwakeState(false);
+      reportClientAwakeState();
     });
     window.addEventListener("beforeunload", function () {
       reportClientAwakeState(false);
@@ -7736,6 +8411,7 @@
             noteFrameProgress();
             clearStreamRecoveryNoticeTimer();
             scheduleKeyboardAssistFocus(120);
+            cancelPendingFullReset();
             if (activityTasks["stream-reconfig"]) {
               completeActivityTask("stream-reconfig", "\u89c6\u9891\u7ba1\u7ebf\u5df2\u6062\u590d\u3002", "success", 1800);
             }
@@ -7758,6 +8434,7 @@
                   priority: 82,
                   startedAt: Date.now()
                 });
+                armStreamRebuildWatchdog();
               }, 1200);
             }
           }
@@ -7825,6 +8502,7 @@
     startIdleCleanupWatcher();
     startBottomActionDock();
     startNotificationHistoryCenter();
+    bindNativeSidebarWheelProtection();
     startBandwidthNoticeTimer();
     startNotificationEventPoller();
     bindSidebarAutoCollapse();

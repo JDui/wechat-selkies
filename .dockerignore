@@ -1,0 +1,24 @@
+# The image only needs the runtime overlay tree and the upload sidecar sources.
+# Everything else (release tarballs, client build output, diagnostics) is excluded
+# on purpose: without this the build context would be several gigabytes.
+*
+
+!Dockerfile
+!root
+!upload-sidecar
+
+# Keep the sidecar sources but never the compiled artifacts.
+upload-sidecar/target
+**/target
+**/__pycache__
+**/*.pyc
+*.tar
+.git
+.docker-codex
+.diagnostics
+diagnostics
+axiver-client
+config
+tests
+docs
+scripts

@@ -34,25 +34,83 @@
 - **通知穿透**：微信 / QQ 的提醒可同步到浏览器 Notification、页面标题和底部按钮状态。
 - **通知中心**：右侧可收纳通知中心集中显示微信、QQ、剪板、系统、工具和链接事件；推流流量统计只保留在顶部带宽摘要，不再刷屏进入历史列表，同类系统级通知会在 1 分钟内合并为最新一条。
 - **局域网发现广播**：可在侧边栏【妙妙小工具】中启用 mDNS 广播并设置广播名，供单窗口客户端优先发现局域网地址。
+- **输入采样增幅**：可在侧边栏【妙妙小工具】中把指针与触摸输入的上报采样频率设为基准的 `0.5×～2×`（基准为触控板 60Hz、鼠标 125Hz），默认 `1×`；设置持久保存到 `/config/state`。
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
 
-## 1.59 更新
+## 1.67 更新
 
-- 默认帧率为 30 FPS，已有用户手动设置的帧率保持不变。
-- 待机从服务端最近收到的交互、唤醒或休眠设置变更开始计算；达到完整待机时长后再显示 60 秒确认倒计时，浏览器时钟差异不会提前触发休眠。
-- 优化视频数据拷贝与事件循环调度，将 GPU 状态查询移到工作线程，鼠标输入不再逐事件等待 X11 同步响应；H.264 队列溢出时重置采集与解码，避免丢失参考帧后持续卡画面。
-- 妙妙小工具的开关、位置、通知、广播和休眠设置持久保存到 `/config/state`，升级镜像时保留 `/config` 即可恢复；按钮触发的一次性测试不作为设置保存。
-- 下载窗口采用文件列表与快捷访问标签；收藏支持自定义名称，改名和删除位于标签的 `⋯` 菜单，收藏按下载根目录隔离并持久保存。旧浏览器收藏会在首次打开时迁移。
+- **修复「切到别的窗口 / 在另一块屏幕上干活时画面被判定为休眠」**：自适应休眠与客户端活跃度上报原先依赖 `document.hasFocus()`，只要浏览器窗口失去键盘焦点（在另一台显示器上开着画面、却在本机其它窗口里工作），就会被判定为「客户端不活跃」，进而触发降帧 / 休眠 / 恢复链路。
+  - `isClientPageAwake()` 不再把键盘焦点当作休眠信号：仅以「存在已打开的数据通道」与「页面未被隐藏（`document.hidden`）」为准。画面仍然可见时继续保持推流。
+  - `blur` 事件不再强制上报「不活跃」，改为按当前真实状态重新上报（`reportClientAwakeState()`）；只有 `beforeunload` 仍明确上报离线。
+  - 页面真的被切到后台标签页或最小化时，`document.hidden` 依旧会置位，休眠与节流行为不受影响。
+- 补测 `tests/test_client_awake_visibility.js`：覆盖「有数据通道 + 未隐藏 + 无焦点仍判定活跃」「隐藏 / 无数据通道判定不活跃」「`blur` 不强制下线」三组断言。
+
+## 1.66 更新
+
+- **修复侧边栏滑到「动态节流 / 妙妙小工具」时回弹到这两节之前**——定位到真正的触发点：**卡死检测的状态文本扫描会把这两张卡片临时隐藏掉**。
+  - `readBodyStatusText()` 为了让原生「Waiting for stream」横幅不被自家 UI 掩盖，会先把注入的浮层逐个 `display:none`，读完 `innerText` 再恢复。它由多个看门狗驱动（1s / 3s / 4s / 5s，400ms 缓存），也就是说**每几百毫秒就会执行一次**。
+  - 被排除的节点里有 5 个是 `position:fixed` 浮层，但 **「动态节流」和「妙妙小工具」这两张卡片是长在设置侧边栏内部的**。`display:none` 会把它们的盒子整个拿掉 → 侧边栏 `scrollHeight` 骤降 → 浏览器立刻把 `scrollTop` 钳到新上限；读完恢复后**偏移量不会被还原**。所以只要滑到这两张卡片附近，视图就会被反复拽回它们之前。
+  - 改用 **`visibility: hidden`**：`innerText` 同样会跳过它（扫描目的不变），但它完全不影响布局，侧边栏的滚动偏移不再被动过。
+- **两张卡片收进同一个分组容器** `#selkies-sidebar-toolbox-group`：卡片先挂进分组、分组再挂进宿主；稳态下侧边栏只会新增/移除**一个**节点，两张卡片之间也不可能再互相错位。
+- **侧边栏宿主钉定（pinning）**：原先每小时钟都重新扫描一次 `findLocalLinkSidebarHost()`，而侧边栏在滚动 / 收起过程中几何与可见性一直在变，扫描结果会**换成另一个元素**，随后 `host.appendChild(section)` 就把卡片从原侧边栏摘走。现在 `resolveSidebarHost()` 缓存首次命中的宿主，只有它真正脱离文档（`isConnected === false`）时才重新扫描。
+- **6 秒轮询改为「无变化直接跳过」**：`renderDynamicLatencySection` / `renderDebugToolsSection` 各自维护一份值签名，签名一致时整轮直接 return，不再回写 `checked` / `value` / `textContent` / `data-hidden`。
+- **挂载时保留滚动偏移**：万一确实需要重新挂载，`withSidebarScrollPreserved()` 会先探测真正在滚动的祖先容器（宿主本身常常不是 scroller），记录 `scrollTop`，在同一个同步帧内挂完后还原。
+- **`overflow-anchor: none`**：分组容器与卡片内部关闭滚动锚定，避免侧边栏内标签文本更新时浏览器自行补偿 `scrollTop` 与用户手势抢方向。卡片本身的边框 / 圆角 / 折叠行为不变。
+- `hideRemovedSidebarSections`（4s）与自动收起逻辑一并改用固定宿主，避免在错误元素上隐藏区块、反过来又改变滚动高度。
+- 补测 `tests/test_sidebar_scroll_render.js`：13 → **21 项断言**，新增：扫描用 `visibility` 且不产生任何 clamp / 偏移变化、排除后逐项恢复且永不 `display:none`、「用 `display:none` 会把偏移钳掉」的对照用例，以及宿主钉定、两卡片同组、稳态重复挂载不再触碰宿主等。
+
+## 1.65 更新
+
+- **滚动列表加固**：1.63 修复了「重绘导致弹回顶部」，本次再补两处滚轮相关的加固，针对「滚轮划不动 / 突然卡住」：
+  - 通知中心列表与链接历史列表加 `overscroll-behavior: contain`：滑到边界时不再把滚动链式传递给外层页面。
+  - 通知面板与两个原生设置侧边栏 `.sidebar` 都监听 `wheel` 并 `stopPropagation()`（**不调用** `preventDefault`）：侧边栏内的滚轮事件不再外传。远端输入浮层 `#overlayInput` 的滚轮处理会执行 `preventDefault()`，一旦它收到这些事件，侧边栏就会表现为「滚不动 / 回弹」。原生滚动完全不受影响；React 后续重建出的侧边栏节点也会自动绑定。
+- 排查确认：通知列表与链接历史列表各自**只有一个写入者**，且均已走滚动保真渲染器；`enforceNativeSelkiesControls`（2.5s）与 `hideRemovedSidebarSections`（4s）仅操作 `#touch-gamepad-host` 与侧边栏宿主，不触及通知面板。
+
+## 1.63 更新
+
+- **修复侧边栏滚动被反复弹回顶部**：通知中心列表（每 3 秒）与链接跳转历史（每 2 秒）的重绘是无条件 `innerHTML = ""` 全量重建。清空瞬间容器 `scrollHeight` 归零，浏览器随即把 `scrollTop` 钳到 0，重建后滚动位置就停在顶部——表现为「往下滑会往上退顶」。
+  - 改为「内容签名未变化则完全跳过重绘」；签名由条目内容决定（含 1 分钟时间桶，保证「3 分钟前」这类相对时间仍会刷新）。
+  - 必须重绘时，记录并在重建后恢复原 `scrollTop`；若原本已停在底部则继续贴底。首次渲染不再被误判为「贴底」。
+  - 补测 `tests/test_sidebar_scroll_render.js`，12 项断言，含「旧写法必然归零」的对照用例。
+- **屏幕设置默认缩放改为 100%**：上游 bundle 在无存储值时按 `round(devicePixelRatio × 4) × 24` 推导 HiDPI 默认 DPI，2× 屏幕上得到 `192`（即 200%）。现在在 bundle 读取之前写入 `96`（= 100%），默认缩放固定为 100%。
+- **视频设置默认帧率改回 30**：`SELKIES_DEFAULT_FRAMERATE` 由 `45` 改回 `30`（`Dockerfile` / `90-selkies-paste-config` / `selkies-runtime-config.js` 三处同步）。
+- 上述两项默认值各带一个一次性迁移标记（`default_framerate_30_v1` / `default_scaling_dpi_96_v1`）：升级后首次加载会把陈旧值归一到新默认，之后你在侧边栏自行选择的数值不会再被覆盖。
+  - 迁移写入发生在 `selkies-runtime-overrides.js`（普通脚本，同步执行）中，早于 `type="module"` 的 bundle，因此当次加载即生效。
+
+## 1.62 更新
+
+- **修复滚轮失效（1.61 回归）**：1.61 的输入采样器在重建消息时把第 5 个字段写死为 `0`，而该字段是服务端的 `scroll_magnitude`（滚动量）。服务端在滚动量为 0 时会把滚轮按键降级为 **Alt+← / Alt+→ 导航**，因此表现为滚轮无法正常滚动、界面被频繁重置（如侧边栏跳回顶部）。
+  - 采样器现在识别「离散滚轮事件」（`scroll_magnitude ≠ 0`，或掩码命中滚轮按键位 3/4/6/7），**原样透传、不限速、不合并、不改写**。
+  - 所有指针样本在发送时都会**保留原始的第 5 个字段**，不再由客户端硬编码。
+  - 补测 6 项回归用例（滚轮透传、滚动量保真、逐档不合并、水平滚轮、发送顺序、帧结构不变量），共 15 项断言。若回退到 1.61 实现，测试会立即失败。
+
+## 1.61 更新
+
+- **推流帧率基准提高**：`SELKIES_DEFAULT_FRAMERATE` 默认值由 `30` 提高到 `45`，采集与发送帧率同步提升，画面顺滑度与操作跟手度改善；带宽与编码负载约上升 50%，建议确认 VAAPI 硬编已生效，否则软编可能反而更卡。
+- **新增【输入采样增幅】（0.5×～2×，默认 1×）**：位于侧边栏「妙妙小工具」。指针与触摸输入向服务端上报的采样频率以 `1× = 触控板 60Hz / 鼠标 125Hz` 为基准按倍率缩放（2× 时触控板 120Hz、鼠标 250Hz）。
+  - 实现为发送侧采样器：同一时间片内的多次位移会合并，但**最后一次位移与所有按键状态变化都会立即发送**，因此点击不会被延迟、指针最终位置不会丢失。
+  - 触控板的相对位移按累加处理，倍率越高位移被切分得越细；绝对指针移动受倍率约束上限。
+  - 设置持久保存到 `/config/state`（键名 `input_sampling_multiplier`，服务端校验范围 0.5～2）。
+
+## 1.60 更新
+
+- **修复启动卡在「等待视频流」**：早期 1.60 构建产物里 `/tmp` 权限被构建上下文中的同名目录覆盖成 `0755`，Xvfb 以非特权桌面用户运行、无法创建 `/tmp/.tX1-lock`，X server 启动失败后页面会一直停在等待视频流。镜像已在应用覆盖层后强制补齐 `/tmp` 与 `/var/tmp` 权限。
+- **诊断日志不再无限膨胀**：`upload-diagnostics.jsonl` 改为 512 KiB 硬上限滚动，保留 3 份归档，并丢弃周期性心跳采样（`*-sample`）。实测这类采样占日志行数的 99.98%、体积的约 89%。
+- **修复卡在「正在重建视频流」**：等待状态检测不再把页面自身注入的活动横幅文案误判成“等待视频流”，避免恢复完成后提示仍无法退出。
+- **重建提示带硬超时**：任何“正在重建视频流 / 正在重启推流系统”提示都会在 `SELKIES_STREAM_REBUILD_MAX_MS` 后强制收尾并复位恢复状态；帧恢复更新、管线恢复都会立即关闭提示。
+- **自动重建分级加固**：轻量恢复失败后会就地重启视频 / 音频管线（`STOP_VIDEO` / `START_VIDEO` 等），保留会话、剪贴板与 UI 状态，不再一上来就整页刷新。
+- **整页重置只作为最后手段**：仅在卡顿超过 `SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS` 且已失败 `SELKIES_PAGE_STALL_RELOAD_MIN_RECOVERS` 次就地恢复后预约刷新，并留 `SELKIES_FULL_RESET_GRACE_MS` 宽限期，画面在此期间恢复会自动取消刷新。
+- **恢复阶梯自动归零**：推流持续健康 `SELKIES_RECOVER_LADDER_RESET_MS` 后阶梯归零，下次故障重新获得完整的自动重建次数。
 
 ## 快速开始
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.59.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.67.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.59.tar
+docker load -i wechat-selkies-1.67.tar
 ```
 
 启动：
@@ -67,7 +125,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.59
+  wechat-selkies:1.67
 ```
 
 访问：
@@ -90,7 +148,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.59
+    image: wechat-selkies:1.67
     container_name: wechat-selkies
     init: true
     ports:
@@ -161,7 +219,7 @@ services:
 | `SELKIES_PASTE_IMAGE_AUTO_PASTE` | `true` | 写入远端剪贴板后自动 Ctrl+V |
 | `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | 可选编码器列表 |
 | `SELKIES_DEFAULT_ENCODER` | `x264enc` | 默认编码器；`x264enc` 优先 VAAPI，`x264enc-striped` 为 CPU 分片模式 |
-| `SELKIES_DEFAULT_FRAMERATE` | `30` | 默认帧率 |
+| `SELKIES_DEFAULT_FRAMERATE` | `30` | 默认推流帧率 |
 | `SELKIES_DEFAULT_USE_CPU` | `false` | 优先尝试硬件编码，失败时回退 CPU |
 | `SELKIES_DEFAULT_H264_STREAMING_MODE` | `true` | 默认开启 H264 streaming mode |
 | `SELKIES_DEFAULT_H264_CRF` | `30` | 默认 H264 CRF |
@@ -179,6 +237,11 @@ services:
 | `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | 容器启动后多久以内不进入内部休眠，避免刚启动就睡眠 |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 长时间等待视频流时触发恢复 |
 | `SELKIES_STREAM_RECOVER_COOLDOWN_MS` | `120000` | 页面级恢复冷却时间 |
+| `SELKIES_STREAM_REBUILD_MAX_MS` | `24000` | 「正在重建视频流」提示的硬超时，到点强制收尾，防止卡在重建状态 |
+| `SELKIES_STREAM_RECOVER_HARD_STAGES` | `2` | 轻量恢复失败后继续尝试的就地管线重启次数（不刷新页面） |
+| `SELKIES_PAGE_STALL_RELOAD_MIN_RECOVERS` | `2` | 允许整页重置前必须先失败的就地恢复次数 |
+| `SELKIES_FULL_RESET_GRACE_MS` | `9000` | 整页重置预约后的宽限期，期间恢复则自动取消 |
+| `SELKIES_RECOVER_LADDER_RESET_MS` | `120000` | 推流持续健康多久后把恢复阶梯归零 |
 | `SELKIES_LOCAL_LINK_OPEN` | `true` | 启用链接本地打开确认 |
 | `LOCAL_LINK_BRIDGE_PORT` | `38080` | 本地链接桥接端口 |
 | `LOCAL_LINK_BRIDGE_ALLOWED_SCHEMES` | `http,https,mailto` | 允许处理的链接协议 |
@@ -207,6 +270,10 @@ services:
 | `SELKIES_UPLOAD_MIN_FREE_BYTES` | `268435456` | 上传开始后必须保留的磁盘空间 |
 | `SELKIES_UPLOAD_ALLOWED_SUBDIRS` | 空 | 可选的逗号分隔目标子目录白名单 |
 | `SELKIES_LEGACY_UPLOAD_ENABLED` | `false` | 启用旧 WebSocket 上传兼容包装 |
+| `SELKIES_UPLOAD_DIAGNOSTICS_MAX_BYTES` | `524288` | `upload-diagnostics.jsonl` 单文件上限（512 KiB），超出即滚动 |
+| `SELKIES_UPLOAD_DIAGNOSTICS_ARCHIVES` | `3` | 保留的滚动归档份数（`.1` / `.2` / `.3`） |
+| `SELKIES_UPLOAD_DIAGNOSTICS_KEEP_SAMPLES` | `false` | 是否保留周期性 `*-sample` 心跳采样；默认丢弃以避免日志膨胀 |
+| `SELKIES_UPLOAD_DIAGNOSTICS_RETENTION_DAYS` | `7` | 按天归档的保留天数 |
 
 下载目录由 nginx 的 `abc` 用户读取，以便访问微信私有目录；`ssl` 和根级隐藏目录不会通过下载入口暴露，访问下载仍必须通过 PIN 鉴权。
 
@@ -230,11 +297,11 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.59 \
+  wechat-selkies:1.67 \
   -u /scripts/lan_discovery_service.py
 ```
 
-诊断日志位于 `/config/logs/upload-sidecar.log` 和 `/config/logs/upload-diagnostics.jsonl`。详细安全边界、API 与迁移说明见 `docs/upload-architecture-1.45.md`。
+诊断日志位于 `/config/logs/upload-sidecar.log` 和 `/config/logs/upload-diagnostics.jsonl`。浏览器端仅记录异常事件(长任务、连接关闭、页面重载、上传失败等)，`*-sample` 周期心跳采样默认丢弃(`SELKIES_UPLOAD_DIAGNOSTICS_KEEP_SAMPLES=true` 可恢复)；`upload-diagnostics.jsonl` 单文件上限 512 KiB，超出即滚动为 `.1` / `.2` / `.3`(`SELKIES_UPLOAD_DIAGNOSTICS_MAX_BYTES` / `..._ARCHIVES`)，同时按天归档为 `upload-diagnostics.jsonl.YYYYMMDD`，默认保留最近 7 天(`SELKIES_UPLOAD_DIAGNOSTICS_RETENTION_DAYS`)。详细安全边界、API 与迁移说明见 `docs/upload-architecture-1.45.md`。
 
 ## 会话规则
 
@@ -249,14 +316,21 @@ docker run -d \
 
 ## 视频恢复策略
 
-视频异常时会按顺序恢复：
+视频异常时按分级阶梯自动恢复，原则是**先就地重建、非必要不整页刷新**：
 
-1. 清理客户端解码状态并触发轻量 Selkies 流恢复事件。
-2. 自动恢复不会主动 `STOP_VIDEO` / `START_VIDEO`，也不会刷新页面或调用 `/scripts/recover-xstack.sh`。
-3. 只有手动点击侧边栏里的重修复按钮时，才执行视频 / 音频 pipeline 与 X11 的重修复。
-4. 所有恢复动作都有冷却时间，避免循环重启影响微信 / QQ 窗口。
+1. **轻量重建**：清理客户端解码状态并触发 Selkies 流恢复事件（`RESET_IO_MODULES` + `FORCE_STREAM_RECOVER`），不动页面生命周期。
+2. **就地重启管线**：轻量重建无效后，就地执行 `STOP_VIDEO` / `STOP_AUDIO` → `RESET_IO_MODULES` → `FORCE_STREAM_RECOVER` → `START_VIDEO` / `START_AUDIO`，保留 WebSocket 会话、剪贴板与 UI 状态，**不刷新页面**。
+3. **提示人工**：阶梯走完后给出提示，等待手动点击侧边栏的“重修复推流与 X11”。
+4. **整页重置（最后手段）**：仅在卡顿超过 `SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS` 且已失败至少 `SELKIES_PAGE_STALL_RELOAD_MIN_RECOVERS` 次就地恢复后才考虑；即便如此也只是**预约**刷新，并留 `SELKIES_FULL_RESET_GRACE_MS` 宽限期，画面在宽限期内恢复会自动取消刷新。
 
-页面中仍保留手动按钮“重修复推流与 X11”。
+配套的防卡死措施：
+
+- 任何“正在重建视频流 / 正在重启推流系统”提示都有 `SELKIES_STREAM_REBUILD_MAX_MS` 硬超时，到点强制收尾并复位恢复状态，不会长期挂在页面上。
+- 帧恢复更新、视频管线恢复、推流恢复成功都会立即关闭重建提示并取消已预约的整页刷新。
+- 等待状态检测会排除页面自身注入的活动横幅等层，避免把提示文案本身误判成“等待视频流”而导致自锁。
+- 推流持续健康 `SELKIES_RECOVER_LADDER_RESET_MS` 后，恢复阶梯归零，下次故障重新获得完整的自动重建次数。
+
+所有恢复动作都有冷却时间，避免循环重启影响微信 / QQ 窗口。页面中仍保留手动按钮“重修复推流与 X11”。
 
 ## 通知中心
 
@@ -286,14 +360,35 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.59 .
+docker build -t wechat-selkies:1.67 .
+```
+
+构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
+
+- `TARGETPLATFORM` / `BUILDPLATFORM`：默认 `linux/amd64`。
+- `QQ_LOCAL_URL`：可选，指定 QQ `.deb` 的下载镜像地址，覆盖官方 CDN。
+
+如果构建时 QQ 下载报 `curl: (22) ... error: 403`，说明官方 CDN 拒绝了自动化下载，此时用任意可达地址替代即可（内网镜像、对象存储，或本机临时 HTTP 服务）：
+
+```bash
+# 例：从 1.59 镜像导出 QQ 包并起一个临时 HTTP 源
+docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
+  mkdir -p /tmp/b/DEBIAN /tmp/b/opt && cp -a /opt/QQ /tmp/b/opt/ &&
+  sed -n "/^Package: linuxqq$/,/^$/p" /var/lib/dpkg/status | grep -vE "^(Status|Installed-Size)" > /tmp/b/DEBIAN/control &&
+  for s in preinst postinst prerm postrm; do [ -f /var/lib/dpkg/info/linuxqq.$s ] && cp /var/lib/dpkg/info/linuxqq.$s /tmp/b/DEBIAN/$s; done &&
+  dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
+
+python3 -m http.server 8899 --directory vendor &
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.67 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.59.tar wechat-selkies:1.59
+docker save -o wechat-selkies-1.67.tar wechat-selkies:1.67
 ```
+
+仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。
 
 ## 故障排查
 

@@ -206,12 +206,6 @@
       showUploaderPanel();
       return;
     }
-    if (message.type === "worker-diagnostics") {
-      if (typeof window.__selkiesRecordUploadDiagnostic === "function") {
-        window.__selkiesRecordUploadDiagnostic("upload-worker-sample", message.metrics || {});
-      }
-      return;
-    }
     if (message.type === "upload-diagnostic" && message.diagnostic) {
       if (typeof window.__selkiesRecordUploadDiagnostic === "function") {
         var workerDiagnostic = Object.assign({}, message.diagnostic);

@@ -54,7 +54,7 @@ PREFERENCES_LOCK = threading.Lock()
 TOOL_PREFERENCES = {
     "notification_center_enabled", "legacy_upload_fallback_enabled",
     "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
-    "bottom_action_dock_collapsed",
+    "bottom_action_dock_collapsed", "input_sampling_multiplier",
 }
 
 
@@ -74,6 +74,16 @@ def update_preferences(patch):
                 if value not in ("top", "bottom"):
                     raise ValueError("Invalid dock position")
                 clean[key] = value
+            elif key == "input_sampling_multiplier":
+                if isinstance(value, bool):
+                    raise ValueError("Invalid input sampling multiplier")
+                try:
+                    multiplier = float(value)
+                except (TypeError, ValueError):
+                    raise ValueError("Invalid input sampling multiplier")
+                if not (0.5 <= multiplier <= 2):
+                    raise ValueError("Invalid input sampling multiplier")
+                clean[key] = round(multiplier, 2)
             elif isinstance(value, bool) or value in ("true", "false"):
                 clean[key] = value is True or value == "true"
             else:
@@ -109,10 +119,35 @@ def update_preferences(patch):
         return state
 
 
+def diagnostics_env_int(name, default, minimum, maximum=None):
+    try:
+        value = int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    if value < minimum:
+        value = minimum
+    if maximum is not None and value > maximum:
+        value = maximum
+    return value
+
+
 DIAGNOSTICS_LOG_PATH = Path(
     os.environ.get("SELKIES_UPLOAD_DIAGNOSTICS_LOG_PATH", "/config/logs/upload-diagnostics.jsonl")
 )
+DIAGNOSTICS_RETENTION_DAYS = diagnostics_env_int("SELKIES_UPLOAD_DIAGNOSTICS_RETENTION_DAYS", 7, 1, 90)
+# Hard size cap for the active file; older content rotates into .1/.2/... archives.
+DIAGNOSTICS_MAX_BYTES = diagnostics_env_int(
+    "SELKIES_UPLOAD_DIAGNOSTICS_MAX_BYTES", 512 * 1024, 64 * 1024, 32 * 1024 * 1024
+)
+DIAGNOSTICS_SIZE_ARCHIVES = diagnostics_env_int("SELKIES_UPLOAD_DIAGNOSTICS_ARCHIVES", 3, 1, 10)
+# Periodic heartbeat samples ("*-sample") dominate the volume and carry no failure signal,
+# so they are dropped unless explicitly requested.
+DIAGNOSTICS_KEEP_SAMPLES = str(
+    os.environ.get("SELKIES_UPLOAD_DIAGNOSTICS_KEEP_SAMPLES", "false")
+).strip().lower() in ("1", "true", "yes", "on")
+DIAGNOSTICS_DATE_FORMAT = "%Y%m%d"
 MAX_DIAGNOSTICS_BODY = 64 * 1024
+_diagnostics_active_date = None
 
 
 def normalize_cookie_path(path):
@@ -315,15 +350,120 @@ def issue_upload_token():
     return f"{encoded}.{signature}", claims
 
 
+def diagnostics_day_stamp(ts):
+    return time.strftime(DIAGNOSTICS_DATE_FORMAT, time.localtime(ts))
+
+
+def prune_diagnostics_archives(now_ts):
+    cutoff = diagnostics_day_stamp(now_ts - DIAGNOSTICS_RETENTION_DAYS * 86400)
+    prefix = DIAGNOSTICS_LOG_PATH.name + "."
+    try:
+        entries = list(DIAGNOSTICS_LOG_PATH.parent.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith(prefix):
+            continue
+        suffix = entry.name[len(prefix):]
+        if len(suffix) != 8 or not suffix.isdigit():
+            continue
+        if suffix <= cutoff:
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+
+
+def rotate_diagnostics_file(now_ts):
+    global _diagnostics_active_date
+    today = diagnostics_day_stamp(now_ts)
+    if _diagnostics_active_date == today:
+        return
+    try:
+        stat = DIAGNOSTICS_LOG_PATH.stat()
+        file_day = diagnostics_day_stamp(stat.st_mtime)
+        if stat.st_size > 0 and file_day != today:
+            archived = DIAGNOSTICS_LOG_PATH.with_name(f"{DIAGNOSTICS_LOG_PATH.name}.{file_day}")
+            try:
+                archived.unlink()
+            except FileNotFoundError:
+                pass
+            DIAGNOSTICS_LOG_PATH.replace(archived)
+    except OSError:
+        pass
+    _diagnostics_active_date = today
+    prune_diagnostics_archives(now_ts)
+
+
+def rotate_diagnostics_by_size(incoming_bytes):
+    try:
+        stat = DIAGNOSTICS_LOG_PATH.stat()
+    except OSError:
+        return
+    if stat.st_size <= 0 or stat.st_size + incoming_bytes <= DIAGNOSTICS_MAX_BYTES:
+        return
+    for index in range(DIAGNOSTICS_SIZE_ARCHIVES - 1, 0, -1):
+        source = DIAGNOSTICS_LOG_PATH.with_name(f"{DIAGNOSTICS_LOG_PATH.name}.{index}")
+        if not source.exists():
+            continue
+        target = DIAGNOSTICS_LOG_PATH.with_name(f"{DIAGNOSTICS_LOG_PATH.name}.{index + 1}")
+        try:
+            if target.exists():
+                target.unlink()
+            source.replace(target)
+        except OSError:
+            pass
+    first = DIAGNOSTICS_LOG_PATH.with_name(f"{DIAGNOSTICS_LOG_PATH.name}.1")
+    try:
+        if first.exists():
+            first.unlink()
+        DIAGNOSTICS_LOG_PATH.replace(first)
+    except OSError:
+        pass
+
+
+def is_periodic_sample_event(event_name):
+    return str(event_name or "").strip().lower().endswith("-sample")
+
+
+def strip_periodic_samples(payload):
+    if DIAGNOSTICS_KEEP_SAMPLES or not isinstance(payload, dict):
+        return payload
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        return payload
+    kept = []
+    dropped = 0
+    for item in records:
+        if isinstance(item, dict) and is_periodic_sample_event(item.get("event")):
+            dropped += 1
+            continue
+        kept.append(item)
+    if not dropped:
+        return payload
+    filtered = dict(payload)
+    filtered["records"] = kept
+    filtered["droppedSamples"] = dropped
+    return filtered
+
+
 def append_diagnostics(payload):
+    filtered = strip_periodic_samples(payload)
+    records = filtered.get("records") if isinstance(filtered, dict) else None
+    if isinstance(records, list) and not records:
+        # Heartbeats only: keep the log for real events.
+        return
+    rotate_diagnostics_file(time.time())
     DIAGNOSTICS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "timestamp_ms": int(time.time() * 1000),
         "source": "browser",
-        "metrics": payload,
+        "metrics": filtered,
     }
+    line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
+    rotate_diagnostics_by_size(len(line.encode("utf-8")))
     with DIAGNOSTICS_LOG_PATH.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n")
+        stream.write(line)
 
 
 def cookie_header(token, max_age=None):

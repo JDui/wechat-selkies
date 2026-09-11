@@ -16,9 +16,14 @@ LABEL org.opencontainers.image.documentation="https://github.com/nickrunning/wec
 LABEL org.opencontainers.image.vendor="WeChat Selkies Project"
 LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 
-# Build arguments for multi-arch support
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
+# Build arguments for multi-arch support.
+# BuildKit injects TARGETPLATFORM/BUILDPLATFORM automatically; the defaults keep plain
+# `docker build` (legacy builder) working, where those args would otherwise be empty.
+ARG TARGETPLATFORM=linux/amd64
+ARG BUILDPLATFORM=linux/amd64
+# Optional mirror for the QQ .deb.  The official CDN regularly returns 403 for automated
+# downloads, so any reachable URL (internal mirror, host share, object storage) can be used.
+ARG QQ_LOCAL_URL=""
 ARG UBUNTU_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu/"
 RUN echo "Building WeChat-Selkies on $BUILDPLATFORM, targeting $TARGETPLATFORM"
 
@@ -86,13 +91,22 @@ RUN case "$TARGETPLATFORM" in \
         echo "Supported platforms: linux/amd64, linux/arm64" >&2; \
         exit 1 ;; \
     esac && \
-    QQ_CONFIG_URL="https://cdn-go.cn/qq-web/im.qq.com_new/latest/rainbow/linuxConfig.js" && \
-    QQ_CONFIG="$(curl -fsSL "$QQ_CONFIG_URL" | tr -d '\n')" && \
-    QQ_VERSION="$(echo "$QQ_CONFIG" | sed -n 's/.*\"version\":\"\([^\"]*\)\".*/\1/p')" && \
-    QQ_URL="$(echo "$QQ_CONFIG" | sed -n "s/.*\"${QQ_ARCH_KEY}\":{\"deb\":\"\([^\"]*\)\".*/\1/p")" && \
-    if [ -z "$QQ_URL" ]; then QQ_URL="$QQ_FALLBACK_URL"; fi && \
-    echo "Downloading QQ for $QQ_ARCH architecture from: $QQ_URL (version: ${QQ_VERSION:-unknown})" && \
-    curl -fsSL -o qq.deb "$QQ_URL" && \
+    QQ_LOCAL_DEB="$(ls /tmp/linuxqq_*.deb 2>/dev/null | head -n 1)" && \
+    if [ -n "$QQ_LOCAL_URL" ]; then \
+        echo "Downloading QQ package from mirror: $QQ_LOCAL_URL" && \
+        curl -fsSL -o qq.deb "$QQ_LOCAL_URL"; \
+    elif [ -n "$QQ_LOCAL_DEB" ]; then \
+        echo "Using bundled QQ package: $QQ_LOCAL_DEB (official CDN download skipped)" && \
+        cp "$QQ_LOCAL_DEB" qq.deb; \
+    else \
+        QQ_CONFIG_URL="https://cdn-go.cn/qq-web/im.qq.com_new/latest/rainbow/linuxConfig.js" && \
+        QQ_CONFIG="$(curl -fsSL "$QQ_CONFIG_URL" | tr -d '\n')" && \
+        QQ_VERSION="$(echo "$QQ_CONFIG" | sed -n 's/.*\"version\":\"\([^\"]*\)\".*/\1/p')" && \
+        QQ_URL="$(echo "$QQ_CONFIG" | sed -n "s/.*\"${QQ_ARCH_KEY}\":{\"deb\":\"\([^\"]*\)\".*/\1/p")" && \
+        if [ -z "$QQ_URL" ]; then QQ_URL="$QQ_FALLBACK_URL"; fi && \
+        echo "Downloading QQ for $QQ_ARCH architecture from: $QQ_URL (version: ${QQ_VERSION:-unknown})" && \
+        curl -fsSL -o qq.deb "$QQ_URL"; \
+    fi && \
     echo "Installing QQ..." && \
     (dpkg -i qq.deb || (apt-get update && apt-get install -f -y && dpkg -i qq.deb)) && \
     rm -f qq.deb && \
@@ -154,6 +168,10 @@ ENV SELKIES_UPLOAD_ALLOW_OVERWRITE="false"
 ENV SELKIES_UPLOAD_MIN_FREE_BYTES="268435456"
 ENV SELKIES_UPLOAD_ALLOWED_SUBDIRS=""
 ENV SELKIES_LEGACY_UPLOAD_ENABLED="false"
+# upload-diagnostics.jsonl rotation: hard 512 KiB cap plus bounded archives.
+ENV SELKIES_UPLOAD_DIAGNOSTICS_MAX_BYTES="524288"
+ENV SELKIES_UPLOAD_DIAGNOSTICS_ARCHIVES="3"
+ENV SELKIES_UPLOAD_DIAGNOSTICS_KEEP_SAMPLES="false"
 ENV SELKIES_CONTAINER_SLEEP="false"
 ENV SELKIES_CONTAINER_SLEEP_REQUIRE_PIN="true"
 ENV SELKIES_CONTAINER_SLEEP_PORT="38083"
@@ -206,6 +224,11 @@ ENV SELKIES_PAGE_STALL_WATCHDOG="true"
 ENV SELKIES_PAGE_STALL_THRESHOLD_MS="45000"
 ENV SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS="90000"
 ENV SELKIES_PAGE_STALL_COOLDOWN_MS="300000"
+ENV SELKIES_STREAM_REBUILD_MAX_MS="24000"
+ENV SELKIES_STREAM_RECOVER_HARD_STAGES="2"
+ENV SELKIES_PAGE_STALL_RELOAD_MIN_RECOVERS="2"
+ENV SELKIES_FULL_RESET_GRACE_MS="9000"
+ENV SELKIES_RECOVER_LADDER_RESET_MS="120000"
 ENV SELKIES_RENDER_STALL_WATCHDOG="true"
 ENV SELKIES_RENDER_STALL_THRESHOLD_MS="12000"
 ENV SELKIES_RENDER_STALL_COOLDOWN_MS="25000"
@@ -238,6 +261,12 @@ RUN cp /usr/share/icons/hicolor/512x512/apps/qq.png /usr/share/selkies/www/icon.
 # add local files
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
+
+# The overlay above must never downgrade system directory permissions.  A stray `root/tmp`
+# directory would copy over /tmp as 0755 root:root, and then Xvfb (running as the unprivileged
+# desktop user) cannot create /tmp/.tX1-lock - the X server dies and the page stays on
+# "Waiting for stream" forever.  Keep this guard after every COPY of the overlay.
+RUN chmod 1777 /tmp && chmod 1777 /var/tmp 2>/dev/null || true
 
 # normalize line endings for scripts copied from Windows worktrees
 RUN sed -i 's/\r$//' \

@@ -31,6 +31,11 @@ DEFAULT_PAGE_STALL_WATCHDOG_RAW="${SELKIES_PAGE_STALL_WATCHDOG:-true}"
 DEFAULT_PAGE_STALL_THRESHOLD_RAW="${SELKIES_PAGE_STALL_THRESHOLD_MS:-45000}"
 DEFAULT_PAGE_STALL_RELOAD_THRESHOLD_RAW="${SELKIES_PAGE_STALL_RELOAD_THRESHOLD_MS:-90000}"
 DEFAULT_PAGE_STALL_COOLDOWN_RAW="${SELKIES_PAGE_STALL_COOLDOWN_MS:-300000}"
+DEFAULT_STREAM_REBUILD_MAX_RAW="${SELKIES_STREAM_REBUILD_MAX_MS:-24000}"
+DEFAULT_STREAM_RECOVER_HARD_STAGES_RAW="${SELKIES_STREAM_RECOVER_HARD_STAGES:-2}"
+DEFAULT_PAGE_STALL_RELOAD_MIN_RECOVERS_RAW="${SELKIES_PAGE_STALL_RELOAD_MIN_RECOVERS:-2}"
+DEFAULT_FULL_RESET_GRACE_RAW="${SELKIES_FULL_RESET_GRACE_MS:-9000}"
+DEFAULT_RECOVER_LADDER_RESET_RAW="${SELKIES_RECOVER_LADDER_RESET_MS:-120000}"
 DEFAULT_RENDER_STALL_WATCHDOG_RAW="${SELKIES_RENDER_STALL_WATCHDOG:-true}"
 DEFAULT_RENDER_STALL_THRESHOLD_RAW="${SELKIES_RENDER_STALL_THRESHOLD_MS:-12000}"
 DEFAULT_RENDER_STALL_COOLDOWN_RAW="${SELKIES_RENDER_STALL_COOLDOWN_MS:-25000}"
@@ -200,6 +205,31 @@ if ! [[ "$default_page_stall_cooldown_ms" =~ ^[0-9]+$ ]] || [ "$default_page_sta
   default_page_stall_cooldown_ms="300000"
 fi
 
+default_stream_rebuild_max_ms="${DEFAULT_STREAM_REBUILD_MAX_RAW}"
+if ! [[ "$default_stream_rebuild_max_ms" =~ ^[0-9]+$ ]] || [ "$default_stream_rebuild_max_ms" -lt 8000 ] || [ "$default_stream_rebuild_max_ms" -gt 180000 ]; then
+  default_stream_rebuild_max_ms="24000"
+fi
+
+default_stream_recover_hard_stages="${DEFAULT_STREAM_RECOVER_HARD_STAGES_RAW}"
+if ! [[ "$default_stream_recover_hard_stages" =~ ^[0-9]+$ ]] || [ "$default_stream_recover_hard_stages" -lt 0 ] || [ "$default_stream_recover_hard_stages" -gt 4 ]; then
+  default_stream_recover_hard_stages="2"
+fi
+
+default_page_stall_reload_min_recovers="${DEFAULT_PAGE_STALL_RELOAD_MIN_RECOVERS_RAW}"
+if ! [[ "$default_page_stall_reload_min_recovers" =~ ^[0-9]+$ ]] || [ "$default_page_stall_reload_min_recovers" -lt 0 ] || [ "$default_page_stall_reload_min_recovers" -gt 6 ]; then
+  default_page_stall_reload_min_recovers="2"
+fi
+
+default_full_reset_grace_ms="${DEFAULT_FULL_RESET_GRACE_RAW}"
+if ! [[ "$default_full_reset_grace_ms" =~ ^[0-9]+$ ]] || [ "$default_full_reset_grace_ms" -lt 3000 ] || [ "$default_full_reset_grace_ms" -gt 60000 ]; then
+  default_full_reset_grace_ms="9000"
+fi
+
+default_recover_ladder_reset_ms="${DEFAULT_RECOVER_LADDER_RESET_RAW}"
+if ! [[ "$default_recover_ladder_reset_ms" =~ ^[0-9]+$ ]] || [ "$default_recover_ladder_reset_ms" -lt 30000 ] || [ "$default_recover_ladder_reset_ms" -gt 900000 ]; then
+  default_recover_ladder_reset_ms="120000"
+fi
+
 default_render_stall_watchdog_js="true"
 case "${DEFAULT_RENDER_STALL_WATCHDOG_RAW,,}" in
   false|0|no|off) default_render_stall_watchdog_js="false" ;;
@@ -320,6 +350,11 @@ window.__SELKIES_RUNTIME__ = {
   pageStallThresholdMs: ${default_page_stall_threshold_ms},
   pageStallReloadThresholdMs: ${default_page_stall_reload_threshold_ms},
   pageStallCooldownMs: ${default_page_stall_cooldown_ms},
+  streamRebuildMaxMs: ${default_stream_rebuild_max_ms},
+  streamRecoverHardStages: ${default_stream_recover_hard_stages},
+  pageStallReloadMinRecovers: ${default_page_stall_reload_min_recovers},
+  fullResetGraceMs: ${default_full_reset_grace_ms},
+  recoverLadderResetMs: ${default_recover_ladder_reset_ms},
   renderStallWatchdog: ${default_render_stall_watchdog_js},
   renderStallThresholdMs: ${default_render_stall_threshold_ms},
   renderStallCooldownMs: ${default_render_stall_cooldown_ms},

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -71,6 +72,35 @@ class UploadAuthTests(unittest.TestCase):
             record = json.loads(diagnostics_path.read_text(encoding="utf-8"))
             self.assertEqual(record["source"], "browser")
             self.assertEqual(record["metrics"]["records"][0]["event"], "long-task")
+
+    def test_diagnostics_rotate_by_day(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge, diagnostics_path = self.load_bridge(temporary)
+            yesterday = time.time() - 86400
+            diagnostics_path.write_text('{"stale": true}\n', encoding="utf-8")
+            os.utime(diagnostics_path, (yesterday, yesterday))
+            bridge.append_diagnostics({"records": [{"event": "websocket-close"}]})
+            archived = diagnostics_path.with_name(
+                diagnostics_path.name + "." + time.strftime("%Y%m%d", time.localtime(yesterday))
+            )
+            self.assertTrue(archived.exists())
+            self.assertEqual(json.loads(archived.read_text(encoding="utf-8"))["stale"], True)
+            fresh = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            self.assertEqual(fresh["metrics"]["records"][0]["event"], "websocket-close")
+
+    def test_diagnostics_archives_pruned_after_retention(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge, diagnostics_path = self.load_bridge(temporary)
+            now = time.time()
+            old_day = time.strftime("%Y%m%d", time.localtime(now - 9 * 86400))
+            recent_day = time.strftime("%Y%m%d", time.localtime(now - 2 * 86400))
+            old_archive = diagnostics_path.with_name(diagnostics_path.name + "." + old_day)
+            recent_archive = diagnostics_path.with_name(diagnostics_path.name + "." + recent_day)
+            old_archive.write_text("{}\n", encoding="utf-8")
+            recent_archive.write_text("{}\n", encoding="utf-8")
+            bridge.prune_diagnostics_archives(now)
+            self.assertFalse(old_archive.exists())
+            self.assertTrue(recent_archive.exists())
 
 
 if __name__ == "__main__":
