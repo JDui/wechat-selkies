@@ -79,6 +79,7 @@ class PreferencesTests(unittest.TestCase):
 
     def test_settings_and_named_favorites_survive_reload(self):
         patch = {"bottom_action_dock_position": "top", "notification_center_enabled": False,
+                 "dock_network_monitor_enabled": False,
                  "download_favorites:/files/:/config": [{"path": "微信/文件", "name": "工作文件"}]}
         self.bridge.update_preferences(patch)
         restarted = load("session_auth_bridge")

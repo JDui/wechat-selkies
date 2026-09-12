@@ -142,11 +142,12 @@
   var notificationBandwidthSamplesKey = "notification_bandwidth_samples_v1";
   var notificationBandwidthEventTimer = null;
   var lastNetworkStatsAt = 0;
+  var dockNetworkMonitorEnabled = sanitizeBool(getStoredValue("dock_network_monitor_enabled"), true);
   var notificationBandwidthSummary = {
     uploadKbps: 0,
     downloadKbps: 0,
-    dominant: "upload",
-    total24hBytes: 0
+    total24hBytes: 0,
+    latencyMs: null
   };
   var unreadTitleFlashTimer = null;
   var unreadTitleFlashPhase = false;
@@ -2783,7 +2784,8 @@
   }
 
   function formatTrafficSpeed(kbps) {
-    var value = Math.max(0, Number(kbps) || 0);
+    // The server reports decimal kilobits/s; display binary kilobytes/s.
+    var value = Math.max(0, Number(kbps) || 0) * 1000 / 8 / 1024;
     if (value >= 1024) return (value / 1024).toFixed(value >= 10240 ? 1 : 2) + " MB/s";
     return value.toFixed(value >= 10 ? 0 : 1) + " KB/s";
   }
@@ -2797,20 +2799,29 @@
     var root = document.getElementById("selkies-notification-center");
     var el = root && root.querySelector(".selkies-notification-center-bandwidth");
     if (!el) return;
-    var upload = Math.max(0, Number(notificationBandwidthSummary.uploadKbps) || 0);
-    var download = Math.max(0, Number(notificationBandwidthSummary.downloadKbps) || 0);
-    var dominant = upload >= download ? "upload" : "download";
-    notificationBandwidthSummary.dominant = dominant;
-    var speed = dominant === "upload" ? upload : download;
-    var speedEl = el.querySelector("[data-bandwidth='speed']");
     var totalEl = el.querySelector("[data-bandwidth='total']");
-    if (speedEl) {
-      speedEl.textContent = formatTrafficSpeed(speed);
-      speedEl.setAttribute("data-direction", dominant);
-    }
     if (totalEl) {
       totalEl.textContent = formatTrafficTotal(notificationBandwidthSummary.total24hBytes);
     }
+  }
+
+  function renderDockNetworkMonitor() {
+    var el = document.getElementById("selkies-dock-network-monitor");
+    if (!el) return;
+    el.hidden = !dockNetworkMonitorEnabled;
+    if (!dockNetworkMonitorEnabled) return;
+    var fresh = hasOpenDataSocket() && lastNetworkStatsAt > 0 && Date.now() - lastNetworkStatsAt < 10000;
+    var upload = notificationBandwidthSummary.uploadKbps;
+    var download = notificationBandwidthSummary.downloadKbps;
+    // Directions are from the browser's perspective, opposite to the server.
+    var receiving = upload >= download;
+    var speedEl = el.querySelector("[data-network='speed']");
+    var latencyEl = el.querySelector("[data-network='latency']");
+    var latency = notificationBandwidthSummary.latencyMs;
+    speedEl.textContent = fresh ? (receiving ? "\u2193 " : "\u2191 ") + formatTrafficSpeed(Math.max(upload, download)) : "-- KB/s";
+    speedEl.setAttribute("data-direction", receiving ? "receive" : "send");
+    latencyEl.textContent = "RTT " + (fresh && latency !== null ? Math.round(latency) + " ms" : "-- ms");
+    el.title = fresh ? "接收 " + formatTrafficSpeed(upload) + " / 发送 " + formatTrafficSpeed(download) + " · 当前往返延迟 " + (latency !== null ? Math.round(latency) + " ms" : "暂无数据") : "等待网络统计";
   }
 
   function maybeRecordDailyBandwidthNotice(force) {
@@ -2845,10 +2856,14 @@
     if (!Number.isFinite(downloadKbps)) downloadKbps = 0;
     uploadKbps = Math.max(0, uploadKbps || 0);
     downloadKbps = Math.max(0, downloadKbps || 0);
-    if (uploadKbps <= 0 && downloadKbps <= 0) return;
     var now = Date.now();
     var elapsedSeconds = lastNetworkStatsAt ? Math.max(1, Math.min(30, (now - lastNetworkStatsAt) / 1000)) : 5;
     lastNetworkStatsAt = now;
+    notificationBandwidthSummary.uploadKbps = uploadKbps;
+    notificationBandwidthSummary.downloadKbps = downloadKbps;
+    var latency = payload.latency_ms;
+    notificationBandwidthSummary.latencyMs = typeof latency === "number" && Number.isFinite(latency) && latency >= 0 ? latency : null;
+    renderDockNetworkMonitor();
     var uploadBytes = (uploadKbps * 1000 / 8) * elapsedSeconds;
     var downloadBytes = (downloadKbps * 1000 / 8) * elapsedSeconds;
     var bytes = uploadBytes + downloadBytes;
@@ -2856,8 +2871,6 @@
     var samples = readBandwidthSamples();
     samples.push({ ts: now, uploadBytes: uploadBytes, downloadBytes: downloadBytes });
     writeBandwidthSamples(samples);
-    notificationBandwidthSummary.uploadKbps = uploadKbps;
-    notificationBandwidthSummary.downloadKbps = downloadKbps;
     renderNotificationBandwidthSummary();
     var state = readBandwidthState();
     state.bytes = Math.max(0, Number(state.bytes) || 0) + bytes;
@@ -2920,9 +2933,6 @@
       ".selkies-notification-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px 10px;border-bottom:1px solid rgba(148,163,184,.14)}" +
       ".selkies-notification-center-title{font-size:13px;font-weight:800;color:#f8fafc}" +
       ".selkies-notification-center-bandwidth{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:10px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}" +
-      ".selkies-notification-center-bandwidth [data-bandwidth='speed'][data-direction='upload']{color:#fb923c}" +
-      ".selkies-notification-center-bandwidth [data-bandwidth='speed'][data-direction='download']{color:#f472b6}" +
-      ".selkies-notification-center-bandwidth [data-bandwidth='sep']{color:#475569}" +
       ".selkies-notification-center-bandwidth [data-bandwidth='total']{color:#cbd5e1}" +
       ".selkies-notification-center-count{font-size:11px;color:#93c5fd}" +
       ".selkies-notification-center-list{flex:1;overflow:auto;overscroll-behavior:contain;padding:10px 10px 8px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;scrollbar-color:#64748b rgba(15,23,42,.55);scrollbar-gutter:stable}" +
@@ -2960,7 +2970,7 @@
     root.innerHTML =
       '<button type="button" id="selkies-notification-center-toggle" title="\u901a\u77e5\u4e2d\u5fc3" aria-label="\u901a\u77e5\u4e2d\u5fc3"></button>' +
       '<aside id="selkies-notification-center-panel" aria-label="\u901a\u77e5\u4e2d\u5fc3\u5386\u53f2">' +
-      '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-bandwidth"><span data-bandwidth="speed" data-direction="upload">0 KB/s</span><span data-bandwidth="sep">|</span><span data-bandwidth="total">0.00 GB</span></div><div class="selkies-notification-center-count"></div></div>' +
+      '<div class="selkies-notification-center-head"><div class="selkies-notification-center-title">\u901a\u77e5\u4e2d\u5fc3</div><div class="selkies-notification-center-bandwidth" title="流量总计"><span data-bandwidth="total">0.00 GB</span></div><div class="selkies-notification-center-count"></div></div>' +
       '<div class="selkies-notification-center-list"></div>' +
       '<div class="selkies-notification-center-links"></div>' +
       '<div class="selkies-notification-center-footer"><button type="button" class="selkies-notification-center-clear">\u4e00\u952e\u6e05\u7406</button></div>' +
@@ -3579,7 +3589,7 @@
   }
 
   function isPersistentToolPreference(name) {
-    return ["notification_center_enabled", "legacy_upload_fallback_enabled",
+    return ["notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
       "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
       "bottom_action_dock_collapsed", "input_sampling_multiplier"].indexOf(name) !== -1;
   }
@@ -3588,7 +3598,7 @@
     if (!window.selkiesPreferences) return;
     try {
       var preferences = await window.selkiesPreferences.load();
-      ["notification_center_enabled", "legacy_upload_fallback_enabled",
+      ["notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
         "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
         "bottom_action_dock_collapsed", "input_sampling_multiplier"].forEach(function (name) {
         if (Object.prototype.hasOwnProperty.call(preferences, name)) {
@@ -3601,6 +3611,8 @@
         }
       });
       notificationCenterEnabled = sanitizeBool(preferences.notification_center_enabled, notificationCenterEnabled);
+      dockNetworkMonitorEnabled = sanitizeBool(preferences.dock_network_monitor_enabled, dockNetworkMonitorEnabled);
+      renderDockNetworkMonitor();
       bottomActionClipboardButtonsEnabled = sanitizeBool(preferences.bottom_action_clipboard_buttons_enabled, bottomActionClipboardButtonsEnabled);
       bottomActionDockCollapsed = sanitizeBool(preferences.bottom_action_dock_collapsed, bottomActionDockCollapsed);
       bottomActionDockPosition = sanitizeDockPosition(preferences.bottom_action_dock_position || bottomActionDockPosition);
@@ -6773,6 +6785,7 @@
       '<div class="selkies-repair-tools-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
       '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
+      '<label class="selkies-tool-row"><span>网速与往返延迟</span><input type="checkbox" data-debug-toggle="dock-network-monitor"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
       '<label class="selkies-tool-row"><span>\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177</span><input type="checkbox" data-debug-toggle="legacy-upload-fallback"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
@@ -6852,6 +6865,7 @@
     var debugSignature = [
       notificationPassthroughEnabled ? "1" : "0",
       notificationCenterEnabled ? "1" : "0",
+      dockNetworkMonitorEnabled ? "1" : "0",
       autoSplitEnabled ? "1" : "0",
       legacyUploadFallbackEnabled ? "1" : "0",
       window.__selkiesStandaloneUploadAvailable === false ? "1" : "0",
@@ -6868,6 +6882,8 @@
     section.dataset.renderSignature = debugSignature;
     var notificationToggle = section.querySelector('[data-debug-toggle="notification-passthrough"]');
     var notificationCenterToggle = section.querySelector('[data-debug-toggle="right-notification-center"]');
+    var networkMonitorToggle = section.querySelector('[data-debug-toggle="dock-network-monitor"]');
+    if (networkMonitorToggle) networkMonitorToggle.checked = dockNetworkMonitorEnabled;
     var autoSplitToggle = section.querySelector('[data-debug-toggle="auto-split"]');
     var legacyUploadToggle = section.querySelector('[data-debug-toggle="legacy-upload-fallback"]');
     var adaptiveSleepToggle = section.querySelector('[data-debug-toggle="adaptive-sleep"]');
@@ -6949,6 +6965,11 @@
       });
       section.querySelector("[data-debug-action='wechat-audio-test']").addEventListener("click", function () {
         triggerWechatAudioNotificationTest();
+      });
+      section.querySelector('[data-debug-toggle="dock-network-monitor"]').addEventListener("change", function (event) {
+        dockNetworkMonitorEnabled = !!event.target.checked;
+        setStoredValue("dock_network_monitor_enabled", dockNetworkMonitorEnabled);
+        renderDockNetworkMonitor();
       });
       section.querySelector('[data-debug-toggle="bottom-clipboard-buttons"]').addEventListener("change", function (event) {
         bottomActionClipboardButtonsEnabled = !!(event && event.target && event.target.checked);
@@ -7302,56 +7323,49 @@
     var style = document.createElement("style");
     style.id = "selkies-bottom-action-dock-style";
     style.textContent =
-      "#selkies-bottom-action-dock-shell{position:fixed;left:50%;bottom:0px;transform:translateX(-50%);z-index:10025;" +
-      "display:flex;flex-direction:column;align-items:center;opacity:0;pointer-events:none;" +
-      "transition:opacity .22s ease,transform .22s ease}" +
-      "#selkies-bottom-action-dock-shell[data-position='top']{top:0;bottom:auto;flex-direction:column-reverse}" +
-      "#selkies-bottom-action-dock-shell[data-visible='1']{opacity:1;pointer-events:auto}" +
-      "#selkies-bottom-action-dock-shell[data-collapsed='1']{width:30px;pointer-events:none}" +
-      "#selkies-bottom-split-popover{position:absolute;left:50%;bottom:calc(100% + 2px);transform:translateX(-50%) translateY(8px) scale(.96);" +
-      "display:flex;flex-direction:column;gap:6px;min-width:164px;padding:8px;" +
-      "border:1px solid rgba(51,65,85,.92);border-radius:14px;background:rgba(8,15,28,.92);backdrop-filter:blur(16px);" +
-      "box-shadow:0 12px 24px rgba(2,6,23,.28);opacity:0;pointer-events:none;visibility:hidden;" +
-      "transition:opacity .18s ease,transform .18s ease,visibility .18s ease}" +
-      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-split-popover{top:calc(100% + 2px);bottom:auto;transform:translateX(-50%) translateY(-8px) scale(.96)}" +
-      "#selkies-bottom-action-dock-shell[data-split-open='1'] #selkies-bottom-split-popover{opacity:1;pointer-events:auto;visibility:visible;transform:translateX(-50%) translateY(0) scale(1)}" +
-      "#selkies-bottom-action-dock{display:grid;grid-template-columns:repeat(5,minmax(48px,1fr)) 22px;gap:0;padding:0;height:24px;box-sizing:border-box;overflow:hidden;" +
-      "border:1px solid rgba(51,65,85,.92);border-bottom:none;border-radius:10px 10px 0 0;background:rgba(8,15,28,.96);backdrop-filter:blur(16px);" +
-      "box-shadow:0 -6px 12px rgba(2,6,23,.12);transform-origin:center bottom;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
-      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock{border-top:none;border-bottom:1px solid rgba(51,65,85,.92);border-radius:0 0 10px 10px;box-shadow:0 6px 12px rgba(2,6,23,.12);transform-origin:center top}" +
-      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(3,minmax(48px,1fr)) 22px}" +
-      "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock{opacity:0;transform:translateY(10px) scale(.94);filter:blur(1px);pointer-events:none}" +
-      "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-split-popover{opacity:0;pointer-events:none;visibility:hidden}" +
-      "#selkies-bottom-dock-collapsed-toggle{position:absolute;left:50%;bottom:0;appearance:none;border:1px solid rgba(71,85,105,.92);border-bottom:none;background:#101826;color:#e2e8f0;border-radius:10px 10px 0 0;min-width:30px;height:24px;box-sizing:border-box;padding:0 8px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 -6px 12px rgba(2,6,23,.12);opacity:0;transform:translateX(-50%) translateY(8px) scale(.92);pointer-events:none;transition:opacity .24s ease,transform .24s ease,filter .24s ease}" +
-      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-dock-collapsed-toggle{top:0;bottom:auto;border-top:none;border-bottom:1px solid rgba(71,85,105,.92);border-radius:0 0 10px 10px;box-shadow:0 6px 12px rgba(2,6,23,.12);transform:translateX(-50%) translateY(-8px) scale(.92)}" +
-      "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-dock-collapsed-toggle{opacity:1;transform:translateX(-50%) translateY(0) scale(1);pointer-events:auto}" +
-      ".selkies-bottom-dock-btn{appearance:none;border:1px solid rgba(71,85,105,.92);background:#101826;color:#e2e8f0;" +
-      "border-radius:0;min-width:48px;height:100%;box-sizing:border-box;padding:0 6px;font-size:10px;font-weight:700;letter-spacing:.01em;" +
-      "cursor:pointer;transition:transform .12s ease,filter .12s ease,border-color .12s ease,background .12s ease}" +
-      ".selkies-bottom-dock-btn:hover{filter:brightness(1.06)}" +
-      ".selkies-bottom-dock-btn:active{transform:translateY(1px)}" +
-      ".selkies-bottom-dock-btn[data-tone='send']{background:#0f2f6b;border-color:#2563eb;color:#dbeafe}" +
-      ".selkies-bottom-dock-btn[data-tone='receive']{background:#4a183f;border-color:#ec4899;color:#fce7f3}" +
-      ".selkies-bottom-dock-btn[data-tone='wechat']{background:#123321;border-color:#16a34a;color:#dcfce7}" +
-      ".selkies-bottom-dock-btn[data-tone='qq']{background:#10273d;border-color:#38bdf8;color:#e0f2fe}" +
-      ".selkies-bottom-dock-btn[data-tone='split']{background:#151d2b;border-color:#475569;color:#f8fafc;min-width:72px}" +
-      ".selkies-bottom-dock-btn[data-tone='collapse']{background:#101826;border-color:#64748b;color:#cbd5e1;min-width:22px;width:22px;padding:0 1px;font-size:10px}" +
-      "#selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:9px}" +
-      "#selkies-bottom-action-dock .selkies-bottom-dock-btn:last-child{border-top-right-radius:9px}" +
-      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock .selkies-bottom-dock-btn:first-child{border-top-left-radius:0;border-bottom-left-radius:9px}" +
-      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock .selkies-bottom-dock-btn:last-child{border-top-right-radius:0;border-bottom-right-radius:9px}" +
+      "#selkies-bottom-action-dock-shell{position:fixed;left:50%;bottom:max(6px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:10025;display:flex;flex-direction:column;align-items:center;width:max-content;max-width:calc(100vw - 16px);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .22s ease;--dock-glass:rgba(20,30,48,.62);--dock-edge:rgba(230,243,255,.32);--dock-shine:inset 0 1px 0 rgba(255,255,255,.44),inset 0 -1px 0 rgba(255,255,255,.08)}" +
+      "#selkies-bottom-action-dock-shell[data-position='top']{top:max(6px,env(safe-area-inset-top));bottom:auto;flex-direction:column-reverse}" +
+      "#selkies-bottom-action-dock-shell[data-visible='1']{opacity:1;visibility:visible}" +
+      "#selkies-bottom-action-dock-shell[data-visible='0']{display:none}" +
+      "#selkies-bottom-action-dock{display:flex;align-items:center;gap:4px;padding:4px;height:38px;box-sizing:border-box;max-width:100%;border:1px solid var(--dock-edge);border-radius:16px;background:linear-gradient(135deg,rgba(255,255,255,.18),transparent 48%,rgba(182,211,255,.10)),var(--dock-glass);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);box-shadow:var(--dock-shine),0 5px 18px rgba(2,6,23,.24);transform-origin:center bottom;pointer-events:auto;transition:opacity .22s ease,transform .22s ease,visibility .22s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-action-dock{transform-origin:center top}" +
+      "#selkies-bottom-action-dock-shell[data-collapsed='1']{width:32px;pointer-events:none}" +
+      "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock{opacity:0;visibility:hidden;transform:translateY(8px) scale(.94);pointer-events:none}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'][data-collapsed='1'] #selkies-bottom-action-dock{transform:translateY(-8px) scale(.94)}" +
+      "#selkies-dock-network-monitor{flex:0 0 90px;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;box-sizing:border-box;padding:0 7px 0 4px;border-right:1px solid rgba(230,243,255,.18);font:600 10px/1.15 system-ui,sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap;color:#dbeafe;cursor:default}" +
+      "#selkies-dock-network-monitor[hidden]{display:none}" +
+      "#selkies-dock-network-monitor [data-network='speed']{color:#e0f2fe}" +
+      "#selkies-dock-network-monitor [data-direction='send']{color:#fbcfe8}" +
+      "#selkies-dock-network-monitor [data-network='latency']{font-size:9px;color:#cbd5e1}" +
+      ".selkies-bottom-dock-btn,.selkies-bottom-split-btn{position:relative;appearance:none;box-sizing:border-box;border:1px solid rgba(230,243,255,.20);border-radius:11px;background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.035)),rgba(var(--dock-tint,148,163,184),.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),inset 0 -1px 0 rgba(255,255,255,.05);color:#f1f5f9;font:600 11px/1 system-ui,sans-serif;text-shadow:0 1px 2px rgba(2,6,23,.4);cursor:pointer;transition:transform .16s ease,background .16s ease,border-color .16s ease,box-shadow .16s ease}" +
+      ".selkies-bottom-dock-btn{flex:1 1 auto;min-width:46px;height:28px;padding:0 9px;white-space:nowrap}" +
+      ".selkies-bottom-dock-btn:hover,.selkies-bottom-split-btn:hover{border-color:rgba(255,255,255,.55);background-color:rgba(var(--dock-tint,148,163,184),.30);box-shadow:inset 0 1px 0 rgba(255,255,255,.48),0 2px 7px rgba(2,6,23,.18)}" +
+      ".selkies-bottom-dock-btn:active,.selkies-bottom-split-btn:active{transform:scale(.95)}" +
+      ".selkies-bottom-dock-btn:focus-visible,.selkies-bottom-split-btn:focus-visible,#selkies-bottom-dock-collapsed-toggle:focus-visible{outline:2px solid #bae6fd;outline-offset:2px}" +
+      ".selkies-bottom-dock-btn[data-tone='send']{--dock-tint:59,130,246;color:#dbeafe}" +
+      ".selkies-bottom-dock-btn[data-tone='receive']{--dock-tint:236,72,153;color:#fce7f3}" +
+      ".selkies-bottom-dock-btn[data-tone='wechat']{--dock-tint:34,197,94;color:#dcfce7}" +
+      ".selkies-bottom-dock-btn[data-tone='qq']{--dock-tint:56,189,248;color:#e0f2fe}" +
+      ".selkies-bottom-dock-btn[data-tone='split']{min-width:52px}" +
+      ".selkies-bottom-dock-btn[data-tone='collapse']{flex:0 0 26px;min-width:26px;padding:0;font-size:11px;color:#e2e8f0}" +
       "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='client-to-remote'],#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='remote-to-client']{display:none}" +
-      "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='wechat-focus']{border-top-left-radius:9px}" +
-      ".selkies-bottom-dock-btn[data-active='1']{border-color:#93c5fd;color:#f8fafc}" +
-      ".selkies-bottom-dock-btn[data-unread='1']{animation:selkies-unread-pulse .95s ease-in-out infinite}" +
-      ".selkies-bottom-split-btn{appearance:none;border:1px solid rgba(71,85,105,.9);background:#101826;color:#e2e8f0;" +
-      "border-radius:10px;height:30px;padding:0 8px;font-size:10px;font-weight:700;cursor:pointer;text-align:center;" +
-      "transition:transform .12s ease,filter .12s ease,border-color .12s ease,background .12s ease}" +
-      ".selkies-bottom-split-btn:hover{filter:brightness(1.08);border-color:#60a5fa}" +
-      ".selkies-bottom-split-btn:active{transform:translateY(1px)}" +
-      "@keyframes selkies-unread-pulse{0%{box-shadow:0 0 0 0 rgba(248,250,252,.0)}50%{box-shadow:0 0 0 2px rgba(248,250,252,.24),0 0 18px rgba(59,130,246,.24)}100%{box-shadow:0 0 0 0 rgba(248,250,252,.0)}}" +
-      "@media (max-width:900px){#selkies-bottom-action-dock{gap:0;padding:0;height:24px}.selkies-bottom-dock-btn{min-width:44px;height:100%;padding:0 5px;font-size:9px}.selkies-bottom-dock-btn[data-tone='split']{min-width:66px}.selkies-bottom-dock-btn[data-tone='collapse']{min-width:20px;width:20px;padding:0 1px}}" +
-      "@media (max-width:640px){#selkies-bottom-action-dock-shell{width:min(96vw,392px)}#selkies-bottom-action-dock{width:100%;grid-template-columns:repeat(5,minmax(0,1fr)) 20px}#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] #selkies-bottom-action-dock{grid-template-columns:repeat(3,minmax(0,1fr)) 20px}.selkies-bottom-dock-btn{min-width:0;padding:0 2px}.selkies-bottom-dock-btn[data-tone='collapse']{padding:0;width:20px}}";
+      ".selkies-bottom-dock-btn[data-active='1']{border-color:#bae6fd;background-color:rgba(56,189,248,.28)}" +
+      ".selkies-bottom-dock-btn[data-unread='1']::after{content:'';position:absolute;right:4px;top:3px;width:5px;height:5px;border-radius:50%;background:#fda4af;box-shadow:0 0 6px rgba(251,113,133,.5)}" +
+      "#selkies-bottom-dock-collapsed-toggle{position:absolute;left:50%;bottom:0;appearance:none;box-sizing:border-box;width:32px;height:26px;padding:0;border:1px solid var(--dock-edge);border-radius:11px;background:linear-gradient(160deg,rgba(255,255,255,.20),transparent),var(--dock-glass);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);box-shadow:var(--dock-shine),0 3px 10px rgba(2,6,23,.20);color:#f1f5f9;font:700 12px system-ui,sans-serif;cursor:pointer;opacity:0;visibility:hidden;transform:translateX(-50%);pointer-events:none;transition:opacity .22s ease,background .16s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-dock-collapsed-toggle{top:0;bottom:auto}" +
+      "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-dock-collapsed-toggle{opacity:1;visibility:visible;pointer-events:auto}" +
+      "#selkies-bottom-dock-collapsed-toggle:hover{background-color:rgba(55,75,105,.85)}" +
+      "#selkies-bottom-split-popover{position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%) translateY(6px);display:flex;flex-direction:column;gap:6px;min-width:164px;padding:8px;border:1px solid var(--dock-edge);border-radius:16px;background:linear-gradient(135deg,rgba(255,255,255,.12),transparent),var(--dock-glass);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);box-shadow:var(--dock-shine),0 8px 24px rgba(2,6,23,.24);opacity:0;pointer-events:none;visibility:hidden;transition:opacity .18s ease,transform .18s ease,visibility .18s ease}" +
+      "#selkies-bottom-action-dock-shell[data-position='top'] #selkies-bottom-split-popover{top:calc(100% + 6px);bottom:auto;transform:translateX(-50%) translateY(-6px)}" +
+      "#selkies-bottom-action-dock-shell[data-split-open='1'] #selkies-bottom-split-popover{opacity:1;pointer-events:auto;visibility:visible;transform:translateX(-50%) translateY(0)}" +
+      "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-split-popover{opacity:0;pointer-events:none;visibility:hidden}" +
+      ".selkies-bottom-split-btn{height:32px;padding:0 10px;text-align:center}" +
+      "#framerateSlider{width:100%;box-sizing:border-box;min-height:30px;padding:4px 9px;border:1px solid rgba(148,163,184,.4);border-radius:8px;background:#182438;color:#f1f5f9;font:inherit}" +
+      "#framerateSlider:focus-visible{outline:2px solid #7dd3fc;outline-offset:2px}" +
+      "#framerateSlider:disabled{opacity:.55}" +
+      "@media(max-width:640px){#selkies-bottom-action-dock-shell{width:calc(100vw - 16px);max-width:460px}#selkies-bottom-action-dock{width:100%;gap:3px;padding:3px;height:36px}.selkies-bottom-dock-btn{flex:1 1 0;min-width:0;padding:0 1px;font-size:10px}.selkies-bottom-dock-btn[data-tone='split']{min-width:0}.selkies-bottom-dock-btn[data-tone='collapse']{flex-basis:24px;min-width:24px}#selkies-dock-network-monitor{flex-basis:78px;padding-right:4px;font-size:9px}}" +
+      "@media(prefers-reduced-motion:reduce){#selkies-bottom-action-dock-shell,#selkies-bottom-action-dock,#selkies-bottom-split-popover,#selkies-bottom-dock-collapsed-toggle,.selkies-bottom-dock-btn,.selkies-bottom-split-btn{transition:none}}" +
+      "@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){#selkies-bottom-action-dock-shell{--dock-glass:rgba(20,30,48,.96)}}";
     document.head.appendChild(style);
   }
 
@@ -7365,6 +7379,7 @@
     var splitButton = shell.querySelector('[data-dock-action="split-toggle"]');
     if (splitButton) {
       splitButton.setAttribute("data-active", bottomActionSplitOpen ? "1" : "0");
+      splitButton.setAttribute("aria-expanded", bottomActionSplitOpen ? "true" : "false");
     }
     var collapseButton = shell.querySelector('[data-dock-action="dock-collapse"]');
     if (collapseButton) {
@@ -7540,16 +7555,18 @@
       '<button type="button" class="selkies-bottom-split-btn" data-dock-action="split-fullscreen">\u5168\u90e8\u5168\u5c4f</button>' +
       "</div>" +
       '<div id="selkies-bottom-action-dock">' +
+      '<div id="selkies-dock-network-monitor" role="group" aria-label="网速与往返延迟"><span data-network="speed">-- KB/s</span><span data-network="latency">RTT -- ms</span></div>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="send" data-dock-action="client-to-remote">\u7c98\u8d34</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="wechat" data-dock-action="wechat-focus">\u5fae\u4fe1</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="split" data-dock-action="split-toggle">\u5206\u5c4f</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="qq" data-dock-action="qq-focus">QQ</button>' +
       '<button type="button" class="selkies-bottom-dock-btn" data-tone="receive" data-dock-action="remote-to-client">\u6536\u526a\u677f</button>' +
-      '<button type="button" class="selkies-bottom-dock-btn" data-tone="collapse" data-dock-action="dock-collapse">\u25bd</button>' +
+      '<button type="button" class="selkies-bottom-dock-btn" data-tone="collapse" data-dock-action="dock-collapse" aria-label="收纳快捷栏" title="收纳快捷栏">\u25bd</button>' +
       "</div>" +
-      '<button type="button" id="selkies-bottom-dock-collapsed-toggle" data-dock-action="dock-expand">\u25b3</button>';
+      '<button type="button" id="selkies-bottom-dock-collapsed-toggle" data-dock-action="dock-expand" aria-label="展开快捷栏" title="展开快捷栏">\u25b3</button>';
     document.body.appendChild(shell);
     syncBottomActionSplitState();
+    renderDockNetworkMonitor();
     if (bottomActionDockCollapsed) {
       scheduleBottomActionDockRestore();
     }
@@ -7570,6 +7587,7 @@
   function updateBottomActionDockVisibility() {
     var shell = ensureBottomActionDock();
     if (!shell) return;
+    renderDockNetworkMonitor();
     var visible = hasVisibleStreamSurface();
     shell.setAttribute("data-visible", visible ? "1" : "0");
     if (!visible && bottomActionSplitOpen) {

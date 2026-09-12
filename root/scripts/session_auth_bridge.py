@@ -52,7 +52,7 @@ UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false
 PREFERENCES_PATH = Path(os.environ.get("SELKIES_UI_PREFERENCES_PATH", "/config/state/ui-preferences.json"))
 PREFERENCES_LOCK = threading.Lock()
 TOOL_PREFERENCES = {
-    "notification_center_enabled", "legacy_upload_fallback_enabled",
+    "notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
     "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
     "bottom_action_dock_collapsed", "input_sampling_multiplier",
 }
