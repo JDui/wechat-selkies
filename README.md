@@ -38,7 +38,17 @@
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
 
-## 待发布：帧率档位与液态玻璃快捷 Bar
+## 1.69 更新
+
+- **网速与延迟位置调整**：快捷 Bar 上的实时网速与往返延迟从 Bar 最左端移到**收纳按钮右侧**，与左侧操作按钮分开；分隔线与窄屏内边距同步翻转，窄屏下不再贴边。
+- **全站浮动 UI 统一为一套液态玻璃外观**：快捷 Bar、收纳按钮、分屏菜单、通知中心（切换柄 / 面板 / 条目）、链接跳转卡片、活动横幅与性能角标、自适应休眠面板、安全提示横幅与浮动提示，全部改用同一组共享令牌（`--axi-glass-*`：底色 / 描边 / 高光渐变 / 内高光 / 模糊 / 阴影 / 圆角）。调整视觉只需改一处。
+- **更透、更强的玻璃质感**：Bar 与按钮底色不透明度由 `62%` 降至 `44%`，按钮底纹由 `.14` 降至 `.10`，内高光由 `.26` 提升至 `.34`，文字提亮到 `#f8fbff`；外观主要靠**高光描边 + 半透明填充**表现，而非实心块。
+- **背景模糊降至 `4px`**（原 `18~22px`），远程画面透出更清晰，同时保留饱和增强与降级逻辑。
+- **新增降级路径**：不支持 `backdrop-filter` 的内核上，自动把半透明底色换回接近不透明的取值，避免外壳发白、文字不可读。
+
+维护说明：本次为纯前端外观与布局调整，未改协议与服务端行为。相关回归检查：`node tests/test_dock_network_monitor.js`、`node tests/test_sidebar_scroll_render.js`、`python -m unittest tests.test_notification_bridge_state`。
+
+## 1.68 更新
 
 - 视频设置的帧率改为 `15 / 30 / 45 / 60 / 75 / 100 / 120 FPS` 下拉档位，默认仍为 30 FPS；超出服务端允许范围的档位不可选。已有非档位帧率或服务端锁定值会按实际值显示，不会被界面静默覆盖。
 - 实时网速与往返延迟放在快捷 Bar 左端，与右端收纳按钮相对；流量总计仍留在通知中心。网速箭头以浏览器视角表示接收 / 发送，悬停可查看两个方向的速率。
@@ -117,10 +127,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.67.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.69.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.67.tar
+docker load -i wechat-selkies-1.69.tar
 ```
 
 启动：
@@ -135,7 +145,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.67
+  wechat-selkies:1.69
 ```
 
 访问：
@@ -158,7 +168,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.67
+    image: wechat-selkies:1.69
     container_name: wechat-selkies
     init: true
     ports:
@@ -307,7 +317,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.67 \
+  wechat-selkies:1.69 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -370,7 +380,7 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.67 .
+docker build -t wechat-selkies:1.69 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
@@ -389,13 +399,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.67 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.69 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.67.tar wechat-selkies:1.67
+docker save -o wechat-selkies-1.69.tar wechat-selkies:1.69
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。

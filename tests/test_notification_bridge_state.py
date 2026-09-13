@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -71,12 +72,28 @@ class NotificationBridgeStateTests(unittest.TestCase):
     def test_collapsed_bottom_bar_only_keeps_toggle_hit_area(self):
         source = RUNTIME_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("#selkies-bottom-action-dock-shell[data-collapsed='1']{width:30px;pointer-events:none}", source)
-        self.assertIn(
-            "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-dock-collapsed-toggle"
-            "{opacity:1;transform:translateX(-50%) translateY(0) scale(1);pointer-events:auto}",
-            source,
+        def rule_body(selector):
+            match = re.search(re.escape(selector) + r"\{([^}]*)\}", source)
+            self.assertIsNotNone(match, "missing rule: %s" % selector)
+            return match.group(1)
+
+        # 折叠态外壳收窄到仅容纳展开按钮，且外壳自身不再接收指针事件。
+        shell_style = rule_body("#selkies-bottom-action-dock-shell[data-collapsed='1']")
+        self.assertIn("pointer-events:none", shell_style)
+        self.assertRegex(shell_style, r"width:\s*\d+px")
+
+        # 折叠后工具栏本体退出交互，避免折叠区域仍可点到底部按钮。
+        dock_style = rule_body(
+            "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock"
         )
+        self.assertIn("pointer-events:none", dock_style)
+
+        # 只有展开按钮在折叠态恢复可见与可点击。
+        toggle_style = rule_body(
+            "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-dock-collapsed-toggle"
+        )
+        self.assertIn("opacity:1", toggle_style)
+        self.assertIn("pointer-events:auto", toggle_style)
 
 
 if __name__ == "__main__":
