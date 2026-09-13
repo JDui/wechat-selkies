@@ -3616,6 +3616,7 @@
       bottomActionClipboardButtonsEnabled = sanitizeBool(preferences.bottom_action_clipboard_buttons_enabled, bottomActionClipboardButtonsEnabled);
       bottomActionDockCollapsed = sanitizeBool(preferences.bottom_action_dock_collapsed, bottomActionDockCollapsed);
       bottomActionDockPosition = sanitizeDockPosition(preferences.bottom_action_dock_position || bottomActionDockPosition);
+      syncActivityPosition();
       if (Object.prototype.hasOwnProperty.call(preferences, "input_sampling_multiplier")) {
         applyInputSamplingMultiplier(preferences.input_sampling_multiplier, { persist: false });
       }
@@ -3836,12 +3837,13 @@
     var style = document.createElement("style");
     style.id = "selkies-activity-style";
     style.textContent =
-      "#selkies-activity-layer{position:fixed;inset:0;pointer-events:none;z-index:10015}" +
-      "#selkies-activity-banner{position:fixed;top:14px;left:50%;transform:translateX(-50%) translateY(-18px) scale(.94);" +
+      "#selkies-activity-layer{position:fixed;inset:0;pointer-events:none;z-index:10015;--selkies-activity-edge-gap:14px}" +
+      "#selkies-activity-banner{position:fixed;top:max(var(--selkies-activity-edge-gap),env(safe-area-inset-top));left:50%;transform:translateX(-50%) translateY(var(--selkies-activity-enter-y,-18px)) scale(.94);" +
       "display:flex;align-items:center;gap:12px;min-width:min(82vw,420px);max-width:min(92vw,620px);" +
       "padding:10px 14px;border-radius:999px;background:var(--axi-glass-sheen-soft),var(--axi-glass-bg-strong);border:1px solid var(--axi-glass-edge);" +
       "box-shadow:var(--axi-glass-shine),var(--axi-glass-shadow);-webkit-backdrop-filter:var(--axi-glass-blur);backdrop-filter:var(--axi-glass-blur);color:#e2e8f0;opacity:0;pointer-events:none;" +
       "transition:opacity .2s ease,transform .2s ease}" +
+      "#selkies-activity-layer[data-dock-position='top'] #selkies-activity-banner{top:auto;bottom:max(var(--selkies-activity-edge-gap),env(safe-area-inset-bottom));--selkies-activity-enter-y:18px}" +
       "#selkies-activity-banner[data-open='1']{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0) scale(1)}" +
       ".selkies-activity-banner-pulse{width:10px;height:10px;border-radius:999px;background:#38bdf8;" +
       "box-shadow:0 0 0 0 rgba(56,189,248,.55);animation:selkiesPulse 1.8s infinite}" +
@@ -3856,14 +3858,22 @@
       ".selkies-activity-performance[data-open='1']{display:block}" +
       "@keyframes selkiesShimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}" +
       "@keyframes selkiesPulse{0%{box-shadow:0 0 0 0 rgba(56,189,248,.55)}70%{box-shadow:0 0 0 10px rgba(56,189,248,0)}100%{box-shadow:0 0 0 0 rgba(56,189,248,0)}}" +
-      "@media (max-width: 680px){#selkies-activity-banner{top:10px;min-width:0;width:calc(100vw - 20px)}}";
+      "@media (max-width: 680px){#selkies-activity-layer{--selkies-activity-edge-gap:10px}#selkies-activity-banner{min-width:0;width:calc(100vw - 20px)}}";
     document.head.appendChild(style);
+  }
+
+  function syncActivityPosition() {
+    var layer = document.getElementById("selkies-activity-layer");
+    if (layer) layer.setAttribute("data-dock-position", bottomActionDockPosition);
   }
 
   function ensureActivityShell() {
     ensureActivityStyle();
     var layer = document.getElementById("selkies-activity-layer");
-    if (layer) return layer;
+    if (layer) {
+      syncActivityPosition();
+      return layer;
+    }
 
     layer = document.createElement("div");
     layer.id = "selkies-activity-layer";
@@ -3878,6 +3888,7 @@
       "</div>" +
       '<div id="selkies-activity-performance" class="selkies-activity-performance"></div>';
     document.body.appendChild(layer);
+    syncActivityPosition();
     return layer;
   }
 
@@ -7333,7 +7344,7 @@
       "--axi-glass-sheen:linear-gradient(135deg,rgba(255,255,255,.20),transparent 48%,rgba(182,211,255,.12));" +
       "--axi-glass-sheen-soft:linear-gradient(150deg,rgba(255,255,255,.14),transparent 56%,rgba(182,211,255,.08));" +
       "--axi-glass-shine:inset 0 1px 0 rgba(255,255,255,.46),inset 0 -1px 0 rgba(255,255,255,.08);" +
-      "--axi-glass-blur:blur(4px) saturate(170%);--axi-glass-blur-soft:blur(4px) saturate(155%);" +
+      "--axi-glass-blur:blur(2px) saturate(170%);--axi-glass-blur-soft:blur(2px) saturate(155%);" +
       "--axi-glass-shadow:0 12px 32px rgba(2,6,23,.26);--axi-glass-shadow-soft:0 8px 22px rgba(2,6,23,.20);" +
       "--axi-glass-radius:16px;--axi-glass-radius-sm:11px}" +
       // Without backdrop-filter a translucent shell would just look washed out,
@@ -7395,6 +7406,7 @@
   }
 
   function syncBottomActionSplitState() {
+    syncActivityPosition();
     var shell = document.getElementById("selkies-bottom-action-dock-shell");
     if (!shell) return;
     shell.setAttribute("data-split-open", bottomActionSplitOpen ? "1" : "0");
@@ -8612,8 +8624,8 @@
         "border-radius:12px",
         "border:1px solid rgba(251,191,36,.55)",
         "background:rgba(30,24,8,.68)",
-        "-webkit-backdrop-filter:blur(4px) saturate(160%)",
-        "backdrop-filter:blur(4px) saturate(160%)",
+        "-webkit-backdrop-filter:blur(2px) saturate(160%)",
+        "backdrop-filter:blur(2px) saturate(160%)",
         "color:#fde68a",
         "font:13px/1.5 \"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif",
         "box-shadow:0 12px 40px rgba(0,0,0,.45)",
@@ -8657,8 +8669,8 @@
         "padding:10px 16px",
         "border-radius:10px",
         "background:rgba(15,23,42,.66)",
-        "-webkit-backdrop-filter:blur(4px) saturate(160%)",
-        "backdrop-filter:blur(4px) saturate(160%)",
+        "-webkit-backdrop-filter:blur(2px) saturate(160%)",
+        "backdrop-filter:blur(2px) saturate(160%)",
         "color:#e2e8f0",
         "border:1px solid rgba(148,163,184,.28)",
         "font:13px/1.5 \"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif",
