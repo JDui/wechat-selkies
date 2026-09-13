@@ -7369,7 +7369,7 @@
       "#selkies-bottom-action-dock-shell[data-collapsed='1']{width:32px;pointer-events:none}" +
       "#selkies-bottom-action-dock-shell[data-collapsed='1'] #selkies-bottom-action-dock{opacity:0;visibility:hidden;transform:translateY(8px) scale(.94);pointer-events:none}" +
       "#selkies-bottom-action-dock-shell[data-position='top'][data-collapsed='1'] #selkies-bottom-action-dock{transform:translateY(-8px) scale(.94)}" +
-      "#selkies-dock-network-monitor{flex:0 0 90px;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;box-sizing:border-box;padding:0 4px 0 7px;border-left:1px solid var(--axi-glass-edge-soft);font:600 10px/1.15 system-ui,sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap;color:#dbeafe;cursor:default}" +
+      "#selkies-dock-network-monitor{flex:0 0 90px;min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:1px;box-sizing:border-box;padding:0 4px;border-left:1px solid var(--axi-glass-edge-soft);font:600 10px/1.15 system-ui,sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap;color:#dbeafe;cursor:default}" +
       "#selkies-dock-network-monitor[hidden]{display:none}" +
       "#selkies-dock-network-monitor [data-network='speed']{color:#e0f2fe}" +
       "#selkies-dock-network-monitor [data-direction='send']{color:#fbcfe8}" +
@@ -7383,6 +7383,7 @@
       ".selkies-bottom-dock-btn[data-tone='receive']{--dock-tint:236,72,153;color:#fce7f3}" +
       ".selkies-bottom-dock-btn[data-tone='wechat']{--dock-tint:34,197,94;color:#dcfce7}" +
       ".selkies-bottom-dock-btn[data-tone='qq']{--dock-tint:56,189,248;color:#e0f2fe}" +
+      ".selkies-bottom-dock-btn[data-tone='send'],.selkies-bottom-dock-btn[data-tone='receive'],.selkies-bottom-dock-btn[data-tone='wechat'],.selkies-bottom-dock-btn[data-tone='qq']{filter:saturate(1.2)}" +
       ".selkies-bottom-dock-btn[data-tone='split']{min-width:52px}" +
       ".selkies-bottom-dock-btn[data-tone='collapse']{flex:0 0 26px;min-width:26px;padding:0;font-size:11px;color:#e2e8f0}" +
       "#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='client-to-remote'],#selkies-bottom-action-dock-shell[data-clipboard-buttons='0'] [data-dock-action='remote-to-client']{display:none}" +
