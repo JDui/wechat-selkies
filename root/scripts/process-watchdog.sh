@@ -101,8 +101,8 @@ while true; do
     fi
 
     if is_true "${AUTO_START_WECHAT:-true}" && is_true "${WATCHDOG_RESTART_WECHAT:-true}"; then
-        if ! pgrep -af "/usr/bin/wechat" >/dev/null 2>&1; then
-            safe_restart "wechat" "/usr/bin/wechat"
+        if ! pgrep -af '^/usr/bin/[w]echat([[:space:]]|$)' >/dev/null 2>&1; then
+            safe_restart "wechat" "/scripts/wechat/wechat-start.sh"
         fi
     fi
 
@@ -134,7 +134,7 @@ while true; do
     fi
 
     if is_true "${AUTO_START_QQ:-false}" && is_true "${WATCHDOG_RESTART_QQ:-true}"; then
-        if ! pgrep -af "/usr/bin/qq" >/dev/null 2>&1; then
+        if ! pgrep -af '^/usr/bin/[q]q([[:space:]]|$)' >/dev/null 2>&1; then
             echo "0" >"$qq_fail_counter_file"
             safe_restart "qq" "/scripts/qq/qq-launch.sh"
         elif is_true "${QQ_WATCHDOG_HANG_DETECT:-true}"; then

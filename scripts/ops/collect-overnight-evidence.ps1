@@ -67,10 +67,11 @@ if (-not ($containerNames -contains $ContainerName)) {
 
 $inspectRaw = Invoke-DockerCapture -TargetFile "inspect.json" -DockerArgs @("inspect", $ContainerName)
 $inspect = $inspectRaw.Text | ConvertFrom-Json
-$state = $inspect[0].State
+$containerInfo = $inspect[0]
+$state = $containerInfo.State
 
 $stateLine = "{0} paused={1} running={2} restarting={3} restart_count={4}" -f `
-    $state.Status, $state.Paused, $state.Running, $state.Restarting, $state.RestartCount
+    $state.Status, $state.Paused, $state.Running, $state.Restarting, $containerInfo.RestartCount
 Set-Content -Path (Join-Path $script:RunDir "state-summary.txt") -Value $stateLine -Encoding UTF8
 
 $eventsRaw = Invoke-DockerCapture -TargetFile "events.log" -DockerArgs @(
@@ -83,7 +84,7 @@ $eventsRaw = Invoke-DockerCapture -TargetFile "events.log" -DockerArgs @(
 $lifecyclePattern = "\s(pause|unpause|restart|oom|kill|die|stop|start)\s"
 $lifecycleEvents = @()
 if (-not [string]::IsNullOrWhiteSpace($eventsRaw.Text)) {
-    $lifecycleEvents = $eventsRaw.Text -split "`r?`n" | Where-Object { $_ -match $lifecyclePattern }
+    $lifecycleEvents = @($eventsRaw.Text -split "`r?`n" | Where-Object { $_ -match $lifecyclePattern })
 }
 Set-Content -Path (Join-Path $script:RunDir "events.lifecycle.log") -Value ($lifecycleEvents -join [Environment]::NewLine) -Encoding UTF8
 
@@ -98,7 +99,7 @@ $procRaw = Invoke-DockerCapture -TargetFile "wechat-process.txt" -DockerArgs @(
     $ContainerName,
     "sh",
     "-lc",
-    "pgrep -af '/usr/bin/wechat' || true"
+    "pgrep -af '^/usr/bin/[w]echat([[:space:]]|$)'"
 ) -AllowFailure
 
 $networkRaw = Invoke-DockerCapture -TargetFile "network-check.txt" -DockerArgs @(
@@ -109,12 +110,17 @@ $networkRaw = Invoke-DockerCapture -TargetFile "network-check.txt" -DockerArgs @
     "date -Is; echo PUBLIC_IP:; curl -fsS --max-time 8 ifconfig.me || true; echo; echo DNS_WEIXIN:; getent hosts weixin.qq.com || true; echo HTTPS_WEIXIN:; curl -I -sS --max-time 8 https://weixin.qq.com | head -n 5 || true"
 ) -AllowFailure
 
-$wechatRunning = -not [string]::IsNullOrWhiteSpace(($procRaw.Text).Trim())
+$wechatRunning = $null
+if ($procRaw.ExitCode -eq 0) {
+    $wechatRunning = -not [string]::IsNullOrWhiteSpace($procRaw.Text)
+} elseif ($procRaw.ExitCode -eq 1 -and [string]::IsNullOrWhiteSpace($procRaw.Text)) {
+    $wechatRunning = $false
+}
 
-$verdict = "container_stable_likely_risk_control_or_network"
+$verdict = "unknown"
 if (-not $state.Running -or $state.Paused -or $lifecycleEvents.Count -gt 0) {
     $verdict = "container_interruption_or_state_change"
-} elseif (-not $wechatRunning) {
+} elseif ($wechatRunning -eq $false) {
     $verdict = "wechat_process_missing_while_container_running"
 }
 
@@ -128,12 +134,14 @@ $summary = [ordered]@{
         paused = $state.Paused
         running = $state.Running
         restarting = $state.Restarting
-        restartCount = $state.RestartCount
+        restartCount = $containerInfo.RestartCount
         startedAt = $state.StartedAt
         finishedAt = $state.FinishedAt
     }
     lifecycleEventCount = $lifecycleEvents.Count
+    lifecycleEventsCollected = ($eventsRaw.ExitCode -eq 0)
     wechatProcessDetected = $wechatRunning
+    wechatLoginState = "unknown"
     verdict = $verdict
     files = [ordered]@{
         inspect = "inspect.json"
@@ -154,7 +162,9 @@ $summaryText = @(
     "window=$Since -> $Until"
     "state=$stateLine"
     "lifecycle_event_count=$($lifecycleEvents.Count)"
+    "lifecycle_events_collected=$($eventsRaw.ExitCode -eq 0)"
     "wechat_process_detected=$wechatRunning"
+    "wechat_login_state=unknown"
     "verdict=$verdict"
 )
 Set-Content -Path (Join-Path $script:RunDir "summary.txt") -Value ($summaryText -join [Environment]::NewLine) -Encoding UTF8

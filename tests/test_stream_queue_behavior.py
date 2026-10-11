@@ -20,16 +20,20 @@ def queue_server():
              "_prune_video_queue_for_display", "_get_effective_send_interval_seconds",
              "_recover_video_queue_overflow", "_video_chunk_sender"}
     original.body = [node for node in original.body if getattr(node, "name", "") in names]
+    broadcasts = []
     namespace = {"asyncio": asyncio, "time": time, "data_logger": logging.getLogger("queue-test"),
                  "LOW_LATENCY_QUEUE_KEEP_LATEST": 1, "TARGET_FRAMERATE": 30,
                  "SENT_FRAME_TIMESTAMP_HISTORY_SIZE": 1000, "DEFAULT_STREAM_LOAD_SEND_FPS": 18,
-                 "websockets": SimpleNamespace(broadcast=lambda *_: None, ConnectionClosed=ConnectionError)}
+                 "websockets": SimpleNamespace(broadcast=lambda clients, data: broadcasts.append(data), ConnectionClosed=ConnectionError)}
     exec(compile(ast.Module(body=[original], type_ignores=[]), str(SOURCE), "exec"), namespace)
     server = namespace["DataStreamingServer"]()
     server.app = SimpleNamespace(encoder="x264enc", framerate=30)
     server.video_chunk_queues = {"primary": asyncio.Queue(maxsize=120)}
-    server.display_clients = {"primary": {"encoder": "x264enc", "sent_timestamps": OrderedDict()}}
-    server.clients = {object()}
+    websocket = object()
+    server.display_clients = {"primary": {"encoder": "x264enc", "ws": websocket, "sent_timestamps": OrderedDict()}}
+    server.clients = {websocket}
+    server.broadcasts = broadcasts
+    server.backpressure_check_interval_s = 0.001
     server._bytes_sent_in_interval = 0
     server._reconfigure_lock = asyncio.Lock()
     return server
@@ -74,6 +78,29 @@ class StreamQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(queue.qsize(), 0, "Video drained its entire backlog before other tasks could run")
         sender.cancel()
         await sender
+
+    async def test_primary_backpressure_pauses_then_resumes_h264_in_order(self):
+        server = queue_server()
+        state = server.display_clients["primary"]
+        state["backpressure_enabled"] = False
+        queue = server.video_chunk_queues["primary"]
+        frames = [b"key-frame", b"reference-frame", b"dependent-frame"]
+        for frame_id, data in enumerate(frames, 1):
+            queue.put_nowait({"data": data, "frame_id": frame_id})
+        sender = asyncio.create_task(server._video_chunk_sender("primary"))
+        try:
+            await asyncio.sleep(0.01)
+            self.assertEqual(server.broadcasts, [])
+            self.assertEqual(queue.qsize(), 3)
+            self.assertEqual(state["sent_timestamps"], {})
+            state["backpressure_enabled"] = True
+            await asyncio.wait_for(queue.join(), timeout=1)
+            self.assertEqual(server.broadcasts, frames)
+            self.assertEqual(state["last_sent_frame_id"], 3)
+            self.assertEqual(server._bytes_sent_in_interval, sum(map(len, frames)))
+        finally:
+            sender.cancel()
+            await sender
 
 
 if __name__ == "__main__":

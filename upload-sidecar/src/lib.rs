@@ -28,6 +28,17 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
+const SESSION_CACHE_IDLE: Duration = Duration::from_secs(60 * 60);
+const COMPLETED_SESSION_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+const SESSION_DISK_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+struct CachedSession {
+    record: Arc<Mutex<SessionRecord>>,
+    last_access: Instant,
+}
+
+type SessionCache = RwLock<HashMap<Uuid, CachedSession>>;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen: String,
@@ -99,7 +110,7 @@ impl Config {
 pub struct AppState {
     config: Arc<Config>,
     root: Arc<PathBuf>,
-    sessions: Arc<RwLock<HashMap<Uuid, Arc<Mutex<SessionRecord>>>>>,
+    sessions: Arc<SessionCache>,
     permits: Arc<Semaphore>,
     started_at: Instant,
 }
@@ -225,13 +236,135 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         .await
         .map_err(|error| format!("create staging directory: {error}"))?;
     reject_symlink(&canonical_root.join(".staging")).await?;
-    Ok(AppState {
+    let state = AppState {
         permits: Arc::new(Semaphore::new(config.max_concurrency)),
         config: Arc::new(config),
         root: Arc::new(canonical_root),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         started_at: Instant::now(),
-    })
+    };
+    start_session_cleanup(&state);
+    Ok(state)
+}
+
+fn start_session_cleanup(state: &AppState) {
+    let sessions = Arc::downgrade(&state.sessions);
+    let root = state.root.clone();
+    let resume_enabled = state.config.resume_enabled;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_disk_cleanup: Option<Instant> = None;
+        loop {
+            interval.tick().await;
+            let Some(sessions) = sessions.upgrade() else { break; };
+            prune_session_cache(&sessions, resume_enabled).await;
+            if last_disk_cleanup.is_none_or(|last| last.elapsed() >= SESSION_DISK_CLEANUP_INTERVAL) {
+                if let Err(error) = cleanup_completed_sessions(&sessions, &root).await {
+                    warn!(%error, "failed to clean completed upload sessions");
+                }
+                last_disk_cleanup = Some(Instant::now());
+            }
+        }
+    });
+}
+
+async fn prune_session_cache(sessions: &SessionCache, resume_enabled: bool) {
+    sessions.write().await.retain(|_, cached| {
+        if cached.last_access.elapsed() < SESSION_CACHE_IDLE || Arc::strong_count(&cached.record) > 1 {
+            return true;
+        }
+        let Ok(record) = cached.record.try_lock() else { return true; };
+        // Unfinished sessions must remain available when disk resumption is disabled.
+        !resume_enabled && (!record.completed || cached.last_access.elapsed() < COMPLETED_SESSION_RETENTION)
+    });
+}
+
+async fn cleanup_completed_sessions(sessions: &SessionCache, root: &Path) -> std::io::Result<()> {
+    let staging = root.join(".staging");
+    let mut entries = fs::read_dir(&staging).await?;
+    let mut completed_removed = 0_u64;
+    let mut temporary_removed = 0_u64;
+    while let Some(entry) = entries.next_entry().await? {
+        match cleanup_staging_entry(sessions, &staging, entry).await? {
+            Some(true) => temporary_removed += 1,
+            Some(false) => completed_removed += 1,
+            None => {}
+        }
+    }
+    if completed_removed != 0 || temporary_removed != 0 {
+        info!(completed_removed, temporary_removed, "expired upload staging records cleaned");
+    }
+    Ok(())
+}
+
+async fn cleanup_staging_entry(
+    sessions: &SessionCache,
+    staging: &Path,
+    entry: fs::DirEntry,
+) -> std::io::Result<Option<bool>> {
+    let name = entry.file_name();
+    let Some(name) = name.to_str() else { return Ok(None); };
+    let (id, temporary) = if let Some(id) = name.strip_suffix(".json.tmp") {
+        (id, true)
+    } else if let Some(id) = name.strip_suffix(".json") {
+        (id, false)
+    } else {
+        return Ok(None);
+    };
+    let Ok(id) = Uuid::parse_str(id) else { return Ok(None); };
+    let metadata = match fs::metadata(entry.path()).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let modified = metadata.modified()?;
+    if !metadata.is_file()
+        || modified.elapsed().unwrap_or(Duration::ZERO) < COMPLETED_SESSION_RETENTION
+    {
+        return Ok(None);
+    }
+    // Read old metadata before taking the global cache lock, including unfinished uploads.
+    if !temporary {
+        let data = match fs::read(entry.path()).await {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let Ok(record) = serde_json::from_slice::<SessionRecord>(&data) else { return Ok(None); };
+        if record.id != id || !record.completed {
+            return Ok(None);
+        }
+    }
+    let mut cache = sessions.write().await;
+    if cache.get(&id).is_some_and(|cached| Arc::strong_count(&cached.record) > 1) {
+        return Ok(None);
+    }
+    // A persist/rename may have replaced the candidate while its metadata was read.
+    let current = match fs::metadata(entry.path()).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !current.is_file() || current.modified()? != modified || current.len() != metadata.len() {
+        return Ok(None);
+    }
+    if !temporary {
+        remove_staging_file(&staging.join(format!("{id}.part"))).await?;
+        remove_staging_file(&staging.join(format!("{id}.json.tmp"))).await?;
+    }
+    remove_staging_file(&entry.path()).await?;
+    if !temporary {
+        cache.remove(&id);
+    }
+    Ok(Some(temporary))
+}
+
+async fn remove_staging_file(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -307,18 +440,26 @@ async fn create_session(
         completed: false,
     };
     persist_record(&state, &record).await?;
-    OpenOptions::new()
+    if let Err(error) = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(part_path(&state, record.id))
         .await
-        .map_err(internal_error)?;
+    {
+        if let Err(cleanup_error) = remove_staging_file(&metadata_path(&state, record.id)).await {
+            warn!(task_id = %record.id, %cleanup_error, "failed to roll back upload metadata");
+        }
+        return Err(internal_error(error));
+    }
     let response = SessionResponse::from(&record);
     state
         .sessions
         .write()
         .await
-        .insert(record.id, Arc::new(Mutex::new(record.clone())));
+        .insert(record.id, CachedSession {
+            record: Arc::new(Mutex::new(record.clone())),
+            last_access: Instant::now(),
+        });
     info!(
         task_id = %record.id,
         file_name = %record.file_name,
@@ -487,7 +628,6 @@ async fn delete_session(
     let record = session.lock().await;
     authorize_record(&record, &claims)?;
     let file_name = record.file_name.clone();
-    drop(record);
     if let Err(error) = fs::remove_file(part_path(&state, id)).await
         && error.kind() != std::io::ErrorKind::NotFound
     {
@@ -498,6 +638,9 @@ async fn delete_session(
     {
         return Err(internal_error(error));
     }
+    remove_staging_file(&metadata_path(&state, id).with_extension("json.tmp"))
+        .await
+        .map_err(internal_error)?;
     state.sessions.write().await.remove(&id);
     info!(task_id = %id, file_name = %file_name, "upload cancelled");
     Ok(StatusCode::NO_CONTENT)
@@ -559,8 +702,9 @@ fn authorize_record(record: &SessionRecord, claims: &TokenClaims) -> Result<(), 
 }
 
 async fn load_session(state: &AppState, id: Uuid) -> Result<Arc<Mutex<SessionRecord>>, ApiError> {
-    if let Some(session) = state.sessions.read().await.get(&id).cloned() {
-        return Ok(session);
+    if let Some(cached) = state.sessions.write().await.get_mut(&id) {
+        cached.last_access = Instant::now();
+        return Ok(cached.record.clone());
     }
     if !state.config.resume_enabled {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found", "upload session not found"));
@@ -572,8 +716,17 @@ async fn load_session(state: &AppState, id: Uuid) -> Result<Arc<Mutex<SessionRec
     if record.id != id {
         return Err(ApiError::new(StatusCode::CONFLICT, "invalid_metadata", "session metadata id mismatch"));
     }
+    let mut sessions = state.sessions.write().await;
+    if let Some(cached) = sessions.get_mut(&id) {
+        cached.last_access = Instant::now();
+        return Ok(cached.record.clone());
+    }
+    // Cleanup may have expired the metadata while this request was reading it.
+    if !fs::try_exists(metadata_path(state, id)).await.map_err(internal_error)? {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found", "upload session not found"));
+    }
     let session = Arc::new(Mutex::new(record));
-    state.sessions.write().await.insert(id, session.clone());
+    sessions.insert(id, CachedSession { record: session.clone(), last_access: Instant::now() });
     Ok(session)
 }
 
@@ -581,8 +734,14 @@ async fn persist_record(state: &AppState, record: &SessionRecord) -> Result<(), 
     let path = metadata_path(state, record.id);
     let temporary = path.with_extension("json.tmp");
     let data = serde_json::to_vec(record).map_err(internal_error)?;
-    fs::write(&temporary, data).await.map_err(internal_error)?;
-    fs::rename(&temporary, &path).await.map_err(internal_error)
+    let result = async {
+        fs::write(&temporary, data).await?;
+        fs::rename(&temporary, &path).await
+    }.await;
+    if result.is_err() {
+        let _ = remove_staging_file(&temporary).await;
+    }
+    result.map_err(internal_error)
 }
 
 fn part_path(state: &AppState, id: Uuid) -> PathBuf {
@@ -921,7 +1080,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let app = router(state);
+        let app = router(state.clone());
         let token = test_token(&upload_root, session_id, epoch, key);
         let create = app
             .clone()
@@ -951,8 +1110,13 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
+            if index == 0 {
+                // Reconnect after the in-memory cache has been evicted.
+                state.sessions.write().await.clear();
+            }
         }
         let complete = app
+            .clone()
             .oneshot(
                 Request::post(format!("/upload-api/v1/sessions/{id}/complete"))
                     .header("authorization", format!("Bearer {token}"))
@@ -966,5 +1130,110 @@ mod tests {
             fs::read(upload_root.join("nested/hello.txt")).await.unwrap(),
             b"hello"
         );
+        assert!(!part_path(&state, Uuid::parse_str(id).unwrap()).exists());
+        state.sessions.write().await.clear();
+        let retry = app
+            .oneshot(
+                Request::post(format!("/upload-api/v1/sessions/{id}/complete"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn cleanup_expires_completed_sessions_and_preserves_resumption() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = build_state(Config {
+            listen: "127.0.0.1:0".into(),
+            upload_root: temp.path().join("uploads"),
+            state_path: temp.path().join("state.json"),
+            chunk_size: 4,
+            max_concurrency: 2,
+            max_file_size: 1024,
+            min_free_bytes: 0,
+            resume_enabled: true,
+            checksum_enabled: false,
+            allowed_subdirs: vec![],
+        }).await.unwrap();
+        let incomplete = SessionRecord {
+            id: Uuid::new_v4(),
+            file_name: "ongoing.bin".into(),
+            size: 8,
+            chunk_size: 4,
+            uploaded_chunks: BTreeSet::from([0]),
+            uploaded_bytes: 4,
+            checksum: None,
+            allow_overwrite: false,
+            session_id: "sid_test".into(),
+            session_epoch: 42,
+            created_at: now_seconds(),
+            completed: false,
+        };
+        let expired = SessionRecord { id: Uuid::new_v4(), completed: true, ..incomplete.clone() };
+        let recent = SessionRecord { id: Uuid::new_v4(), completed: true, ..incomplete.clone() };
+        for record in [&incomplete, &expired, &recent] {
+            persist_record(&state, record).await.unwrap();
+            fs::write(part_path(&state, record.id), b"data").await.unwrap();
+            state.sessions.write().await.insert(record.id, CachedSession {
+                record: Arc::new(Mutex::new(record.clone())),
+                last_access: Instant::now() - SESSION_CACHE_IDLE - Duration::from_secs(1),
+            });
+        }
+        let old_time = SystemTime::now() - COMPLETED_SESSION_RETENTION - Duration::from_secs(1);
+        for record in [&incomplete, &expired] {
+            std::fs::OpenOptions::new().write(true).open(metadata_path(&state, record.id)).unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(old_time)).unwrap();
+        }
+        let temporary = metadata_path(&state, Uuid::new_v4()).with_extension("json.tmp");
+        fs::write(&temporary, b"interrupted metadata write").await.unwrap();
+        std::fs::OpenOptions::new().write(true).open(&temporary).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old_time)).unwrap();
+
+        let active = state.sessions.read().await.get(&incomplete.id).unwrap().record.clone();
+        prune_session_cache(&state.sessions, false).await;
+        assert_eq!(state.sessions.read().await.len(), 3);
+        prune_session_cache(&state.sessions, true).await;
+        assert!(state.sessions.read().await.contains_key(&incomplete.id));
+        drop(active);
+        prune_session_cache(&state.sessions, true).await;
+        assert!(state.sessions.read().await.is_empty());
+        cleanup_completed_sessions(&state.sessions, &state.root).await.unwrap();
+        assert!(!metadata_path(&state, expired.id).exists());
+        assert!(!part_path(&state, expired.id).exists());
+        assert!(metadata_path(&state, recent.id).exists());
+        assert!(metadata_path(&state, incomplete.id).exists());
+        assert!(part_path(&state, incomplete.id).exists());
+        assert!(!temporary.exists());
+
+        let (first, second) = tokio::join!(
+            load_session(&state, incomplete.id),
+            load_session(&state, incomplete.id),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.lock().await.uploaded_bytes, 4);
+    }
+
+    #[tokio::test]
+    async fn cleanup_tolerates_staging_files_removed_after_enumeration() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = SessionCache::default();
+        for suffix in ["json", "json.tmp"] {
+            let path = temp.path().join(format!("{}.{suffix}", Uuid::new_v4()));
+            fs::write(&path, b"interrupted metadata write").await.unwrap();
+        }
+        let mut entries = fs::read_dir(temp.path()).await.unwrap();
+        let mut checked = 0;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            fs::remove_file(entry.path()).await.unwrap();
+            assert!(cleanup_staging_entry(&sessions, temp.path(), entry).await.unwrap().is_none());
+            checked += 1;
+        }
+        assert_eq!(checked, 2);
     }
 }

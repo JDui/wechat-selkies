@@ -20,7 +20,7 @@ ensure_log_dir() {
 
 start_wechat() {
     if [ -x /usr/bin/wechat ]; then
-        nohup /usr/bin/wechat >/dev/null 2>&1 &
+        nohup /scripts/wechat/wechat-start.sh >/dev/null 2>&1 &
     fi
 }
 
@@ -205,6 +205,21 @@ start_split_fab() {
     fi
 }
 
+start_wechat_logout_monitor() {
+    if ! is_true "${WECHAT_LOGOUT_MONITOR:-true}" || ! is_true "${AUTO_START_WECHAT:-true}"; then
+        return
+    fi
+    if pgrep -f "/scripts/wechat-logout-monitor.py" >/dev/null 2>&1; then
+        return
+    fi
+    WECHAT_LOGOUT_LOG_PATH="${WECHAT_LOGOUT_LOG_PATH:-/config/logs/wechat-logout.log}"
+    if ensure_log_dir "$WECHAT_LOGOUT_LOG_PATH"; then
+        nohup python3 -u /scripts/wechat-logout-monitor.py >"/config/logs/wechat-logout-monitor.log" 2>&1 &
+    else
+        nohup python3 -u /scripts/wechat-logout-monitor.py >/tmp/wechat-logout-monitor.log 2>&1 &
+    fi
+}
+
 reconfigure_openbox() {
     openbox --reconfigure >/dev/null 2>&1 || true
 }
@@ -280,6 +295,9 @@ if is_true "${PROCESS_WATCHDOG:-true}"; then
         nohup /scripts/process-watchdog.sh >/tmp/process-watchdog.log 2>&1 &
     fi
 fi
+
+# observe WeChat abnormal logouts and keep a small rolling event log
+start_wechat_logout_monitor
 
 # start split FAB process for quick left/right tiling when there are >=2 windows
 if is_true "${ENABLE_SPLIT_FAB:-false}"; then

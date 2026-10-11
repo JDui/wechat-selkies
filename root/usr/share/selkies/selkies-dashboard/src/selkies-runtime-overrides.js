@@ -49,6 +49,7 @@
   var WS_SESSION_ID = "";
   var WS_SESSION_EPOCH = 0;
   var sessionMonitorTimer = null;
+  var sessionCheckInFlight = false;
   var lastSessionCheckAt = 0;
   var staleSessionHandled = false;
   var videoHealthEvents = [];
@@ -61,6 +62,7 @@
   var localLinkCursorKey = "local_link_cursor_v1";
   var localLinkCursor = parseTimestamp(getStoredValue(localLinkCursorKey));
   var localLinkPollTimer = null;
+  var localLinkPollInFlight = false;
   var localLinkPromptTimer = null;
   var localLinkPendingEvent = null;
   var localLinkHistoryMountTimer = null;
@@ -132,6 +134,9 @@
   var NOTIFICATION_HEADER_MERGE_WINDOW_MS = 60000;
   var notificationCursor = parseTimestamp(getStoredValue(notificationCursorKey));
   var notificationPollTimer = null;
+  var notificationPollInFlight = false;
+  var notificationActivityInFlight = false;
+  var notificationActivityPending = false;
   var notificationHistoryRenderTimer = null;
   var notificationHistoryRecentKeys = Object.create(null);
   var notificationCenterOpen = sanitizeBool(getStoredValue("notification_center_open"), false);
@@ -168,6 +173,9 @@
     getStoredValue("adaptive_sleep_idle_seconds") || runtime.adaptiveSleepIdleSeconds || 3600
   );
   var adaptiveSleepStatusTimer = null;
+  var adaptiveSleepStatusInFlight = false;
+  var adaptiveSleepActivityInFlight = false;
+  var adaptiveSleepActivityPending = false;
   var adaptiveSleepOverlayTimer = null;
   var adaptiveSleepIdleTimer = null;
   var adaptiveSleepOverlayVisible = false;
@@ -720,15 +728,17 @@
   }
 
   function refreshSessionIdentity(force) {
-    if (!window.fetch) return Promise.resolve(false);
+    if (!window.fetch || sessionCheckInFlight) return Promise.resolve(false);
     var now = Date.now();
     if (!force && now - lastSessionCheckAt < 5000) return Promise.resolve(false);
     lastSessionCheckAt = now;
+    sessionCheckInFlight = true;
     return window
       .fetch(withSessionIdentity(authBasePath() + "session"), {
         method: "GET",
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(5000),
         headers: { "X-Requested-With": "XMLHttpRequest" }
       })
       .then(function (response) {
@@ -753,6 +763,9 @@
       })
       .catch(function () {
         return false;
+      })
+      .finally(function () {
+        sessionCheckInFlight = false;
       });
   }
 
@@ -1825,17 +1838,29 @@
     if (!window.fetch) return;
     var now = Date.now();
     if (!force && now - lastNotificationActivityReportAt < 900) return;
+    if (notificationActivityInFlight) {
+      notificationActivityPending = true;
+      return;
+    }
     lastNotificationActivityReportAt = now;
+    notificationActivityInFlight = true;
     window.fetch(notificationApiPath("activity"), {
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
+      signal: AbortSignal.timeout(5000),
       headers: {
         "Content-Type": "application/json",
         "X-Requested-With": "XMLHttpRequest"
       },
       body: JSON.stringify({ ts: now })
-    }).catch(function () {});
+    }).catch(function () {}).finally(function () {
+      notificationActivityInFlight = false;
+      if (notificationActivityPending) {
+        notificationActivityPending = false;
+        reportFrontendInteractionState(true);
+      }
+    });
   }
 
   function containerSleepApiPath(pathSuffix) {
@@ -1850,17 +1875,29 @@
     if (!window.fetch) return;
     var now = Date.now();
     if (!force && now - adaptiveSleepLastActivityPostAt < 900) return;
+    if (adaptiveSleepActivityInFlight) {
+      adaptiveSleepActivityPending = true;
+      return;
+    }
     adaptiveSleepLastActivityPostAt = now;
+    adaptiveSleepActivityInFlight = true;
     window.fetch(containerSleepApiPath("activity"), {
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
+      signal: AbortSignal.timeout(5000),
       headers: {
         "Content-Type": "application/json",
         "X-Requested-With": "XMLHttpRequest"
       },
       body: JSON.stringify({ ts: now })
-    }).catch(function () {});
+    }).catch(function () {}).finally(function () {
+      adaptiveSleepActivityInFlight = false;
+      if (adaptiveSleepActivityPending) {
+        adaptiveSleepActivityPending = false;
+        postContainerSleepActivity(true);
+      }
+    });
   }
 
   function loadContainerSleepStatus() {
@@ -1870,6 +1907,7 @@
         method: "GET",
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(5000),
         headers: { "X-Requested-With": "XMLHttpRequest" }
       })
       .then(function (response) {
@@ -2043,7 +2081,11 @@
   }
 
   function pollAdaptiveSleepStatus() {
-    loadContainerSleepStatus().then(applyAdaptiveSleepStatus);
+    if (adaptiveSleepStatusInFlight) return;
+    adaptiveSleepStatusInFlight = true;
+    return loadContainerSleepStatus().then(applyAdaptiveSleepStatus).finally(function () {
+      adaptiveSleepStatusInFlight = false;
+    });
   }
 
   function startAdaptiveSleepStatusWatcher() {
@@ -2233,6 +2275,7 @@
         method: "GET",
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(5000),
         headers: { "X-Requested-With": "XMLHttpRequest" }
       })
       .then(function (response) {
@@ -2422,6 +2465,7 @@
         method: "GET",
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(5000),
         headers: { "X-Requested-With": "XMLHttpRequest" }
       })
       .then(function (response) {
@@ -3144,11 +3188,14 @@
       renderDebugToolsSection();
     });
     var poll = function () {
+      if (!window.fetch || notificationPollInFlight) return;
+      notificationPollInFlight = true;
       window
         .fetch(notificationApiPath("pull?since=" + encodeURIComponent(String(notificationCursor || 0))), {
           method: "GET",
           credentials: "same-origin",
           cache: "no-store",
+          signal: AbortSignal.timeout(5000),
           headers: { "X-Requested-With": "XMLHttpRequest" }
         })
         .then(function (response) {
@@ -3174,7 +3221,10 @@
             }
           }
         })
-        .catch(function () {});
+        .catch(function () {})
+        .finally(function () {
+          notificationPollInFlight = false;
+        });
     };
     poll();
     notificationPollTimer = window.setInterval(poll, 1200);
@@ -8260,13 +8310,15 @@
   }
 
   function pollLocalLinkEvents() {
-    if (!LOCAL_LINK_OPEN_ENABLED) return;
+    if (!LOCAL_LINK_OPEN_ENABLED || !window.fetch || localLinkPollInFlight) return;
+    localLinkPollInFlight = true;
     var path = localLinkApiPath("pull?since=" + encodeURIComponent(String(localLinkCursor || 0)));
     window
       .fetch(path, {
         method: "GET",
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(5000),
         headers: { "X-Requested-With": "XMLHttpRequest" }
       })
       .then(function (response) {
@@ -8288,7 +8340,10 @@
           }
         }
       })
-      .catch(function () {});
+      .catch(function () {})
+      .finally(function () {
+        localLinkPollInFlight = false;
+      });
   }
 
   function startLocalLinkEventPoller() {
@@ -8322,10 +8377,92 @@
     return assist;
   }
 
+  // Hardening for IME text delivery to the remote. On Linux clients the
+  // bundle's _compositionEnd only erases the pinyin composition remotely;
+  // the committed characters ride exclusively on the hidden assist input's
+  // "input" event. If the upstream flush (_typeString) is missing or throws,
+  // or focus is stolen inside the commit window, characters are lost for
+  // good. So: flush it ourselves first in the capture phase, retry while
+  // text is still undelivered, and never re-steal focus right after typing.
+  var ASSIST_TYPING_COOLDOWN_MS = 2000;
+  var ASSIST_FLUSH_RETRY_MS = 120;
+  var lastAssistInputAt = 0;
+  var assistGuardAttached = false;
+  var assistFlushRetryTimer = null;
+  var assistFlushWarned = false;
+
+  function noteAssistInput() {
+    lastAssistInputAt = Date.now();
+  }
+
+  function assistInputInstance() {
+    var candidates = [window.webrtcInput, window.selkiesInput];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var inst = candidates[i];
+      if (inst && typeof inst._typeString === "function") {
+        return inst;
+      }
+    }
+    return null;
+  }
+
+  function flushAssistInput() {
+    var assist = document.getElementById("keyboard-input-assist");
+    if (!assist) return false;
+    var value = assist.value;
+    if (!value) return true;
+    var inst = assistInputInstance();
+    if (inst) {
+      try {
+        inst._typeString(value);
+        assist.value = "";
+        noteAssistInput();
+        assistFlushWarned = false;
+        return true;
+      } catch (_flushErr) {}
+    }
+    // Leave the pending text in the input and retry shortly; clearing or
+    // dropping it here would lose committed characters permanently.
+    if (!assistFlushRetryTimer) {
+      if (!assistFlushWarned) {
+        assistFlushWarned = true;
+        console.warn("[selkies-overrides] assist input flush failed; retrying", value);
+      }
+      assistFlushRetryTimer = window.setTimeout(function () {
+        assistFlushRetryTimer = null;
+        flushAssistInput();
+      }, ASSIST_FLUSH_RETRY_MS);
+    }
+    return false;
+  }
+
+  function installAssistInputGuard() {
+    if (assistGuardAttached) return;
+    var assist = document.getElementById("keyboard-input-assist");
+    if (!assist) {
+      window.setTimeout(installAssistInputGuard, 500);
+      return;
+    }
+    assistGuardAttached = true;
+    // Capture phase + earlier registration: runs before the bundle's own
+    // "input" listener, so a successful flush leaves an empty value for it
+    // and a failed one leaves the text intact for the retry path.
+    assist.addEventListener(
+      "input",
+      function () {
+        noteAssistInput();
+        flushAssistInput();
+      },
+      true
+    );
+    console.log("selkies-overrides: assist input guard attached");
+  }
+
   function focusKeyboardAssist() {
     var assist = normalizeKeyboardAssist();
     if (!assist || document.hidden) return;
     if (imeCompositionActive) return;
+    if (Date.now() - lastAssistInputAt < ASSIST_TYPING_COOLDOWN_MS) return;
     var active = document.activeElement;
     if (active && active !== document.body && active !== assist && isFormLikeElement(active)) return;
     try {
@@ -8350,6 +8487,7 @@
   function bindImeFocusRecovery() {
     ensureLocalLinkUiStyle();
     normalizeKeyboardAssist();
+    installAssistInputGuard();
     document.addEventListener(
       "pointerdown",
       function (event) {
@@ -8373,6 +8511,7 @@
       "compositionstart",
       function () {
         imeCompositionActive = true;
+        noteAssistInput();
       },
       true
     );
@@ -8380,6 +8519,7 @@
       "compositionend",
       function () {
         imeCompositionActive = false;
+        noteAssistInput();
         noteUiInteraction();
         scheduleKeyboardAssistFocus(260);
       },

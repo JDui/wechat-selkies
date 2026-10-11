@@ -1,3 +1,3 @@
 #!/bin/bash
 
-/usr/bin/wechat
+exec /scripts/run-desktop-app.sh wechat /usr/bin/wechat "$@"

@@ -47,6 +47,34 @@ free -h 2>/dev/null || true
 df -h /dev/shm 2>/dev/null || true
 
 echo
+echo "== container pressure and limits =="
+for task_metric in cpu.stat memory.current memory.peak memory.swap.current memory.events pids.current; do
+  task_metric_path="/sys/fs/cgroup/$task_metric"
+  if [ -r "$task_metric_path" ]; then
+    echo "$task_metric:"
+    cat "$task_metric_path"
+  fi
+done
+for task_pressure in cpu memory io; do
+  if [ -r "/proc/pressure/$task_pressure" ]; then
+    echo "host pressure/$task_pressure:"
+    cat "/proc/pressure/$task_pressure"
+  fi
+done
+
+echo
+echo "== core dump policy =="
+echo "diagnostic shell core soft/hard: $(ulimit -Sc) / $(ulimit -Hc)"
+if [ -r /proc/sys/kernel/core_pattern ]; then
+  echo "kernel.core_pattern: $(cat /proc/sys/kernel/core_pattern)"
+fi
+for task_pid in $(pgrep -f '^/usr/bin/([w]echat|[q]q)([[:space:]]|$)' || true); do
+  echo "app pid=$task_pid:"
+  grep -E 'Max core file size' "/proc/$task_pid/limits" 2>/dev/null || true
+  grep -E '^(Name|State|VmRSS|VmSwap|Threads):' "/proc/$task_pid/status" 2>/dev/null || true
+done
+
+echo
 echo "== /dev/dri =="
 if [ -d /dev/dri ]; then
   ls -l /dev/dri
@@ -57,5 +85,5 @@ fi
 echo
 echo "== process snapshot =="
 if command -v ps >/dev/null 2>&1; then
-  ps -eLo pid,ppid,tid,psr,pcpu,pmem,comm --sort=-pcpu | head -n 25
+  ps -eLo pid,ppid,tid,psr,pcpu,pmem,comm --sort=-pcpu | head -n 25 || true
 fi

@@ -19,6 +19,9 @@ services:
     mem_limit: "8g"       # NAS has sufficient memory; avoid desktop/encoder reclaim stalls
     pids_limit: 4096
     ulimits:
+      core:
+        soft: 0
+        hard: 0
       nofile:
         soft: 65536
         hard: 65536

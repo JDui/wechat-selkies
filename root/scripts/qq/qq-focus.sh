@@ -93,7 +93,7 @@ wid="$(find_main_window || true)"
 if [ -n "$wid" ]; then
     xdotool windowmap "$wid" >/dev/null 2>&1 || true
     xdotool windowraise "$wid" >/dev/null 2>&1 || true
-    xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
+    timeout -k 1s 3s xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
     exit 0
 fi
 

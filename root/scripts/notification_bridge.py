@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -248,27 +249,23 @@ def clamp_text(value, max_len=2048):
 
 def trim_raw_log_unlocked(incoming_bytes):
     try:
-        current_size = RAW_LOG_PATH.stat().st_size if RAW_LOG_PATH.exists() else 0
-    except Exception:
-        return
+        current_size = RAW_LOG_PATH.stat().st_size
+    except FileNotFoundError:
+        current_size = 0
     incoming_size = len(incoming_bytes)
     if incoming_size >= RAW_LOG_MAX_BYTES:
-        try:
-            RAW_LOG_PATH.write_bytes(incoming_bytes[-RAW_LOG_MAX_BYTES:])
-        except Exception:
-            pass
+        RAW_LOG_PATH.write_bytes(b"")
         return
     if current_size + incoming_size <= RAW_LOG_MAX_BYTES:
         return
-    keep_size = max(0, RAW_LOG_MAX_BYTES - incoming_size)
-    try:
-        with RAW_LOG_PATH.open("rb") as handle:
-            handle.seek(max(0, current_size - keep_size))
-            tail = handle.read(keep_size)
-        with RAW_LOG_PATH.open("wb") as handle:
-            handle.write(tail)
-    except Exception:
-        return
+    # Keep recent events but leave headroom instead of rewriting the whole log
+    # again on every notification after the file first reaches its size cap.
+    keep_size = max(0, min(RAW_LOG_MAX_BYTES - incoming_size, RAW_LOG_MAX_BYTES * 3 // 4))
+    with RAW_LOG_PATH.open("rb") as handle:
+        handle.seek(max(0, current_size - keep_size))
+        tail = handle.read(keep_size)
+    with RAW_LOG_PATH.open("wb") as handle:
+        handle.write(tail)
 
 
 def detect_app(app_name, summary, body, icon_name):
@@ -586,16 +583,28 @@ def get_frontend_interaction_at():
 
 def run_focus_command(command):
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [command],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=8.0,
-            check=False,
+            start_new_session=os.name == "posix",
         )
-        focused = result.returncode == 0
-        error = "" if focused else (result.stderr.strip() or "focus failed")
+        try:
+            _, stderr = process.communicate(timeout=8.0)
+        except subprocess.TimeoutExpired:
+            # The shell can leave a blocked xdotool behind if only its PID is killed.
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            return False, "focus command timed out after 8 seconds"
+        focused = process.returncode == 0
+        error = "" if focused else (stderr.strip() or "focus failed")
         return focused, error
     except Exception as exc:
         return False, str(exc)
@@ -1022,14 +1031,16 @@ def append_raw_log(payload):
     global RAW_LOG_DISABLED
     if RAW_LOG_DISABLED:
         return
-    line = json.dumps(payload, ensure_ascii=False) + "\n"
+    line = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(line) > RAW_LOG_MAX_BYTES:
+        line = line[-RAW_LOG_MAX_BYTES:]
     with RAW_LOG_LOCK:
         if RAW_LOG_DISABLED:
             return
         try:
             RAW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            trim_raw_log_unlocked(line.encode("utf-8"))
-            with RAW_LOG_PATH.open("a", encoding="utf-8") as handle:
+            trim_raw_log_unlocked(line)
+            with RAW_LOG_PATH.open("ab") as handle:
                 handle.write(line)
         except Exception as exc:
             RAW_LOG_DISABLED = True

@@ -22,14 +22,14 @@ if is_true "${PROCESS_WATCHDOG:-true}"; then
 fi
 
 if is_true "${AUTO_START_WECHAT:-true}" && is_true "${WATCHDOG_RESTART_WECHAT:-true}"; then
-    if ! pgrep -af "/usr/bin/wechat" >/dev/null 2>&1; then
+    if ! pgrep -af '^/usr/bin/[w]echat([[:space:]]|$)' >/dev/null 2>&1; then
         echo "wechat process missing"
         exit 1
     fi
 fi
 
 if is_true "${AUTO_START_QQ:-false}" && is_true "${WATCHDOG_RESTART_QQ:-true}"; then
-    if ! pgrep -af "/usr/bin/qq" >/dev/null 2>&1; then
+    if ! pgrep -af '^/usr/bin/[q]q([[:space:]]|$)' >/dev/null 2>&1; then
         echo "qq process missing"
         exit 1
     fi

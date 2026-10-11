@@ -131,6 +131,8 @@ ENV TZ="Asia/Shanghai"
 ENV LC_ALL="zh_CN.UTF-8"
 ENV AUTO_START_WECHAT="true"
 ENV AUTO_START_QQ="false"
+ENV DISABLE_CORE_DUMPS="true"
+ENV DESKTOP_APP_LOG_MAX_BYTES="1048576"
 ENV PROCESS_WATCHDOG="true"
 ENV WATCHDOG_INTERVAL="10"
 ENV WATCHDOG_TRAY="true"
@@ -280,6 +282,7 @@ RUN sed -i 's/\r$//' \
     /defaults/dunstrc \
     /defaults/menu.xml \
     /scripts/start.sh \
+    /scripts/run-desktop-app.sh \
     /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run \
     /etc/s6-overlay/s6-rc.d/svc-pulseaudio/type \
     /scripts/process-watchdog.sh \
@@ -287,6 +290,7 @@ RUN sed -i 's/\r$//' \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
+    /scripts/wechat-logout-monitor.py \
     /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
     /scripts/lan_discovery_common.py \
@@ -314,11 +318,13 @@ RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /etc/s6-overlay/s6-rc.d/svc-pulseaudio/run \
     /scripts/start.sh \
+    /scripts/run-desktop-app.sh \
     /scripts/process-watchdog.sh \
     /scripts/ensure-audio-service.sh \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
+    /scripts/wechat-logout-monitor.py \
     /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
     /scripts/lan_discovery_common.py \

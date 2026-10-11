@@ -20,11 +20,8 @@ def parse_max_bytes(raw):
 
 
 def trim_existing_log(handle, max_bytes, incoming_bytes):
-    try:
-        handle.seek(0, os.SEEK_END)
-        current_size = handle.tell()
-    except OSError:
-        return
+    handle.seek(0, os.SEEK_END)
+    current_size = handle.tell()
     incoming_size = len(incoming_bytes)
     if incoming_size >= max_bytes:
         handle.seek(0)
@@ -33,7 +30,8 @@ def trim_existing_log(handle, max_bytes, incoming_bytes):
     if current_size + incoming_size <= max_bytes:
         return
 
-    keep_size = max(0, max_bytes - incoming_size)
+    # Leave headroom so a full log is not copied again for every small write.
+    keep_size = max(0, min(max_bytes - incoming_size, max_bytes * 3 // 4))
     if keep_size > 0:
         handle.seek(max(0, current_size - keep_size), os.SEEK_SET)
         tail = handle.read(keep_size)
@@ -46,6 +44,19 @@ def trim_existing_log(handle, max_bytes, incoming_bytes):
     handle.flush()
 
 
+def disable_file_logging(handle, log_path, error):
+    if handle is not None:
+        try:
+            handle.close()
+        except OSError:
+            pass
+    try:
+        sys.stderr.write(f"[size-limited-log-writer] file logging disabled for {log_path}: {error}; discarding output\n")
+        sys.stderr.flush()
+    except OSError:
+        pass
+
+
 def main():
     if len(sys.argv) < 2:
         sys.stderr.write("usage: size_limited_log_writer.py LOG_PATH [MAX_BYTES]\n")
@@ -53,19 +64,40 @@ def main():
 
     log_path = pathlib.Path(sys.argv[1])
     max_bytes = parse_max_bytes(sys.argv[2] if len(sys.argv) > 2 else os.getenv("SIZE_LIMITED_LOG_MAX_BYTES"))
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = None
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = log_path.open("a+b", buffering=0)
+    except OSError as exc:
+        disable_file_logging(handle, log_path, exc)
 
-    with log_path.open("a+b", buffering=0) as handle:
+    try:
         while True:
-            chunk = sys.stdin.buffer.read(READ_CHUNK_BYTES)
+            # read() waits to fill its requested size on a pipe; read1() returns
+            # each available chunk so low-volume events reach the log promptly.
+            chunk = sys.stdin.buffer.read1(READ_CHUNK_BYTES)
             if not chunk:
                 break
+            # Keep consuming the producer pipe after a disk failure so logging
+            # cannot break the application with EPIPE or block its stdout.
+            if handle is None:
+                continue
             if len(chunk) > max_bytes:
                 chunk = chunk[-max_bytes:]
-            trim_existing_log(handle, max_bytes, chunk)
-            handle.seek(0, os.SEEK_END)
-            handle.write(chunk)
-            handle.flush()
+            try:
+                trim_existing_log(handle, max_bytes, chunk)
+                handle.seek(0, os.SEEK_END)
+                handle.write(chunk)
+                handle.flush()
+            except OSError as exc:
+                disable_file_logging(handle, log_path, exc)
+                handle = None
+    finally:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError as exc:
+                disable_file_logging(None, log_path, exc)
     return 0
 
 

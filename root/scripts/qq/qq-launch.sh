@@ -21,11 +21,10 @@ nice_level="${QQ_NICE_LEVEL:-0}"
 
 if [[ "$nice_level" =~ ^-?[0-9]+$ ]]; then
     if [ "$nice_level" -ne 0 ]; then
-        if nice -n "$nice_level" /usr/bin/qq --no-sandbox "${qq_flags[@]}"; then
-            exit 0
-        fi
-        echo "[qq-launch] warning: failed to apply nice=$nice_level, fallback to default priority" >&2
+        # nice already runs the command at the existing priority if the
+        # requested adjustment is denied. A client crash is not a nice failure.
+        exec /scripts/run-desktop-app.sh qq nice -n "$nice_level" /usr/bin/qq --no-sandbox "${qq_flags[@]}"
     fi
 fi
 
-exec /usr/bin/qq --no-sandbox "${qq_flags[@]}"
+exec /scripts/run-desktop-app.sh qq /usr/bin/qq --no-sandbox "${qq_flags[@]}"

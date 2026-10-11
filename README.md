@@ -38,6 +38,38 @@
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
 - **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
 
+## 本轮稳定性加固（源码，待部署）
+
+- 默认禁用微信 / QQ 的系统 core dump，Compose 同时设置 `ulimits.core` 为 0，避免崩溃转储长期占满 `/config`。历史 core 不自动删除；禁用转储不等于修复客户端本身的崩溃。
+- 微信 / QQ 输出写入 `wechat-client.log` / `qq-client.log`，每份默认上限 1 MiB，记录启动和退出状态；QQ 不再把崩溃退出误判为提优先级失败而重复启动。
+- Selkies 断开时回收本连接的采样任务；主画面背压暂停发送并保持编码帧顺序，沿用现有溢出恢复机制。
+- 周期 HTTP 请求限制单个在途并设置 5 秒超时；活动上报合并待发送更新。满额日志预留写入空间，低频事件及时落盘。
+- 上传会话空闲缓存回收；完成元数据保留 24 小时，未完成上传仍可续传。焦点命令超时清理整个进程组。
+- 微信进程监控与隔夜采集明确不检测账号登录态；缺少证据时原因保持 `unknown`。详情见 [稳定性加固说明](docs/ops/stability-hardening.md)。
+
+## 1.71 更新
+
+- **中文上屏链路加固**（针对远程会话偶尔漏字）：
+  - 隐藏输入框 `#keyboard-input-assist` 的 `input` flush 增加捕获级优先转发：成功即清空输入框，上游自身监听不会重复发送；未提交字符不会因上游 flush 失败（方法缺失 / 抛错）被丢弃。
+  - flush 失败时保留输入框内容并按 120ms 持续重试，已上屏字符不会烂在输入框里；失败时控制台只警告一次，便于坐实问题。
+  - 所有焦点抢定路径（`pointerdown` 80ms、窗口聚焦 60ms、`compositionend` 后 260ms、20 秒轮询）加入 2 秒打字冷却：打字与 IME composition 期间不再抢焦点，消除“提交字符的瞬间焦点被打断”的竞态。
+- **微信进程异常检测日志**：新增独立守护进程 `/scripts/wechat-logout-monitor.py`，轮询检测微信进程在自动启动状态下意外消失（闪退 / 崩溃循环），只记录重要事件到 `/config/logs/wechat-logout.log`。窗口仍在但账号退回扫码页时，这个监控无法识别登录态：
+  - `LOGOUT`：进程消失瞬间记录（含消失前的 PID、是否会自动重启）；
+  - `STILL_DOWN`：持续掉线期间按 `WECHAT_LOGOUT_REMINDER_SECONDS`（默认 30 分钟）节流提醒，不刷屏；
+  - `RECOVERED`：进程恢复，记录总掉线时长；
+  - `CRASH_LOOP`：`WECHAT_LOGOUT_CRASH_LOOP_WINDOW_SECONDS`（默认 10 分钟）内异常登出达到 `WECHAT_LOGOUT_CRASH_LOOP_CYCLES`（默认 3 次）时记录一次，用于识别反复闪退。
+- **日志滚动策略**：按「三天 + 512KB」双约束滚动——行时间戳超过 `WECHAT_LOGOUT_LOG_KEEP_DAYS`（默认 3 天）自动淘汰，文件超过 `WECHAT_LOGOUT_LOG_MAX_BYTES`（默认 512KB）时从最旧行开始截断，文件永不膨胀；写入为临时文件原子替换，不会出现半行。
+- 可通过 `WECHAT_LOGOUT_MONITOR=false` 关闭；`AUTO_START_WECHAT=false` 时守护进程自动空闲（进程本就非预期常驻）。守护进程自身的异常输出落在 `/config/logs/wechat-logout-monitor.log`。
+- 同步合入上游通知清理脚本移除与 Dock 折叠动画修复；缓存破坏版本号随版本号升至 1.71。
+
+## 1.70 更新
+
+- **活动提示跟随快捷 Bar 位置**：快捷 Bar置于顶部时，顶部活动横幅会自动改到屏幕下方，避免被 Bar 遮挡；边距改用安全区（`safe-area-inset`）计算，进入动画方向随之反转。切换 Bar 位置后立即生效。
+- **背景模糊进一步降至 `2px`**（原 `4px`），远程画面透出更清晰；安全提示横幅与浮动提示的模糊同步调整。
+- 网速与往返延迟块文字改为**居中对齐**，左右内边距对齐，窄屏下更整齐。
+
+维护说明：本次为纯前端外观与布局调整，未改协议与服务端行为。相关回归检查：`node tests/test_dock_network_monitor.js`、`node tests/test_sidebar_scroll_render.js`、`python -m unittest tests.test_notification_bridge_state`。
+
 ## 1.69 更新
 
 - **网速与延迟位置调整**：快捷 Bar 上的实时网速与往返延迟从 Bar 最左端移到**收纳按钮右侧**，与左侧操作按钮分开；分隔线与窄屏内边距同步翻转，窄屏下不再贴边。
@@ -127,10 +159,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.69.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.71.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.69.tar
+docker load -i wechat-selkies-1.71.tar
 ```
 
 启动：
@@ -145,7 +177,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.69
+  wechat-selkies:1.71
 ```
 
 访问：
@@ -168,7 +200,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.69
+    image: wechat-selkies:1.71
     container_name: wechat-selkies
     init: true
     ports:
@@ -317,7 +349,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.69 \
+  wechat-selkies:1.71 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -380,7 +412,7 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.69 .
+docker build -t wechat-selkies:1.71 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
@@ -399,13 +431,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.69 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.71 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.69.tar wechat-selkies:1.69
+docker save -o wechat-selkies-1.71.tar wechat-selkies:1.71
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。

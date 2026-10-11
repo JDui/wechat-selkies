@@ -17,7 +17,7 @@ validate_timeout() {
     fi
 }
 
-pids="$(pgrep -f /usr/bin/qq || true)"
+pids="$(pgrep -f '^/usr/bin/[q]q([[:space:]]|$)' || true)"
 if [ -z "$pids" ]; then
     exit 1
 fi
