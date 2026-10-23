@@ -209,6 +209,7 @@ def run(manager):
                         reset("received")
                     except (ValueError, OSError, UnicodeError) as error:
                         manager.phase, manager.error = "error", "文件来源不受支持、任务已满或会话已失效"
+                        manager.error_id = str(time.monotonic_ns())
                         send("XdndFinished", [target.id, 0, 0, 0, 0])
                         reset("rejected")
             if source and (time.monotonic() > deadline or (not awaiting_selection and

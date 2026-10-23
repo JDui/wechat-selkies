@@ -25,7 +25,7 @@ def default_source_roots(home=Path("/config")):
     qq = home / ".config" / "QQ"
     for layout in ("nt_qq_*/nt_data", "nt_qq_*/nt_data/*", "nt_qq/*/nt_data"):
         for profile in qq.glob(layout):
-            for leaf in ("File", "Pic", "Video", "Ptt", "file_recv", "FileRecv"):
+            for leaf in ("File", "Pic", "Video", "Ptt", "Emoji", "file_recv", "FileRecv"):
                 attachment = profile / leaf
                 if attachment.is_dir() and attachment.resolve().is_relative_to(qq.resolve()):
                     roots.append(attachment)
@@ -37,7 +37,7 @@ def error_details(error):
         "source-missing" if isinstance(error, FileNotFoundError) else
         "permission-denied" if isinstance(error, PermissionError) else "io-error")
     messages = {
-        "source-outside-allowed-roots": "文件目录未获下载授权，请将附件保存到下载目录后重试，或配置 SELKIES_DROP_SOURCE_ROOTS",
+        "source-outside-allowed-roots": "此文件暂不支持直接下载，请先另存到下载目录",
         "source-missing": "源文件不存在，请先在聊天应用中下载完整附件后重试",
         "permission-denied": "容器没有读取该文件的权限",
         "size-limit": "文件大小或临时缓存总量超出限制",
@@ -86,6 +86,7 @@ class Downloads:
         self.lease = None
         self.phase = "idle"
         self.error = ""
+        self.error_id = ""
         self.native_ready = False
         if min(self.max_file, self.max_total, self.max_jobs, self.ttl, self.prepare_timeout) <= 0 or self.min_free < 0:
             raise DownloadError("invalid-limits")
@@ -159,6 +160,7 @@ class Downloads:
                        name="", error="", used=False)
             self.jobs[job_id] = job
             self.phase, self.error = "preparing", ""
+            self.error_id = ""
         threading.Thread(target=self.copy, args=(job, files[0][0]), daemon=True).start()
 
     def open_source(self, name):
@@ -227,6 +229,7 @@ class Downloads:
             with self.lock:
                 job.update(state="error", error=message, expires=time.time() + 20)
                 self.phase, self.error = "error", job["error"]
+                self.error_id = job["id"]
             print("[dock-download] job", job["id"], "prepare-failed", code, flush=True, file=sys.stderr)
 
     def sweep(self):
@@ -247,7 +250,7 @@ class Downloads:
                     ({"token": j["token"]} if j["state"] == "ready" and not j["used"] else {})
                     for j in self.jobs.values() if j["sid"] == sid and j["client"] == client]
             return dict(ok=True, native_ready=self.native_ready, phase=self.phase if own else "idle",
-                        error=self.error if own else "", jobs=jobs)
+                        error=self.error if own else "", error_id=self.error_id if own else "", jobs=jobs)
 
     def stream(self, handler, sid, job_id, token):
         with self.lock:

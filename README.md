@@ -318,7 +318,7 @@ services:
 | `SELKIES_UPLOAD_DIR` | `/config/uploads` | 上传根目录及 `.staging` 所在目录 |
 | `SELKIES_DOWNLOAD_ROOT` | `/config` | 下载文件浏览根目录；默认仅浏览 `/config`，自定义绝对路径仍可用；`FILE_MANAGER_PATH` 仍用于旧版上传 |
 | `SELKIES_DROP_DOWNLOAD_ENABLED` | `true` | 从容器桌面拖文件到快捷 Bar 后下载；同时遵守 `SELKIES_FILE_TRANSFERS` 的 download 开关和 `HARDEN_DESKTOP` |
-| `SELKIES_DROP_SOURCE_ROOTS` | 自动识别常用目录及微信/QQ附件目录 | 未设置时包含 `/config/{Desktop,Downloads,Documents,uploads,xwechat_files}`，并动态识别 `/config/.config/QQ/nt_qq_*/nt_data` 等布局下的 `File/Pic/Video/Ptt` 附件子目录；显式设置时仅使用指定的冒号分隔目录，不读取整个 QQ 账号配置目录 |
+| `SELKIES_DROP_SOURCE_ROOTS` | 自动识别常用目录及微信/QQ附件目录 | 未设置时包含 `/config/{Desktop,Downloads,Documents,uploads,xwechat_files}`，并动态识别 `/config/.config/QQ/nt_qq_*/nt_data` 等布局下的 `File/Pic/Video/Ptt/Emoji` 附件子目录；显式设置时仅使用指定的冒号分隔目录，不读取整个 QQ 账号配置目录 |
 | `SELKIES_DROP_CACHE` | `/run/selkies-drop-cache` | 私有临时缓存，必须位于 `SELKIES_DOWNLOAD_ROOT` 外；重启时清除旧缓存，不可映射为 nginx 静态目录 |
 | `SELKIES_DROP_MAX_FILE_BYTES` | `2147483648` | 单文件上限 2 GiB；每次仅接收一个普通文件 |
 | `SELKIES_DROP_MAX_CACHE_BYTES` | `4294967296` | 缓存总量上限 4 GiB，包含复制中的预留容量 |

@@ -68,16 +68,18 @@ class DownloadTests(unittest.TestCase):
         profile = home / ".config/QQ/nt_qq_example/nt_data"
         (profile / "File").mkdir(parents=True)
         (profile / "Pic").mkdir()
+        (profile / "Emoji").mkdir()
         (profile / "mmkv").mkdir()
         roots = default_source_roots(home)
         self.assertIn((home / "xwechat_files").resolve(), roots)
         self.assertIn((profile / "File").resolve(), roots)
         self.assertIn((profile / "Pic").resolve(), roots)
+        self.assertIn((profile / "Emoji").resolve(), roots)
         self.assertFalse(any((profile / "mmkv/account.db").resolve().is_relative_to(root) for root in roots))
         # Explicit overrides continue to be exact: never silently expand them.
         self.assertFalse(self.manager.use_default_roots)
         (home / "xwechat_files").mkdir()
-        for attachment in (home / "xwechat_files/sample.txt", profile / "File/sample.txt"):
+        for attachment in (home / "xwechat_files/sample.txt", profile / "File/sample.txt", profile / "Emoji/sample.gif"):
             attachment.write_bytes(b"chat attachment")
             with patch("container_download.default_source_roots", return_value=roots):
                 self.manager.use_default_roots = True
@@ -148,6 +150,13 @@ class DownloadTests(unittest.TestCase):
         while any(j["state"] == "preparing" for j in self.manager.jobs.values()) and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertEqual(next(iter(self.manager.jobs.values()))["state"], "error")
+        error_id = self.manager.status(self.sid, self.client)["error_id"]
+        self.assertTrue(error_id)
+        # Cache/job reclamation must not make the same error a new UI notice.
+        for job in self.manager.jobs.values():
+            job["expires"] = 0
+        self.manager.sweep()
+        self.assertEqual(self.manager.status(self.sid, self.client)["error_id"], error_id)
         self.assertFalse(list(self.manager.root.glob("*.part")))
         self.manager.max_file = 1024
         _, job = self.ready()
