@@ -6777,6 +6777,12 @@
     resetClientClipboardRuntime();
     clearAllHighLoadState("repair-ime");
     imeCompositionActive = false;
+    assistComposing = false;
+    assistCompositionKeys = Object.create(null);
+    // Explicit repair permits the next key to flush retained text on the
+    // current connection, after the user has restored the remote input focus.
+    assistPendingSocket = null;
+    assistReconnectWarned = false;
     var assist = normalizeKeyboardAssist();
     var active = document.activeElement;
     if (active && active !== document.body && active !== assist && typeof active.blur === "function") {
@@ -8377,84 +8383,156 @@
     return assist;
   }
 
-  // Hardening for IME text delivery to the remote. On Linux clients the
-  // bundle's _compositionEnd only erases the pinyin composition remotely;
-  // the committed characters ride exclusively on the hidden assist input's
-  // "input" event. If the upstream flush (_typeString) is missing or throws,
-  // or focus is stolen inside the commit window, characters are lost for
-  // good. So: flush it ourselves first in the capture phase, retry while
-  // text is still undelivered, and never re-steal focus right after typing.
+  // Own assist events before the bundle's mobile/legacy listeners. Composition
+  // updates are local preedit, not committed text. Use the existing co,end
+  // protocol for complete Unicode strings instead of splitting UTF-16 keysyms.
   var ASSIST_TYPING_COOLDOWN_MS = 2000;
   var ASSIST_FLUSH_RETRY_MS = 120;
   var lastAssistInputAt = 0;
   var assistGuardAttached = false;
   var assistFlushRetryTimer = null;
   var assistFlushWarned = false;
+  var assistComposing = false;
+  var assistCommitTimer = null;
+  var assistPendingText = "";
+  var assistPendingSocket = null;
+  var assistReconnectWarned = false;
+  var assistCompositionKeys = Object.create(null);
 
   function noteAssistInput() {
     lastAssistInputAt = Date.now();
   }
 
-  function assistInputInstance() {
-    var candidates = [window.webrtcInput, window.selkiesInput];
-    for (var i = 0; i < candidates.length; i += 1) {
-      var inst = candidates[i];
-      if (inst && typeof inst._typeString === "function") {
-        return inst;
-      }
+  function retryAssistInput() {
+    if (!assistFlushWarned) {
+      assistFlushWarned = true;
+      console.warn("[selkies-overrides] committed text pending; transport unavailable or busy");
+      setActivityTask("ime-pending", {
+        title: "\u6587\u5b57\u7b49\u5f85\u53d1\u9001",
+        detail: "\u8fde\u63a5\u6682\u4e0d\u53ef\u7528\u6216\u53d1\u9001\u7f13\u51b2\u7e41\u5fd9\uff0c\u5df2\u4fdd\u7559\u672a\u53d1\u9001\u6587\u5b57\u5e76\u6682\u505c\u540e\u7eed\u6309\u952e\u3002",
+        kind: "warning", priority: 85, expiresAt: Date.now() + 15000
+      });
     }
-    return null;
-  }
-
-  function flushAssistInput() {
-    var assist = document.getElementById("keyboard-input-assist");
-    if (!assist) return false;
-    var value = assist.value;
-    if (!value) return true;
-    var inst = assistInputInstance();
-    if (inst) {
-      try {
-        inst._typeString(value);
-        assist.value = "";
-        noteAssistInput();
-        assistFlushWarned = false;
-        return true;
-      } catch (_flushErr) {}
-    }
-    // Leave the pending text in the input and retry shortly; clearing or
-    // dropping it here would lose committed characters permanently.
     if (!assistFlushRetryTimer) {
-      if (!assistFlushWarned) {
-        assistFlushWarned = true;
-        console.warn("[selkies-overrides] assist input flush failed; retrying", value);
-      }
       assistFlushRetryTimer = window.setTimeout(function () {
         assistFlushRetryTimer = null;
         flushAssistInput();
       }, ASSIST_FLUSH_RETRY_MS);
     }
+  }
+
+  function flushAssistInput() {
+    var assist = document.getElementById("keyboard-input-assist");
+    if (!assist || assistComposing) return false;
+    if (assist.value) {
+      assistPendingText += assist.value;
+      assist.value = "";
+    }
+    if (!assistPendingText) return true;
+    var socket = getPrimaryOpenDataSocket();
+    // Never replay text into a replacement connection: its focused application
+    // may have changed. Keep unsent text available for recovery in this page.
+    if (assistPendingSocket && assistPendingSocket !== socket) {
+      if (!assistReconnectWarned) {
+        assistReconnectWarned = true;
+        console.warn("[selkies-overrides] unsent text retained after connection change");
+        setActivityTask("ime-pending", {
+          title: "\u6587\u5b57\u5c1a\u672a\u53d1\u9001",
+          detail: "\u8fde\u63a5\u5df2\u66f4\u6362\u3002\u8bf7\u5148\u786e\u8ba4\u8fdc\u7aef\u8f93\u5165\u6846\uff0c\u518d\u4f7f\u7528\u8f93\u5165\u6cd5\u4fee\u590d\u5de5\u5177\u6062\u590d\u8f93\u5165\u3002",
+          kind: "warning", priority: 85, expiresAt: Date.now() + 15000
+        });
+      }
+      return false;
+    }
+    if (socket) assistPendingSocket = socket;
+    while (socket && socket.readyState === window.WebSocket.OPEN && socket.bufferedAmount < 262144) {
+      var chunk = Array.from(assistPendingText).slice(0, 128).join("");
+      try {
+        socket.send("co,end," + chunk);
+      } catch (_flushErr) { break; }
+      // send() acceptance is not an application acknowledgement. Never retry
+      // an accepted chunk, which could duplicate text after a disconnect.
+      assistPendingText = assistPendingText.slice(chunk.length);
+      if (!assistPendingText) {
+        assistPendingSocket = null;
+        assistReconnectWarned = false;
+        if (assistFlushWarned) {
+          completeActivityTask("ime-pending", "\u5f85\u53d1\u9001\u6587\u5b57\u5df2\u4ea4\u7ed9\u8fde\u63a5\u3002", "success", 1500);
+        }
+        assistFlushWarned = false;
+        if (assistFlushRetryTimer) window.clearTimeout(assistFlushRetryTimer);
+        assistFlushRetryTimer = null;
+        return true;
+      }
+    }
+    retryAssistInput();
     return false;
   }
 
   function installAssistInputGuard() {
     if (assistGuardAttached) return;
-    var assist = document.getElementById("keyboard-input-assist");
-    if (!assist) {
-      window.setTimeout(installAssistInputGuard, 500);
-      return;
-    }
     assistGuardAttached = true;
-    // Capture phase + earlier registration: runs before the bundle's own
-    // "input" listener, so a successful flush leaves an empty value for it
-    // and a failed one leaves the text intact for the retry path.
-    assist.addEventListener(
-      "input",
-      function () {
-        noteAssistInput();
+    function isAssist(event) {
+      return event.target && event.target.id === "keyboard-input-assist";
+    }
+    // Window capture also precedes the bundle's window keyboard listeners.
+    // Do not preventDefault: the OS IME must still receive candidate keys.
+    ["keydown", "keyup"].forEach(function (type) {
+      window.addEventListener(type, function (event) {
+        if (!isAssist(event)) return;
+        var key = event.code || event.key;
+        if (assistComposing || event.isComposing || event.keyCode === 229 ||
+            (type === "keyup" && assistCompositionKeys[key])) {
+          if (type === "keydown") assistCompositionKeys[key] = true;
+          else delete assistCompositionKeys[key];
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (type === "keydown" && !flushAssistInput()) {
+          event.stopImmediatePropagation();
+          event.preventDefault();
+        }
+      }, true);
+    });
+    window.addEventListener("compositionstart", function (event) {
+      if (!isAssist(event)) return;
+      assistComposing = imeCompositionActive = true;
+      noteAssistInput();
+      event.stopImmediatePropagation();
+    }, true);
+    window.addEventListener("compositionupdate", function (event) {
+      if (isAssist(event)) event.stopImmediatePropagation();
+    }, true);
+    window.addEventListener("compositionend", function (event) {
+      if (!isAssist(event)) return;
+      assistComposing = imeCompositionActive = false;
+      noteAssistInput();
+      event.stopImmediatePropagation();
+      // Some browsers have no final input event; others fire it immediately
+      // after compositionend. One deferred value read handles both orders.
+      if (assistCommitTimer) window.clearTimeout(assistCommitTimer);
+      assistCommitTimer = window.setTimeout(function () {
+        assistCommitTimer = null;
         flushAssistInput();
-      },
-      true
-    );
+      }, 0);
+    }, true);
+    window.addEventListener("input", function (event) {
+      if (!isAssist(event)) return;
+      event.stopImmediatePropagation();
+      noteAssistInput();
+      if (!assistComposing && !event.isComposing) {
+        if (assistCommitTimer) window.clearTimeout(assistCommitTimer);
+        assistCommitTimer = null;
+        flushAssistInput();
+      }
+    }, true);
+    window.addEventListener("blur", function () {
+      assistCompositionKeys = Object.create(null);
+    });
+    // Recovery is explicit after reconnect; copying never transmits pending text.
+    window.selkiesRecoverPendingInput = function () {
+      return assistPendingText;
+    };
     console.log("selkies-overrides: assist input guard attached");
   }
 
@@ -8872,6 +8950,7 @@
   }
   bindClipboardSyncTriggers();
   bindSidebarKeyboardShortcut();
+  installAssistInputGuard();
   if (document.readyState === "loading") {
     installVideoDecoderHealthGuard();
     installSingleSessionWebSocketGuard();
