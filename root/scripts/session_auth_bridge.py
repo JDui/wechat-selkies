@@ -478,6 +478,15 @@ def cookie_header(token, max_age=None):
     return "; ".join(parts)
 
 
+DOWNLOADS = None
+
+
+def download_identity():
+    state = read_state()
+    sid, epoch = state.get("session_id"), state.get("session_epoch")
+    return (str(sid), int(epoch)) if sid and epoch else None
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "SelkiesSessionAuth/1.0"
 
@@ -517,6 +526,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path.startswith("/dock-download/"):
+            if not request_has_valid_session(self):
+                self.send_json(401, {"ok": False, "error": "session-expired"})
+                return
+            if DOWNLOADS is None:
+                self.send_json(503, {"ok": False, "error": "disabled"})
+                return
+            query = parse_qs(urlparse(self.path).query)
+            if path == "/dock-download/state":
+                self.send_json(200, DOWNLOADS.status(download_identity(), query.get("client", [""])[0]))
+            elif path.startswith("/dock-download/file/"):
+                DOWNLOADS.stream(self, download_identity(), path.rsplit("/", 1)[-1], query.get("token", [""])[0])
+            else:
+                self.send_json(404, {"ok": False})
+            return
         if path == "/preferences":
             if not request_has_valid_session(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False})
@@ -566,6 +590,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/dock-download/geometry":
+            if not request_has_valid_session(self):
+                self.send_json(401, {"ok": False, "error": "session-expired"})
+                return
+            # Reject cross-origin form/JSON attempts even for anonymous mode.
+            origin = self.headers.get("Origin")
+            if origin and urlparse(origin).netloc != self.headers.get("Host"):
+                self.send_json(403, {"ok": False})
+                return
+            payload = self.read_json_body(2048)
+            if DOWNLOADS is None or payload is None:
+                self.send_json(503 if DOWNLOADS is None else 400, {"ok": False})
+                return
+            try:
+                DOWNLOADS.configure(download_identity(), payload.get("client"), payload.get("rect"))
+                self.send_json(200, DOWNLOADS.status(download_identity(), payload.get("client")))
+            except ValueError as error:
+                self.send_json(409, {"ok": False, "error": str(error)})
+            return
         if path == "/preferences":
             if not request_has_valid_session(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False})
@@ -669,5 +712,14 @@ if __name__ == "__main__":
             }
         )
     write_state(initial_state)
+    if (os.getenv("SELKIES_DROP_DOWNLOAD_ENABLED", "true").lower() in ("1", "true", "yes")
+            and "download" in os.getenv("SELKIES_FILE_TRANSFERS", "upload,download")
+            and os.getenv("HARDEN_DESKTOP", "false").lower() not in ("1", "true", "yes")):
+        from container_download import Downloads
+        try:
+            DOWNLOADS = Downloads(download_identity)
+            DOWNLOADS.start()
+        except (OSError, ValueError) as error:
+            print("[dock-download] initialization failed:", type(error).__name__, flush=True)
     with http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler) as httpd:
         httpd.serve_forever()

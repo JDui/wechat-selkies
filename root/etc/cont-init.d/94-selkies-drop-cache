@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+set -e
+# Keep transient downloads outside SELKIES_DOWNLOAD_ROOT and its directory index.
+cache="${SELKIES_DROP_CACHE:-/run/selkies-drop-cache}"
+# Custom paths are validated by the manager before any chmod/cleanup.
+if [ "$cache" = /run/selkies-drop-cache ] && [ ! -e "$cache" ] && [ ! -L "$cache" ]; then
+    install -d -m 0700 -o abc -g abc "$cache"
+fi

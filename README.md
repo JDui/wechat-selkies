@@ -312,6 +312,19 @@ services:
 | `SELKIES_UPLOAD_ENABLED` | `true` | 启用独立上传 sidecar，并自动接管原文件上传操作 |
 | `SELKIES_UPLOAD_DIR` | `/config/uploads` | 上传根目录及 `.staging` 所在目录 |
 | `SELKIES_DOWNLOAD_ROOT` | `/config` | 下载文件浏览根目录；默认仅浏览 `/config`，自定义绝对路径仍可用；`FILE_MANAGER_PATH` 仍用于旧版上传 |
+| `SELKIES_DROP_DOWNLOAD_ENABLED` | `true` | 从容器桌面拖文件到快捷 Bar 后下载；同时遵守 `SELKIES_FILE_TRANSFERS` 的 download 开关和 `HARDEN_DESKTOP` |
+| `SELKIES_DROP_SOURCE_ROOTS` | `/config/Desktop:/config/Downloads:/config/Documents:/config/uploads` | 冒号分隔的容器来源目录；目录外文件拒绝下载，可按实际微信/QQ附件目录扩展 |
+| `SELKIES_DROP_CACHE` | `/run/selkies-drop-cache` | 私有临时缓存，必须位于 `SELKIES_DOWNLOAD_ROOT` 外；重启时清除旧缓存，不可映射为 nginx 静态目录 |
+| `SELKIES_DROP_MAX_FILE_BYTES` | `2147483648` | 单文件上限 2 GiB；每次仅接收一个普通文件 |
+| `SELKIES_DROP_MAX_CACHE_BYTES` | `4294967296` | 缓存总量上限 4 GiB，包含复制中的预留容量 |
+| `SELKIES_DROP_MAX_JOBS` | `4` | 活动任务与待清理任务总数上限；同一时间仅准备一个文件 |
+| `SELKIES_DROP_MIN_FREE_BYTES` | `268435456` | 复制后至少保留 256 MiB 空间 |
+| `SELKIES_DROP_TTL_SECONDS` | `300` | 就绪凭证有效 300 秒；传输完成后 15 秒清理，活动响应不被 TTL 清理 |
+| `SELKIES_DROP_PREPARE_TIMEOUT_SECONDS` | `3600` | 文件准备最长 1 小时；就绪后才开始计算下载凭证 TTL |
+
+容器文件拖到快捷 Bar 的发光区域后松开，会准备临时副本并由当前浏览器下载，不打开 `/files/`。文件应来自支持 X11 XDND `text/uri-list` 的应用；微信/QQ 若仅提供应用内部消息、网页 URL 或没有文件 URI，无法直接下载，请先将附件保存到上表的来源目录再拖动。目录、文本和多文件同时拖动会被拒绝。提示“下载已触发”表示浏览器请求已经启动，最终保存位置和下载许可由浏览器控制。
+
+自定义缓存必须是专用目录；已有目录只允许包含本功能标记与随机命名的缓存文件，不能使用 `/tmp`、`/run` 等共享目录。禁用此功能可设 `SELKIES_DROP_DOWNLOAD_ENABLED=false`；回滚只需恢复此前镜像，不影响源文件及普通下载目录。
 | `SELKIES_UPLOAD_MAX_FILE_SIZE` | `2147483648` | 单文件最大字节数 |
 | `SELKIES_UPLOAD_CHUNK_SIZE` | `524288` | HTTP 分片大小，范围 64 KiB–64 MiB；可按外网代理限制覆盖 |
 | `SELKIES_UPLOAD_MAX_CONCURRENCY` | `3` | sidecar 同时接收的最大分片数 |

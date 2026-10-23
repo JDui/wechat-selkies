@@ -277,6 +277,7 @@ RUN sed -i 's/\r$//' \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
     /etc/cont-init.d/93-selkies-audio-wait-patch \
+    /etc/cont-init.d/94-selkies-drop-cache \
     /defaults/default.conf \
     /defaults/autostart \
     /defaults/dunstrc \
@@ -290,6 +291,8 @@ RUN sed -i 's/\r$//' \
     /scripts/run-notification-bridge.sh \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
+    /scripts/container_download.py \
+    /scripts/xdnd_receiver.py \
     /scripts/wechat-logout-monitor.py \
     /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
@@ -312,6 +315,7 @@ RUN sed -i 's/\r$//' \
 
 # ensure custom cont-init scripts are executable
 RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
+    /etc/cont-init.d/94-selkies-drop-cache \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
     /etc/cont-init.d/93-selkies-audio-wait-patch \

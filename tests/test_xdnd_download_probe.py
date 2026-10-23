@@ -12,6 +12,8 @@ import tempfile
 import time
 import unittest
 
+PRODUCTION = os.environ.get("AXI_PRODUCTION_XDND") == "1"
+
 PROBE = Path(__file__).resolve().parents[1] / "scripts/ops/xdnd-download-probe.py"
 spec = importlib.util.spec_from_file_location("probe", PROBE)
 probe = importlib.util.module_from_spec(spec)
@@ -83,8 +85,30 @@ class NativeTests(unittest.TestCase):
                     time.sleep(.8)
                     ids = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--class", "Thunar"], env=env).decode().split()
                     mouse("windowmove", ids[-1], "0", "0", "windowsize", ids[-1], "800", "500")
-                    receiver = start([os.environ.get("PYTHON", "/lsiopy/bin/python3"), str(PROBE),
-                                      "--rect", "850", "550", "350", "200"], log)
+                    if PRODUCTION:
+                        env.update(SELKIES_DROP_CACHE=str(Path(folder) / "cache"),
+                                   SELKIES_DROP_SOURCE_ROOTS=str(source_folder), SELKIES_DROP_MIN_FREE_BYTES="0")
+                        runner = '''import sys, time, threading, json
+sys.path.insert(0, "/workspace/root/scripts")
+from container_download import Downloads
+from xdnd_receiver import run
+manager = Downloads(lambda: ("test", 1))
+original_event = manager.event
+def event(phase, **fields):
+    original_event(phase, **fields)
+    print(json.dumps(dict(phase=phase, **fields)), flush=True)
+manager.event = event
+def lease():
+    while True:
+        manager.configure(("test", 1), "a"*32, [850,550,350,200])
+        time.sleep(.5)
+threading.Thread(target=lease, daemon=True).start()
+run(manager)
+'''
+                        receiver = start(["/lsiopy/bin/python3", "-u", "-c", runner], log)
+                    else:
+                        receiver = start([os.environ.get("PYTHON", "/lsiopy/bin/python3"), str(PROBE),
+                                          "--rect", "850", "550", "350", "200"], log)
                     wait_for(lambda: any(e["phase"] == "ready" for e in events()))
                     connection = display.Display(":98")
                     target = events()[0]["window"]
@@ -96,10 +120,40 @@ class NativeTests(unittest.TestCase):
                     # case. Set AXI_XDND_DROP_DWELL=.15 for the handshake control.
                     dwell = os.environ.get("AXI_XDND_DROP_DWELL", "0")
                     mouse("mousemove", "210", "150", "mousedown", "1", "sleep", ".2",
-                          "mousemove", "250", "190", "sleep", ".3", "mousemove", "900", "600",
-                          "sleep", dwell, "mouseup", "1")
+                          "mousemove", "250", "190", "sleep", ".3")
+                    if PRODUCTION:
+                        # Execute the exact shipped mouse method, with real
+                        # XTest transport. Final Motion+Release is one call.
+                        driver = '''import ast, asyncio, pathlib, types
+import Xlib
+from Xlib import X, display
+from Xlib.ext import xtest
+path = pathlib.Path("/workspace/root/lsiopy/lib/python3.12/site-packages/selkies/input_handler.py")
+tree = ast.parse(path.read_text())
+method = next(n for c in tree.body if isinstance(c, ast.ClassDef) and c.name == "WebRTCInput" for n in c.body if getattr(n,"name","") == "send_x11_mouse")
+scope = dict(asyncio=asyncio, Xlib=Xlib)
+for node in tree.body:
+    if isinstance(node, ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id.startswith("MOUSE_"):
+        try: scope[node.targets[0].id]=ast.literal_eval(node.value)
+        except ValueError: pass
+exec(compile(ast.Module(body=[method],type_ignores=[]),str(path),"exec"),scope)
+d=display.Display()
+def send(action,data):
+    if action==scope["MOUSE_POSITION"]: xtest.fake_input(d,X.MotionNotify,x=data[0],y=data[1])
+    elif action==scope["MOUSE_BUTTON"]: xtest.fake_input(d,X.ButtonRelease,detail=1)
+    d.sync()
+obj=types.SimpleNamespace(xdisplay=d,wayland_input=None,data_server_instance=None,last_x=250,last_y=190,button_mask=1,send_mouse=send)
+asyncio.run(scope["send_x11_mouse"](obj,900,600,0,0))
+'''
+                        subprocess.run(["/lsiopy/bin/python3", "-c", driver], env=env, check=True, timeout=5)
+                    else:
+                        mouse("mousemove", "900", "600", "sleep", dwell, "mouseup", "1")
                     wait_for(lambda: any(e["phase"] == "received" for e in events()))
-                    self.assertTrue(any(e.get("sizes") == [16] for e in events()))
+                    if not PRODUCTION:
+                        self.assertTrue(any(e.get("sizes") == [16] for e in events()))
+                    else:
+                        wait_for(lambda: len(list((Path(folder) / "cache").glob("*.data"))) == 1)
+                        self.assertEqual(next((Path(folder) / "cache").glob("*.data")).read_bytes(), b"XDND probe file\n")
                     self.assertEqual(path.read_bytes(), b"XDND probe file\n")
                     before = sum(e["phase"] == "received" for e in events())
                     mouse("mousemove", "210", "150", "mousedown", "1", "sleep", ".2",
