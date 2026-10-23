@@ -2,7 +2,7 @@
 
 - **项目**：JDui/wechat-selkies
 - **目标分支**：`AXiVer`（直接提交，不创建分支）
-- **文档状态**：规划中；本文档是临时实施跟踪文件
+- **文档状态**：实施中；P0 已完成，P1 部分验证通过、快速放下仍失败；P2–P6 未开始
 - **建立日期**：2026-10-23
 - **范围**：浮动 Bar 视觉重设计，以及把容器桌面中的文件拖到 Bar 后下载到本机浏览器
 - **视觉依据**：用户在本轮对话中提供的胶囊形玻璃态浮动栏参考图
@@ -179,5 +179,26 @@
 
 - **2026-10-23 · 文档建立 / P0 未开始**：建立本临时目标文档并完成仓库基线抽查。已确认现有 Bar 位于 `selkies-runtime-overrides.js`，现有下载入口为 nginx `/files/`，现有上传 sidecar 不能未经审查直接视作下载链路。初始提交：`b0df9a4512816564a503b7f1df6803a56035413f`。尚未修改功能代码，尚未运行功能测试；原生 X11 文件拖放到浏览器 Bar 的映射仍是首要技术验证项。
 - **2026-10-23 · 文档审阅 / P0 未开始**：回读 GitHub 页面时发现行内代码格式转义不正确，已修复。修复提交：`90188beb9558513c90a91572c59960e33fb696ae`。已回读验证：行内代码残余反斜杠数量为 0，文档最后一行是约定的清理指令。未运行功能测试（本次只提交文档）。下一步：在目标分支重新核对代码并制作 P1 最小原型。
+
+- **2026-10-23 · P0 基线审查**：当前分支为 `AXiVer`。保留既存 `axiver-client/gen/schemas/` 四项删除。Bar 位于 runtime overrides，网络监控已有 `tests/test_dock_network_monitor.js`；视频输入实现位于生成的 dashboard assets，需以其实际缩放行为映射几何。容器已安装 `python-xlib`，优先用独立、默认不启用的原生 XDND 原型验证，避免先改生产输入链路。PIN bridge 已有会话 ID/epoch 与接管校验，上传采用独立签名令牌，不能复用为下载凭证；nginx `/files/` 是普通目录入口，不适合临时缓存。未修改部署端口、密码/PIN、网络模式。实际执行 `git status --short`、分支检查、源码检索、`docker ps`、`wsl --list --quiet`；Docker 引擎当前不可用，WSL 仅有 docker-desktop。未执行真实文件拖动、容器构建或 UI 验证。下一步：恢复可用的本机 Docker 环境，并制作隔离的 XDND 接收/几何映射原型；P1 未通过前不宣称下载功能完成。
+- **2026-10-23 · P0 环境恢复 / P1 原型准备**：Docker Desktop Linux 引擎已恢复，存在本地 `wechat-selkies:1.71` 镜像；新建无宿主端口、只读挂载仓库的隔离容器 `axi-xdnd-probe`。镜像已有 Xvfb、xdotool、python-xlib，但没有 Thunar/PCManFM/Nautilus，正在临时容器安装 Thunar（不改生产 Dockerfile）。输入 bundle 在手动分辨率/共享模式按 canvas 实际 DOM 矩形和 backing dimensions 映射指针，不能再乘一次 DPR。拟验证 InputOnly 接收窗在空闲时以空 ShapeInput 穿透，仅在 XdndSelection owner 存在且指针进入扩展区时启用；该假设尚未证明。已运行镜像依赖探测；未执行真实拖动、缩放/全屏或端到端下载。下一步：验证 XDND 协议和点击穿透，失败则记录证据并停在 P1。
+- **2026-10-23 · P1 首次真实拖放实验**：新增隔离原型 `scripts/ops/xdnd-download-probe.py`，不接入生产启动或路由。临时容器用 Xvfb `:99`（1280×800）、Thunar 与 xdotool 实际拖动 `/tmp/axi-files` 内的 16 字节文件，接收日志出现 `enter(uri_list=true,version=5) → position(accepted=true) → drop → files(count=1,sizes=[16]) → received`。拖离/ESC 实验出现 `leave`，无新增 `files`，源文件仍为 16 字节；放下后 selection owner 为 0，普通按下/释放未激活目标。**发现失败**：接近区域后立即松开（无额外停顿）未收到 drop；20ms 轮询到达区域后才打开 ShapeInput 存在竞态，不能作为生产方案。未执行浏览器 Bar 联动、全屏/缩放/分辨率变化和微信/QQ 来源验证。下一步：提前按拖动生命周期启用接收区并复测快速放下；保留 P1 未通过状态。
+- **2026-10-23 · P1 快速放下复测失败**：原型调整为在整个 XDND 拖动生命周期提前启用固定接收区，并在按钮释放后保留 350ms 接收窗口，避免处理队列期间过早撤销 ShapeInput。新增 `tests/test_xdnd_download_probe.py`，使用独立 Xvfb `:98`、独立 D-Bus 的真实 Thunar 文件来源，检查普通命中穿透、URI/几何与快速放下。两次运行 `docker exec -e AXI_NATIVE_XDND_TEST=1 axi-xdnd-probe /lsiopy/bin/python3 /workspace/tests/test_xdnd_download_probe.py`：均为 2 个纯逻辑检查通过、1 个原生快速放下检查失败；最新日志为 `ready → armed → enter(uri_list=true,version=5) → position(accepted=true) → leave → idle`，无 `drop`。该证据只能说明零停顿放下尚未建立可靠握手，不能断言是 Thunar、X11 或接收实现中的哪一方导致。P1 不通过，不进入生产 P2–P4，不删除临时文档。下一步：保留零停顿失败复现，与有握手等待的实际拖动对比，并在真实 Selkies 浏览器输入路径验证时序；仍未执行浏览器提示联动、全屏/动态缩放与微信/QQ 来源验证。
+- **2026-10-23 · P1 对照实验 / 阶段结论**：同一原型与测试使用 `AXI_XDND_DROP_DWELL=.15` 在进入目标后等待 150ms，再释放鼠标，运行 `docker exec -e AXI_NATIVE_XDND_TEST=1 -e AXI_XDND_DROP_DWELL=.15 axi-xdnd-probe /lsiopy/bin/python3 /workspace/tests/test_xdnd_download_probe.py`，3 项全部通过：真实 URI 接收、源文件逐字节未改变、拖离/ESC 不产生第二次接收、空闲指针命中穿透，以及 URI 拒绝/几何映射。零停顿默认用例仍失败，未通过降低断言掩盖失败。Python 源码语法检查和 `git diff --check` 通过，未执行生产镜像构建、Bar 视觉修改或受保护下载实现。隔离容器 `axi-xdnd-probe` 已删除；生产服务配置没有变更，原型不随容器启动。P1 尚需解决快速放下握手、建立浏览器实时几何/状态桥并验证缩放、全屏、分辨率变化；因此整体功能未完成，验收项不勾选，本文档保留。
+
+### P1 复现实验
+
+仅在隔离 Linux 环境运行，不使用真实用户的 DISPLAY。实验使用本地 `wechat-selkies:1.71` 镜像，只读挂载仓库到 `/workspace`，不映射宿主端口。在临时容器中安装 `thunar`、`gir1.2-gtk-3.0`；Xvfb、xdotool、python-xlib 已存在。测试自行启动独立 Xvfb `:98` 和独立 D-Bus 的 Thunar，并在退出时回收子进程。
+
+```sh
+# URI/坐标单元检查；原生实验默认跳过
+/lsiopy/bin/python3 /workspace/tests/test_xdnd_download_probe.py
+# 零停顿快速释放：当前预期暴露失败，不能作为已完成验收
+AXI_NATIVE_XDND_TEST=1 /lsiopy/bin/python3 /workspace/tests/test_xdnd_download_probe.py
+# 150ms 握手对照：本次 3 项通过
+AXI_NATIVE_XDND_TEST=1 AXI_XDND_DROP_DWELL=.15 /lsiopy/bin/python3 /workspace/tests/test_xdnd_download_probe.py
+```
+
+此原型只消费 XDND COPY URI 并记录数量/大小；不复制文件、不开放 HTTP、不创建下载凭证。它的 URI 检查不是生产安全边界；P2 仍需受控来源范围、打开文件后的身份检查、会话绑定、容量限制和缓存回收。坐标函数的数学测试不能代替真实浏览器输入与 Bar 状态联动验证。
 
 确认功能完成后删除本文档。
