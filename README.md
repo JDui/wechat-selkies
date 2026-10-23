@@ -47,6 +47,11 @@
 - 上传会话空闲缓存回收；完成元数据保留 24 小时，未完成上传仍可续传。焦点命令超时清理整个进程组。
 - 微信进程监控与隔夜采集明确不检测账号登录态；缺少证据时原因保持 `unknown`。详情见 [稳定性加固说明](docs/ops/stability-hardening.md)。
 
+## 1.73 更新
+
+- **快捷 Bar 与拖放提示调整**：Bar 使用更轻的半透明样式；文件拖到有效目标时显示状态文案并临时收起操作按钮，结束后恢复。下载目录识别补充 QQ Emoji 附件目录，重复轮询不会反复弹出同一提示。
+- 更新页面资源缓存版本，避免浏览器继续使用旧脚本。
+
 ## 1.72 更新
 
 - **中文输入法提交链路加固**：组合期间保留预编辑内容，只发送确认后的 Unicode 文本；普通按键不会越过未发送文本，连接更换后也不会自动把旧文字投递到新会话。服务端会在超时或取消时终止并回收文字注入进程。发送成功仅表示浏览器接受消息，仍需部署后用真实输入法、微信 / QQ 验证最终上屏。
@@ -164,10 +169,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.72.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.73.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.72.tar
+docker load -i wechat-selkies-1.73.tar
 ```
 
 启动：
@@ -182,7 +187,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.72
+  wechat-selkies:1.73
 ```
 
 访问：
@@ -205,7 +210,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.72
+    image: wechat-selkies:1.73
     container_name: wechat-selkies
     init: true
     ports:
@@ -367,7 +372,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.72 \
+  wechat-selkies:1.73 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -430,7 +435,7 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.72 .
+docker build -t wechat-selkies:1.73 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
@@ -449,13 +454,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.72 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.73 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.72.tar wechat-selkies:1.72
+docker save -o wechat-selkies-1.73.tar wechat-selkies:1.73
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。
