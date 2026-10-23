@@ -112,6 +112,20 @@ run(manager)
                     wait_for(lambda: any(e["phase"] == "ready" for e in events()))
                     connection = display.Display(":98")
                     target = events()[0]["window"]
+                    if PRODUCTION:
+                        window = connection.create_resource_object("window", target)
+                        self.assertTrue(window.get_wm_name(), "Chromium/Electron hit testing requires WM_NAME")
+                        receiver_spec = importlib.util.spec_from_file_location("production_receiver", PROBE.parents[2] / "root/scripts/xdnd_receiver.py")
+                        receiver_module = importlib.util.module_from_spec(receiver_spec)
+                        receiver_spec.loader.exec_module(receiver_module)
+                        from Xlib import Xatom
+                        atoms = {name: connection.intern_atom(name) for name in ("XdndActionList", "XdndActionCopy")}
+                        move = connection.intern_atom("XdndActionMove")
+                        window.change_property(atoms["XdndActionList"], Xatom.ATOM, 32, [atoms["XdndActionCopy"], move])
+                        self.assertTrue(receiver_module.accepts_copy(window, move, atoms), "Negotiate COPY when offered alongside preferred MOVE")
+                        window.change_property(atoms["XdndActionList"], Xatom.ATOM, 32, [move])
+                        self.assertFalse(receiver_module.accepts_copy(window, move, atoms), "Never accept a MOVE-only source")
+                        window.delete_property(atoms["XdndActionList"])
                     mouse("mousemove", "950", "650")
                     self.assertNotEqual(getattr(connection.screen().root.query_pointer().child, "id", 0), target,
                                         "Idle InputOnly window must not intercept ordinary clicks")

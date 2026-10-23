@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "root/scripts"
 sys.path.insert(0, str(SCRIPTS))
-from container_download import Downloads, DownloadError
+from container_download import Downloads, DownloadError, default_source_roots, error_details
 
 
 class DownloadTests(unittest.TestCase):
@@ -62,6 +62,40 @@ class DownloadTests(unittest.TestCase):
         self.manager.max_jobs = 1
         with self.assertRaises(DownloadError):
             self.manager.submit([(str(source), 9)], self.manager.current())
+
+    def test_default_chat_attachment_roots_exclude_databases(self):
+        home = self.root / "home"
+        profile = home / ".config/QQ/nt_qq_example/nt_data"
+        (profile / "File").mkdir(parents=True)
+        (profile / "Pic").mkdir()
+        (profile / "mmkv").mkdir()
+        roots = default_source_roots(home)
+        self.assertIn((home / "xwechat_files").resolve(), roots)
+        self.assertIn((profile / "File").resolve(), roots)
+        self.assertIn((profile / "Pic").resolve(), roots)
+        self.assertFalse(any((profile / "mmkv/account.db").resolve().is_relative_to(root) for root in roots))
+        # Explicit overrides continue to be exact: never silently expand them.
+        self.assertFalse(self.manager.use_default_roots)
+        (home / "xwechat_files").mkdir()
+        for attachment in (home / "xwechat_files/sample.txt", profile / "File/sample.txt"):
+            attachment.write_bytes(b"chat attachment")
+            with patch("container_download.default_source_roots", return_value=roots):
+                self.manager.use_default_roots = True
+                stream, _ = self.manager.open_source(str(attachment))
+                with stream:
+                    self.assertEqual(stream.read(), b"chat attachment")
+        (profile / "mmkv/account.db").write_bytes(b"private")
+        with patch("container_download.default_source_roots", return_value=roots), self.assertRaises(DownloadError):
+            self.manager.open_source(str(profile / "mmkv/account.db"))
+        self.manager.use_default_roots = False
+
+    def test_failure_reasons_are_distinct_and_do_not_expose_paths(self):
+        missing = error_details(FileNotFoundError("private filename"))
+        scope = error_details(DownloadError("source-outside-allowed-roots"))
+        size = error_details(DownloadError("size-limit"))
+        self.assertEqual(missing[0], "source-missing")
+        self.assertNotEqual(scope, size)
+        self.assertNotIn("private filename", missing[1])
 
     def test_expiry_active_cleanup_restart_and_takeover(self):
         _, job = self.ready()

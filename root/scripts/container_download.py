@@ -18,6 +18,41 @@ class DownloadError(ValueError):
     pass
 
 
+def default_source_roots(home=Path("/config")):
+    roots = [home / name for name in ("Desktop", "Downloads", "Documents", "uploads", "xwechat_files")]
+    # QQ profiles are account-specific. Include attachment leaves only, never
+    # the entire profile (which also stores account/session databases).
+    qq = home / ".config" / "QQ"
+    for layout in ("nt_qq_*/nt_data", "nt_qq_*/nt_data/*", "nt_qq/*/nt_data"):
+        for profile in qq.glob(layout):
+            for leaf in ("File", "Pic", "Video", "Ptt", "file_recv", "FileRecv"):
+                attachment = profile / leaf
+                if attachment.is_dir() and attachment.resolve().is_relative_to(qq.resolve()):
+                    roots.append(attachment)
+    return [path.resolve() for path in roots]
+
+
+def error_details(error):
+    code = str(error) if isinstance(error, DownloadError) else (
+        "source-missing" if isinstance(error, FileNotFoundError) else
+        "permission-denied" if isinstance(error, PermissionError) else "io-error")
+    messages = {
+        "source-outside-allowed-roots": "文件目录未获下载授权，请将附件保存到下载目录后重试，或配置 SELKIES_DROP_SOURCE_ROOTS",
+        "source-missing": "源文件不存在，请先在聊天应用中下载完整附件后重试",
+        "permission-denied": "容器没有读取该文件的权限",
+        "size-limit": "文件大小或临时缓存总量超出限制",
+        "insufficient-space": "临时缓存空间不足",
+        "source-changed": "源文件仍在写入或已变化，请下载完成后重试",
+        "session-or-job-expired": "文件准备超时或会话已失效，请重新拖入",
+        "regular-file-required": "仅支持普通文件，不支持目录或设备",
+        "one-file-at-a-time": "请每次拖入一个文件",
+        "already-preparing": "已有文件正在准备，请稍后重试",
+        "queue-full": "下载任务已满，请稍后重试",
+        "session-expired": "会话已失效，请重新登录后重试",
+    }
+    return code, messages.get(code, "文件读取失败，请检查附件是否已下载完成")
+
+
 class Downloads:
     def __init__(self, identity):
         self.identity = identity
@@ -43,7 +78,9 @@ class Downloads:
         self.max_jobs = int(os.getenv("SELKIES_DROP_MAX_JOBS", "4"))
         self.ttl = int(os.getenv("SELKIES_DROP_TTL_SECONDS", "300"))
         self.prepare_timeout = int(os.getenv("SELKIES_DROP_PREPARE_TIMEOUT_SECONDS", "3600"))
-        self.allowed = [Path(p).resolve() for p in os.getenv("SELKIES_DROP_SOURCE_ROOTS", "/config/Desktop:/config/Downloads:/config/Documents:/config/uploads").split(":") if p]
+        configured = os.getenv("SELKIES_DROP_SOURCE_ROOTS")
+        self.use_default_roots = configured is None
+        self.allowed = [Path(p).resolve() for p in configured.split(":") if p] if configured is not None else default_source_roots()
         self.lock = threading.RLock()
         self.jobs = {}
         self.lease = None
@@ -127,11 +164,12 @@ class Downloads:
     def open_source(self, name):
         original = Path(name)
         resolved = original.resolve(strict=True)
-        if not any(resolved.is_relative_to(root) for root in self.allowed):
+        allowed = default_source_roots() if self.use_default_roots else self.allowed
+        if not any(resolved.is_relative_to(root) for root in allowed):
             raise DownloadError("source-outside-allowed-roots")
         # Resolve aliases, then open beneath the configured root using dirfds.
         # O_NOFOLLOW on every component prevents intermediate symlink swaps.
-        chosen = next(root for root in self.allowed if resolved.is_relative_to(root))
+        chosen = next(root for root in allowed if resolved.is_relative_to(root))
         fd = os.open(chosen, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             parts = resolved.relative_to(chosen).parts
@@ -183,12 +221,13 @@ class Downloads:
                 job.update(state="ready", name=Path(source).name, expires=time.time() + self.ttl)
                 self.phase = "idle"
             print("[dock-download] job", job["id"], "ready bytes", size, flush=True, file=sys.stderr)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
             part.unlink(missing_ok=True)
+            code, message = error_details(error)
             with self.lock:
-                job.update(state="error", error="文件不可读取、已变化、超出限制或会话已失效", expires=time.time() + 20)
+                job.update(state="error", error=message, expires=time.time() + 20)
                 self.phase, self.error = "error", job["error"]
-            print("[dock-download] job", job["id"], "prepare-failed", flush=True, file=sys.stderr)
+            print("[dock-download] job", job["id"], "prepare-failed", code, flush=True, file=sys.stderr)
 
     def sweep(self):
         with self.lock:

@@ -9,8 +9,20 @@ import json
 import os
 import select
 import stat
+import sys
 import time
 from urllib.parse import unquote, urlsplit
+
+
+def accepts_copy(source, action, atoms):
+    if action == atoms["XdndActionCopy"]:
+        return True
+    # The source may prefer MOVE while also offering COPY. Negotiate COPY
+    # explicitly; never send a MOVE status or delete the source.
+    from Xlib import Xatom
+    actions = source.get_property(atoms["XdndActionList"], Xatom.ATOM, 0, 32)
+    return bool(actions and actions.format == 32 and not actions.bytes_after
+                and atoms["XdndActionCopy"] in actions.value)
 
 
 def local_files(payload):
@@ -74,10 +86,13 @@ def run(manager):
     atoms = {name: connection.intern_atom(name) for name in (
         "XdndAware", "XdndEnter", "XdndPosition", "XdndStatus", "XdndLeave",
         "XdndDrop", "XdndFinished", "XdndSelection", "XdndTypeList",
-        "XdndActionCopy", "text/uri-list", "AXI_XDND_PROBE_DATA", "INCR")}
+        "XdndActionCopy", "XdndActionList", "text/uri-list", "AXI_XDND_PROBE_DATA", "INCR")}
     x, y, width, height = rect
     target = root.create_window(x, y, width, height, 0, 0, X.InputOnly,
                                 X.CopyFromParent, override_redirect=True)
+    # Chromium/Electron's window cache only returns hit-tested windows with
+    # WM_NAME. Without this, it skips our otherwise valid InputOnly target.
+    target.set_wm_name("Selkies container download target")
     target.change_property(atoms["XdndAware"], Xatom.ATOM, 32, [5])
     target.shape_rectangles(shape.SO.Set, shape.SK.Input, X.Unsorted, 0, 0, [])
     target.change_property(connection.intern_atom("_AXI_DOWNLOAD_TARGET"), Xatom.CARDINAL, 32, [1])
@@ -95,6 +110,10 @@ def run(manager):
 
     def emit(phase, **fields):
         manager.event(phase, **fields)
+        if phase in ("armed", "enter", "drop", "received", "rejected", "cancelled"):
+            print("[dock-download] xdnd", phase,
+                  "uri-list", fields.get("uri_list", "-"), "version", fields.get("version", "-"),
+                  flush=True, file=sys.stderr)
 
     def send(name, data):
         if source:
@@ -156,7 +175,7 @@ def run(manager):
                     elif source and data[0] == source.id:
                         if kind == atoms["XdndPosition"]:
                             # Always ask for position updates; accept COPY only.
-                            valid = offered and data[4] == atoms["XdndActionCopy"]
+                            valid = offered and accepts_copy(source, data[4], atoms)
                             accepted = valid
                             send("XdndStatus", [target.id, 3 if valid else 2, 0, 0,
                                                 atoms["XdndActionCopy"] if valid else 0])

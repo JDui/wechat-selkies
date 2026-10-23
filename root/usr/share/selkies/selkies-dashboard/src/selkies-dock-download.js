@@ -18,6 +18,7 @@
     "#selkies-bottom-action-dock .selkies-bottom-dock-btn{flex:0 1 32px;width:32px;min-width:28px;height:32px;padding:6px;border-radius:50%;border-color:transparent;background:transparent;box-shadow:none;color:#f2f9ff}" +
     "#selkies-bottom-action-dock .selkies-bottom-dock-btn:hover{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.3)}" +
     "#selkies-bottom-action-dock svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}" +
+    "#selkies-bottom-action-dock-shell[data-position='top'] [data-dock-action='dock-collapse'] svg{transform:rotate(180deg)}" +
     "#selkies-bottom-action-dock-shell[data-pointer-held='1'] #selkies-bottom-action-dock,#selkies-bottom-action-dock-shell[data-pointer-held='1'] #selkies-bottom-split-popover,#selkies-bottom-action-dock-shell[data-pointer-held='1'] #selkies-bottom-dock-collapsed-toggle{pointer-events:none}" +
     "#selkies-dock-download-hint{position:absolute;bottom:calc(100% + 12px);left:50%;transform:translateX(-50%);padding:9px 15px;border-radius:16px;border:1px solid rgba(186,230,253,.6);background:rgba(15,35,55,.9);color:#effbff;box-shadow:0 4px 18px #001a3040;font:500 12px/1.5 system-ui;white-space:normal;width:max-content;max-width:min(340px,85vw);text-align:center;pointer-events:auto}" +
     "#selkies-dock-download-hint[hidden]{display:none}#selkies-dock-download-hint a{display:block;color:#a5f3fc}" +
