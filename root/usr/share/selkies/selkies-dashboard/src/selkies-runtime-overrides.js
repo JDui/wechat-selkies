@@ -971,6 +971,7 @@
           var inputSampler = createInputSampler(ws, nativeSend);
           var wrappedSend = function (data) {
             var payload = sanitizeOutgoingWebSocketPayload(data);
+            if (queueAssistKeyCommand(ws, payload)) return;
             if (typeof payload === "string" && inputSampler.send(payload)) {
               return;
             }
@@ -6778,7 +6779,9 @@
     clearAllHighLoadState("repair-ime");
     imeCompositionActive = false;
     assistComposing = false;
+    assistCompositionTarget = null;
     assistCompositionKeys = Object.create(null);
+    clearAssistCompositionCommit(false);
     // Explicit repair permits the next key to flush retained text on the
     // current connection, after the user has restored the remote input focus.
     assistPendingSocket = null;
@@ -8394,7 +8397,11 @@
   var assistFlushWarned = false;
   var assistComposing = false;
   var assistCommitTimer = null;
+  var assistCompositionCommit = null;
   var assistPendingText = "";
+  var assistPendingPackets = [];
+  var assistSending = false;
+  var assistCompositionTarget = null;
   var assistPendingSocket = null;
   var assistReconnectWarned = false;
   var assistCompositionKeys = Object.create(null);
@@ -8409,7 +8416,7 @@
       console.warn("[selkies-overrides] committed text pending; transport unavailable or busy");
       setActivityTask("ime-pending", {
         title: "\u6587\u5b57\u7b49\u5f85\u53d1\u9001",
-        detail: "\u8fde\u63a5\u6682\u4e0d\u53ef\u7528\u6216\u53d1\u9001\u7f13\u51b2\u7e41\u5fd9\uff0c\u5df2\u4fdd\u7559\u672a\u53d1\u9001\u6587\u5b57\u5e76\u6682\u505c\u540e\u7eed\u6309\u952e\u3002",
+        detail: "\u8fde\u63a5\u6682\u4e0d\u53ef\u7528\u6216\u53d1\u9001\u7f13\u51b2\u7e41\u5fd9\uff0c\u5df2\u4fdd\u7559\u6587\u5b57\uff1b\u8fde\u63a5\u53ef\u7528\u65f6\u540e\u7eed\u6309\u952e\u4f1a\u6309\u987a\u5e8f\u53d1\u9001\u3002",
         kind: "warning", priority: 85, expiresAt: Date.now() + 15000
       });
     }
@@ -8422,13 +8429,9 @@
   }
 
   function flushAssistInput() {
-    var assist = document.getElementById("keyboard-input-assist");
-    if (!assist || assistComposing) return false;
-    if (assist.value) {
-      assistPendingText += assist.value;
-      assist.value = "";
-    }
-    if (!assistPendingText) return true;
+    // Drain only immutable committed text. Never read the live preedit field
+    // from a retry or a keydown: it may already belong to the next word.
+    if (!assistPendingPackets.length) return true;
     var socket = getPrimaryOpenDataSocket();
     // Never replay text into a replacement connection: its focused application
     // may have changed. Keep unsent text available for recovery in this page.
@@ -8446,14 +8449,17 @@
     }
     if (socket) assistPendingSocket = socket;
     while (socket && socket.readyState === window.WebSocket.OPEN && socket.bufferedAmount < 262144) {
-      var chunk = Array.from(assistPendingText).slice(0, 128).join("");
+      var packet = assistPendingPackets[0];
       try {
-        socket.send("co,end," + chunk);
+        assistSending = true;
+        socket.send(packet.payload);
       } catch (_flushErr) { break; }
+      finally { assistSending = false; }
       // send() acceptance is not an application acknowledgement. Never retry
       // an accepted chunk, which could duplicate text after a disconnect.
-      assistPendingText = assistPendingText.slice(chunk.length);
-      if (!assistPendingText) {
+      assistPendingPackets.shift();
+      if (packet.text) assistPendingText = assistPendingText.slice(packet.text.length);
+      if (!assistPendingPackets.length) {
         assistPendingSocket = null;
         assistReconnectWarned = false;
         if (assistFlushWarned) {
@@ -8467,6 +8473,35 @@
     }
     retryAssistInput();
     return false;
+  }
+
+  function queueAssistText(text) {
+    if (!text) return;
+    assistPendingText += text;
+    var points = Array.from(text);
+    for (var i = 0; i < points.length; i += 128) {
+      var chunk = points.slice(i, i + 128).join("");
+      assistPendingPackets.push({ payload: "co,end," + chunk, text: chunk });
+    }
+  }
+
+  function queueAssistKeyCommand(socket, payload) {
+    if (assistSending || !assistPendingPackets.length || typeof payload !== "string" ||
+        !/^(?:kd,|ku,|kr$)/.test(payload) || socket !== assistPendingSocket) return false;
+    // Native key events must follow committed text even when WebSocket
+    // bufferedAmount is high. Never drop Enter or a printable key to wait.
+    assistPendingPackets.push({ payload: payload, text: "" });
+    flushAssistInput();
+    return true;
+  }
+
+  function clearAssistCompositionCommit(clearValue) {
+    if (assistCommitTimer) window.clearTimeout(assistCommitTimer);
+    assistCommitTimer = null;
+    if (clearValue && assistCompositionCommit) {
+      assistCompositionCommit.target.value = "";
+    }
+    assistCompositionCommit = null;
   }
 
   function installAssistInputGuard() {
@@ -8488,15 +8523,31 @@
           event.stopImmediatePropagation();
           return;
         }
-        if (type === "keydown" && !flushAssistInput()) {
-          event.stopImmediatePropagation();
-          event.preventDefault();
+        if (type === "keydown") {
+          clearAssistCompositionCommit(true);
+          if (!flushAssistInput()) {
+            var socket = getPrimaryOpenDataSocket();
+            if (socket && socket === assistPendingSocket && socket.readyState === window.WebSocket.OPEN) {
+              // The downstream keyboard handler sends kd/ku through the
+              // WebSocket wrapper, which appends them to the same FIFO.
+              return;
+            }
+            event.stopImmediatePropagation();
+            // Printable keys must still reach the local input field while
+            // offline/busy; their input events join the pending text queue.
+            // Keep actions such as Enter from overtaking the pending text.
+            if (!event.key || Array.from(event.key).length !== 1 || event.ctrlKey || event.metaKey || event.altKey) {
+              event.preventDefault();
+            }
+          }
         }
       }, true);
     });
     window.addEventListener("compositionstart", function (event) {
       if (!isAssist(event)) return;
+      clearAssistCompositionCommit(true);
       assistComposing = imeCompositionActive = true;
+      assistCompositionTarget = event.target;
       noteAssistInput();
       event.stopImmediatePropagation();
     }, true);
@@ -8506,28 +8557,65 @@
     window.addEventListener("compositionend", function (event) {
       if (!isAssist(event)) return;
       assistComposing = imeCompositionActive = false;
+      assistCompositionTarget = null;
       noteAssistInput();
       event.stopImmediatePropagation();
-      // Some browsers have no final input event; others fire it immediately
-      // after compositionend. One deferred value read handles both orders.
-      if (assistCommitTimer) window.clearTimeout(assistCommitTimer);
+      clearAssistCompositionCommit(false);
+      // Snapshot synchronously: compositionend.data is the committed word,
+      // even if the DOM is empty or a new composition starts before a timer.
+      var text = typeof event.data === "string" ? event.data : event.target.value;
+      var commit = { target: event.target, text: text, cleared: false };
+      assistCompositionCommit = commit;
+      queueAssistText(text);
+      flushAssistInput();
+      // Only cleanup is deferred. A trailing input event acknowledges this
+      // same commit, and must not send it again (including after this timer).
       assistCommitTimer = window.setTimeout(function () {
         assistCommitTimer = null;
-        flushAssistInput();
+        if (assistCompositionCommit === commit && !assistComposing) {
+          commit.target.value = "";
+          commit.cleared = true;
+        }
       }, 0);
     }, true);
     window.addEventListener("input", function (event) {
       if (!isAssist(event)) return;
       event.stopImmediatePropagation();
       noteAssistInput();
-      if (!assistComposing && !event.isComposing) {
-        if (assistCommitTimer) window.clearTimeout(assistCommitTimer);
-        assistCommitTimer = null;
-        flushAssistInput();
+      if (assistComposing) {
+        if (event.target === assistCompositionTarget) return;
+        // A replaced assist cannot inherit the removed element's preedit.
+        assistComposing = imeCompositionActive = false;
+        assistCompositionTarget = null;
       }
+      var value = event.target.value;
+      var commit = assistCompositionCommit;
+      var compositionInput = event.isComposing || /Composition/.test(event.inputType || "");
+      var legacyEcho = commit && !event.inputType && (event.data === commit.text || value === commit.text || !value);
+      if (commit && commit.target === event.target && (compositionInput || legacyEcho ||
+          (!commit.cleared && event.inputType === "insertText" && event.data === commit.text))) {
+        clearAssistCompositionCommit(true);
+        flushAssistInput();
+        return;
+      }
+      if (event.isComposing) return;
+      // An ordinary input without an intervening keydown can append to the
+      // just-committed value. Queue only the newly inserted suffix.
+      if (commit && commit.target === event.target && !commit.cleared && commit.text && value.indexOf(commit.text) === 0) {
+        value = value.slice(commit.text.length);
+      }
+      clearAssistCompositionCommit(false);
+      event.target.value = "";
+      queueAssistText(value);
+      flushAssistInput();
     }, true);
     window.addEventListener("blur", function () {
       assistCompositionKeys = Object.create(null);
+      // Do not flush unfinished preedit on blur. If the OS later emits end,
+      // its committed data is still accepted; a new plain input can recover.
+      if (assistComposing && assistCompositionTarget) assistCompositionTarget.value = "";
+      assistComposing = imeCompositionActive = false;
+      assistCompositionTarget = null;
     });
     // Recovery is explicit after reconnect; copying never transmits pending text.
     window.selkiesRecoverPendingInput = function () {
