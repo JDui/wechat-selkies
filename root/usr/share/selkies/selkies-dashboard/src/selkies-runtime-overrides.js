@@ -6780,6 +6780,7 @@
     imeCompositionActive = false;
     assistComposing = false;
     assistCompositionTarget = null;
+    assistConfirmedCompositionText = "";
     assistCompositionKeys = Object.create(null);
     clearAssistCompositionCommit(false);
     // Explicit repair permits the next key to flush retained text on the
@@ -8402,9 +8403,32 @@
   var assistPendingPackets = [];
   var assistSending = false;
   var assistCompositionTarget = null;
+  var assistConfirmedCompositionText = "";
   var assistPendingSocket = null;
   var assistReconnectWarned = false;
   var assistCompositionKeys = Object.create(null);
+  var assistInputTrace = null;
+
+  // Opt-in, bounded, page-local diagnostics. Record lengths and ordering only;
+  // neither candidate text nor typed keys are retained or uploaded.
+  function traceAssistInput(type, event, text) {
+    if (!assistInputTrace) return;
+    var target = event && event.target;
+    assistInputTrace.push({
+      time: Date.now(), type: type,
+      target: target && target.id || "",
+      inputType: event && event.inputType || "",
+      imeKey: !!(event && event.keyCode === 229),
+      isComposing: !!(event && event.isComposing),
+      guardComposing: assistComposing,
+      dataLength: event && typeof event.data === "string" ? event.data.length : null,
+      valueLength: target && typeof target.value === "string" ? target.value.length : null,
+      confirmedLength: assistConfirmedCompositionText.length,
+      textLength: typeof text === "string" ? text.length : null,
+      pendingLength: assistPendingText.length
+    });
+    if (assistInputTrace.length > 128) assistInputTrace.shift();
+  }
 
   function noteAssistInput() {
     lastAssistInputAt = Date.now();
@@ -8459,6 +8483,7 @@
       // an accepted chunk, which could duplicate text after a disconnect.
       assistPendingPackets.shift();
       if (packet.text) assistPendingText = assistPendingText.slice(packet.text.length);
+      if (packet.text) traceAssistInput("send-accepted", null, packet.text);
       if (!assistPendingPackets.length) {
         assistPendingSocket = null;
         assistReconnectWarned = false;
@@ -8477,6 +8502,7 @@
 
   function queueAssistText(text) {
     if (!text) return;
+    traceAssistInput("queued", null, text);
     assistPendingText += text;
     var points = Array.from(text);
     for (var i = 0; i < points.length; i += 128) {
@@ -8515,6 +8541,7 @@
     ["keydown", "keyup"].forEach(function (type) {
       window.addEventListener(type, function (event) {
         if (!isAssist(event)) return;
+        traceAssistInput(type, event);
         var key = event.code || event.key;
         if (assistComposing || event.isComposing || event.keyCode === 229 ||
             (type === "keyup" && assistCompositionKeys[key])) {
@@ -8543,19 +8570,30 @@
         }
       }, true);
     });
+    window.addEventListener("beforeinput", function (event) {
+      if (isAssist(event)) traceAssistInput("beforeinput", event);
+    }, true);
     window.addEventListener("compositionstart", function (event) {
       if (!isAssist(event)) return;
+      traceAssistInput("compositionstart", event);
       clearAssistCompositionCommit(true);
       assistComposing = imeCompositionActive = true;
       assistCompositionTarget = event.target;
+      assistConfirmedCompositionText = "";
       noteAssistInput();
       event.stopImmediatePropagation();
     }, true);
     window.addEventListener("compositionupdate", function (event) {
-      if (isAssist(event)) event.stopImmediatePropagation();
+      if (isAssist(event)) {
+        traceAssistInput("compositionupdate", event);
+        event.stopImmediatePropagation();
+      }
     }, true);
     window.addEventListener("compositionend", function (event) {
       if (!isAssist(event)) return;
+      traceAssistInput("compositionend", event);
+      var confirmed = event.target === assistCompositionTarget ? assistConfirmedCompositionText : "";
+      assistConfirmedCompositionText = "";
       assistComposing = imeCompositionActive = false;
       assistCompositionTarget = null;
       noteAssistInput();
@@ -8564,6 +8602,11 @@
       // Snapshot synchronously: compositionend.data is the committed word,
       // even if the DOM is empty or a new composition starts before a timer.
       var text = typeof event.data === "string" ? event.data : event.target.value;
+      // Some IMEs confirm a prefix before ending the remaining composition.
+      // Recover it only when both an explicit non-composing insertion and the
+      // final DOM agree. Stale preedit must never be guessed from the field.
+      if (confirmed && event.target.value === confirmed + text) text = confirmed + text;
+      traceAssistInput("commit", event, text);
       var commit = { target: event.target, text: text, cleared: false };
       assistCompositionCommit = commit;
       queueAssistText(text);
@@ -8580,13 +8623,22 @@
     }, true);
     window.addEventListener("input", function (event) {
       if (!isAssist(event)) return;
+      traceAssistInput("input", event);
       event.stopImmediatePropagation();
       noteAssistInput();
       if (assistComposing) {
-        if (event.target === assistCompositionTarget) return;
+        if (event.target === assistCompositionTarget) {
+          if (event.isComposing === false &&
+              /^(?:insertText|insertFromComposition)$/.test(event.inputType || "") &&
+              typeof event.data === "string" && event.data) {
+            assistConfirmedCompositionText += event.data;
+          }
+          return;
+        }
         // A replaced assist cannot inherit the removed element's preedit.
         assistComposing = imeCompositionActive = false;
         assistCompositionTarget = null;
+        assistConfirmedCompositionText = "";
       }
       var value = event.target.value;
       var commit = assistCompositionCommit;
@@ -8610,16 +8662,25 @@
       flushAssistInput();
     }, true);
     window.addEventListener("blur", function () {
+      traceAssistInput("blur");
       assistCompositionKeys = Object.create(null);
       // Do not flush unfinished preedit on blur. If the OS later emits end,
       // its committed data is still accepted; a new plain input can recover.
       if (assistComposing && assistCompositionTarget) assistCompositionTarget.value = "";
       assistComposing = imeCompositionActive = false;
       assistCompositionTarget = null;
+      assistConfirmedCompositionText = "";
     });
     // Recovery is explicit after reconnect; copying never transmits pending text.
     window.selkiesRecoverPendingInput = function () {
       return assistPendingText;
+    };
+    window.selkiesImeTrace = function (enabled) {
+      if (enabled === true) assistInputTrace = [];
+      if (enabled === false) assistInputTrace = null;
+      return { enabled: !!assistInputTrace, events: (assistInputTrace || []).map(function (row) {
+        return Object.assign({}, row);
+      }) };
     };
     console.log("selkies-overrides: assist input guard attached");
   }

@@ -1,0 +1,36 @@
+const assert = require("assert");
+const { fixture } = require("./helpers/ime_fixture");
+const f = fixture();
+assert.strictEqual(f.window.selkiesImeTrace().enabled, false);
+f.input("默认不记录");
+assert.strictEqual(f.window.selkiesImeTrace().events.length, 0);
+
+f.window.selkiesImeTrace(true);
+f.event("keydown", { keyCode: 229, key: "私密按键" });
+f.event("compositionstart");
+f.event("beforeinput", { data: "私密候选", isComposing: true, inputType: "insertCompositionText" });
+f.input("私密候选", { data: "私密候选", isComposing: true, inputType: "insertCompositionText" });
+f.input("首", { data: "首", isComposing: false, inputType: "insertText" });
+f.state.assist.value = "首字";
+f.event("compositionend", { data: "字" });
+let snapshot = f.window.selkiesImeTrace();
+const end = snapshot.events.find(row => row.type === "compositionend");
+assert.strictEqual(end.confirmedLength, 1);
+assert.strictEqual(end.dataLength, 1);
+assert.strictEqual(end.valueLength, 2);
+assert(snapshot.events.some(row => row.type === "beforeinput"));
+assert(snapshot.events.some(row => row.type === "keydown" && row.imeKey));
+assert.strictEqual(snapshot.events.find(row => row.type === "commit").textLength, 2);
+assert(snapshot.events.some(row => row.type === "send-accepted" && row.textLength === 2));
+assert(!JSON.stringify(snapshot).includes("私密候选"));
+assert(!JSON.stringify(snapshot).includes("私密按键"));
+assert(!JSON.stringify(snapshot).includes("首"));
+snapshot.events[0].type = "external mutation";
+assert.notStrictEqual(f.window.selkiesImeTrace().events[0].type, "external mutation");
+
+for (let i = 0; i < 100; i++) f.input("更多文本");
+assert.strictEqual(f.window.selkiesImeTrace().events.length, 128);
+f.window.selkiesImeTrace(false);
+f.input("停止记录");
+assert.strictEqual(f.window.selkiesImeTrace().events.length, 0);
+console.log("PASS opt-in IME metadata diagnostics: ordering, lengths, privacy, bounded retention");

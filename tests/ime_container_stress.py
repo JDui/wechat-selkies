@@ -12,6 +12,7 @@ import argparse
 import ast
 import asyncio
 from difflib import SequenceMatcher
+import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -51,7 +52,13 @@ def run_command(args: list[str], *, timeout: float = 20, check: bool = True):
     return result
 
 
-def host_main(image: str, quick: bool = False, segment_size: int = 0, probe_key: bool = False) -> int:
+def host_main(
+    image: str,
+    quick: bool = False,
+    segment_size: int = 0,
+    probe_key: bool = False,
+    first_character: bool = False,
+) -> int:
     if not INPUT_HANDLER.is_file():
         raise FileNotFoundError(INPUT_HANDLER)
     if not Path(__file__).is_file():
@@ -78,7 +85,7 @@ def host_main(image: str, quick: bool = False, segment_size: int = 0, probe_key:
             "/bin/sh",
             image,
             "-c",
-            "sleep 180",
+            "sleep 60" if first_character else "sleep 180",
         ],
         timeout=30,
     )
@@ -116,13 +123,15 @@ def host_main(image: str, quick: bool = False, segment_size: int = 0, probe_key:
                 exec_args.extend(["--segment-size", str(segment_size)])
             if probe_key:
                 exec_args.append("--probe-key")
+            if first_character:
+                exec_args.append("--first-character")
             executed = subprocess.run(
                 exec_args,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=150,
+                timeout=35 if first_character else 150,
                 check=False,
             )
             if executed.stdout:
@@ -200,6 +209,7 @@ async def inside_main(
     quick: bool = False,
     segment_size: int = 0,
     probe_key: bool = False,
+    first_character: bool = False,
 ) -> int:
     require_x11_tools()
     handler_source = source_path.read_text(encoding="utf-8-sig")
@@ -495,6 +505,98 @@ async def inside_main(
         if focused.returncode:
             raise RuntimeError(f"cannot focus capture xterm: {focused.stderr.strip()}")
 
+        if first_character:
+            qt_modules = []
+            for module_name in ("PyQt5", "PyQt6", "PySide6", "PySide2"):
+                try:
+                    if importlib.util.find_spec(module_name) is not None:
+                        qt_modules.append(module_name)
+                except (ImportError, ModuleNotFoundError, ValueError):
+                    pass
+            qt_apps = [
+                command
+                for command in ("qtdemo", "qtcreator", "kate", "kwrite")
+                if shutil.which(command)
+            ]
+            print(
+                f"QT_DEPENDENCY_PROBE python_modules={qt_modules} "
+                f"existing_editors={qt_apps}"
+            )
+
+            def begin_case():
+                return (
+                    len(current_lines()),
+                    len(records),
+                    len(timeout_values),
+                    time.monotonic(),
+                    cpu_usage_usec(),
+                )
+
+            def finish_case(label: str, expected: str, started) -> bool:
+                start_line, start_record, start_timeout, started_at, cpu_before = started
+                flush_capture_line()
+                ok, _, returncode, _ = report_case(
+                    label,
+                    expected,
+                    start_line,
+                    start_record,
+                    start_timeout,
+                    started_at,
+                    cpu_before,
+                )
+                return ok and returncode == 0
+
+            case_results = []
+
+            # This is the first X11 key event after the fresh X server gained focus.
+            started = begin_case()
+            await on_message(client, "co,end,你好")
+            case_results.append(finish_case("fresh-focus-first-unicode", "你好", started))
+
+            # Existing text must remain ahead of a newly committed Chinese word.
+            started = begin_case()
+            await on_message(client, "co,end,A")
+            await on_message(client, "co,end,中文")
+            case_results.append(finish_case("append-to-existing-text", "A中文", started))
+
+            # These are injected server-side key states. They isolate the X11
+            # key state around co,end; they do not claim that an active browser
+            # IME normally forwards these candidate-confirmation keys.
+            started = begin_case()
+            space_down = xdotool("keydown", "space")
+            await on_message(client, "co,end,中文")
+            space_up = xdotool("keyup", "space")
+            case_results.append(
+                finish_case("space-held-across-commit", " 中文", started)
+                and space_down.returncode == 0
+                and space_up.returncode == 0
+            )
+            print(
+                f"KEY_STATE_INJECTION space down_rc={space_down.returncode} "
+                f"up_rc={space_up.returncode}"
+            )
+
+            started = begin_case()
+            digit_down = xdotool("keydown", "2")
+            await on_message(client, "co,end,中文")
+            digit_up = xdotool("keyup", "2")
+            case_results.append(
+                finish_case("digit-held-across-commit", "2中文", started)
+                and digit_down.returncode == 0
+                and digit_up.returncode == 0
+            )
+            print(
+                f"KEY_STATE_INJECTION digit2 down_rc={digit_down.returncode} "
+                f"up_rc={digit_up.returncode}"
+            )
+
+            result = all(case_results)
+            print(
+                f"FIRST_CHARACTER_SUMMARY status={'PASS' if result else 'FAIL'} "
+                f"cases={len(case_results)} x11=xvfb+xterm+real_on_message"
+            )
+            return 0 if result else 1
+
         if probe_key:
             for command in (("help",), ("help", "key"), ("help", "keydown"), ("help", "keyup")):
                 result = xdotool(*command)
@@ -787,6 +889,7 @@ def main() -> int:
     parser.add_argument("--quick", action="store_true", help="skip the 30-second compatibility payload")
     parser.add_argument("--segment-size", type=int, default=0, help="diagnostic: send a commit as serial substrings")
     parser.add_argument("--probe-key", action="store_true", help="probe existing xdotool Unicode key timing in Xvfb")
+    parser.add_argument("--first-character", action="store_true", help="probe fresh-focus and held-key commit boundaries")
     parser.add_argument("--source", type=Path, default=Path(CONTAINER_SOURCE))
     args = parser.parse_args()
     if args.inside:
@@ -796,10 +899,15 @@ def main() -> int:
                 quick=args.quick,
                 segment_size=args.segment_size,
                 probe_key=args.probe_key,
+                first_character=args.first_character,
             )
         )
     return host_main(
-        args.image, quick=args.quick, segment_size=args.segment_size, probe_key=args.probe_key
+        args.image,
+        quick=args.quick,
+        segment_size=args.segment_size,
+        probe_key=args.probe_key,
+        first_character=args.first_character,
     )
 
 
