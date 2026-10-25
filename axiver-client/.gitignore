@@ -1,0 +1,10 @@
+/target/
+/gen/schemas/
+/dist/
+/axiver-client.db
+/axiver-client.db-shm
+/axiver-client.db-wal
+/axiver-client-data/
+/backups/
+
+/download-settings.json

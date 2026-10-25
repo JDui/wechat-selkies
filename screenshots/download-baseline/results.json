@@ -1,0 +1,27 @@
+{
+  "exe": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C\\SNSBox\\axiver-client\\target\\release\\axiver-client.exe",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-DXTBRw",
+  "origin": "http://127.0.0.1:3304",
+  "requests": [
+    "/",
+    "/favicon.ico"
+  ],
+  "results": [
+    {
+      "case": "blob",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792909812148-blob.txt"
+    },
+    {
+      "case": "http",
+      "completed": false,
+      "file": null
+    },
+    {
+      "case": "http2",
+      "completed": false,
+      "file": null
+    }
+  ],
+  "shellText": "AXIVER 控制面板\n置顶\n隐藏\n已连接 · 当前连接：广域地址\nhttp://127.0.0.1:3304/\n最近检查 2026-10-25T06:30:28Z\n连接详情\n刷新页面\n重新连接\n初始化失败：state not managed for field `state` on command `client_get_config`. You must call `.manage()` before using this command\n连接设置\n广播名\n\n1–32 位字母、数字、下划线或连字符，需与服务器配置一致。\n\n广域地址\n\n可留空。局域网优先；未找到局域网时按此地址回退。\n\n保存\n取消\nAXIVER Client"
+}

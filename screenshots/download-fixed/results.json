@@ -1,0 +1,37 @@
+{
+  "exe": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C\\SNSBox\\axiver-client\\target\\release\\axiver-client.exe",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-RmBdSJ",
+  "origin": "http://127.0.0.1:9568",
+  "requests": [
+    "/",
+    "/favicon.ico",
+    "/api/dock-download/file/http?token=fixture",
+    "/api/dock-download/file/http2?token=fixture",
+    "/files/",
+    "/api/dock-download/file/iframe?token=fixture"
+  ],
+  "results": [
+    {
+      "case": "blob",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792910175018-blob.txt"
+    },
+    {
+      "case": "http",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792910175018-http.txt"
+    },
+    {
+      "case": "http2",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792910175018-http2.txt"
+    },
+    {
+      "case": "iframe",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792910175018-iframe.txt"
+    }
+  ],
+  "shellText": "AXIVER 控制面板\n置顶\n隐藏\n已连接 · 当前连接：广域地址\nhttp://127.0.0.1:9568/\n最近检查 2026-10-25T06:36:22Z\n连接详情\n刷新页面\n重新连接\n最近下载\n\n已保存到：D:\\DL\\axiver-check-1792910175018-iframe.txt\n\n连接设置\n广播名\n\n1–32 位字母、数字、下划线或连字符，需与服务器配置一致。\n\n广域地址\n\n可留空。局域网优先；未找到局域网时按此地址回退。\n\n保存\n取消\nAXIVER Client v0.2.0（release / x86_64）",
+  "dotLabel": "下载完成"
+}

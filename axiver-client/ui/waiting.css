@@ -1,0 +1,88 @@
+:root {
+  color-scheme: dark light;
+  font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --bg: #111924;
+  --fg: #e9f1fa;
+  --muted: #aebdcb;
+  --accent: #55a8ff;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f2f5f9;
+    --fg: #1c2733;
+    --muted: #5a6b7d;
+    --accent: #1668c7;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  color: var(--fg);
+  background:
+    radial-gradient(circle at 34% 46%, rgba(120, 160, 200, 0.14), transparent 30%),
+    radial-gradient(circle at 71% 21%, rgba(63, 98, 132, 0.16), transparent 34%),
+    linear-gradient(135deg, #111925 0%, #263646 52%, #172433 100%);
+  background-color: var(--bg);
+}
+@media (prefers-color-scheme: light) {
+  body {
+    background:
+      radial-gradient(circle at 34% 46%, rgba(90, 140, 190, 0.12), transparent 30%),
+      linear-gradient(135deg, #eef3f9 0%, #dfe8f2 60%, #e8eef6 100%);
+    background-color: var(--bg);
+  }
+}
+.brand {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  text-align: center;
+}
+.logo {
+  width: 72px;
+  height: 72px;
+  filter: drop-shadow(0 8px 20px #00132430);
+  animation: brand-enter 650ms cubic-bezier(.2,.8,.2,1) both;
+}
+.brand strong {
+  animation: brand-enter 650ms 70ms cubic-bezier(.2,.8,.2,1) both;
+  font-size: 30px;
+  font-weight: 540;
+  letter-spacing: 0.18em;
+}
+.brand span {
+  animation: brand-enter 650ms 140ms cubic-bezier(.2,.8,.2,1) both;
+  color: var(--muted);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+.spinner {
+  width: 22px;
+  height: 22px;
+  margin-top: 6px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+.hint-noscript {
+  position: fixed;
+  bottom: 18px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes brand-enter { from { opacity:0; transform:translateY(8px) scale(.96); } to { opacity:1; transform:translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .logo,.brand strong,.brand span { animation:none; }
+  .spinner { animation-duration: 2400ms; }
+}

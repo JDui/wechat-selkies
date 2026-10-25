@@ -1,0 +1,127 @@
+{
+  "exe": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C\\SNSBox\\axiver-client\\target\\release\\axiver-client.exe",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-WVKc8K",
+  "origin": "http://127.0.0.1:7917",
+  "requests": [
+    "/",
+    "/favicon.ico",
+    "/uploader/",
+    "/favicon.ico",
+    "/api/dock-download/file/http?token=fixture",
+    "/api/dock-download/file/http2?token=fixture",
+    "/files/",
+    "/api/dock-download/file/iframe?token=fixture"
+  ],
+  "results": [
+    {
+      "case": "blob",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792912128669-blob.txt"
+    },
+    {
+      "case": "http",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792912128669-http.txt"
+    },
+    {
+      "case": "http2",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792912128669-http2.txt"
+    },
+    {
+      "case": "iframe",
+      "completed": true,
+      "file": "D:\\DL\\axiver-check-1792912128669-iframe.txt"
+    }
+  ],
+  "shellText": "下载完成\n⌄\nAXIVER会话控制\n收起\n连接\n下载\n设置\n最近下载\n\n已保存到：D:\\DL\\axiver-check-1792912128669-iframe.txt\n\n文件保存到系统配置的下载目录。\n\nAXIVER Client v0.2.0（release / x86_64）",
+  "dotLabel": "下载完成",
+  "uiResults": {
+    "startsCollapsed": true,
+    "native": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 3543550,
+          "Title": "AXIVER Client",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 1381740,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    },
+    "clickOpens": true,
+    "enterSaves": true,
+    "dragged": {
+      "expanded": false,
+      "toolActive": false,
+      "x": 162,
+      "y": 107,
+      "viewX": 162,
+      "viewY": 107,
+      "width": 190,
+      "height": 34,
+      "pillX": 0,
+      "pillY": 0,
+      "panelX": 0,
+      "panelY": 42,
+      "panelWidth": 392,
+      "panelHeight": 530
+    },
+    "dragDidNotOpen": true,
+    "staysBeforeTenSeconds": true,
+    "resetAfterTenSeconds": true,
+    "remoteIpcDenied": true,
+    "toolSharesSession": true,
+    "toolBroadcastChannel": true,
+    "toolNative": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 3543550,
+          "Title": "AXIVER Download Fixture",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 1381740,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    },
+    "remoteFocusRestored": true,
+    "finalNative": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 3543550,
+          "Title": "AXIVER Download Fixture",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 1381740,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    }
+  }
+}

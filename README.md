@@ -2,7 +2,9 @@
 
 基于 Docker 的微信 / QQ Linux 远程桌面镜像，通过 Selkies WebRTC 在浏览器中使用容器内的微信和 QQ。
 
-当前维护分支：`AXiVer`
+当前分支：`AXIVER-Client`，用于维护 [AXIVER Windows 客户端](./axiver-client/README.md)。服务端主维护分支为 [`AXiVer`](https://github.com/JDui/wechat-selkies/tree/AXiVer)。
+
+客户端源码位于 `axiver-client/`，当前重构版本取代旧 `SNS-Box-Window` 分支；旧分支提交历史保留在本分支的合并历史中。客户端的构建方式、功能说明和验证记录见 [客户端文档](./axiver-client/README.md)。
 
 ## 界面截图
 

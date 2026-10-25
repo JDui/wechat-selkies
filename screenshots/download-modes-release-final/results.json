@@ -1,0 +1,121 @@
+{
+  "exe": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C\\SNSBox\\axiver-client\\target\\release\\axiver-client.exe",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-EPuCKS",
+  "origin": "http://127.0.0.1:4792",
+  "requests": [
+    "/",
+    "/favicon.ico",
+    "/api/dock-download/file/http?token=fixture",
+    "/api/dock-download/file/cancel?token=fixture",
+    "/api/dock-download/file/cancel-dialog?token=fixture"
+  ],
+  "results": [
+    {
+      "case": "http",
+      "completed": true,
+      "file": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-EPuCKS\\selected downloads\\axiver-check-1792916331638-http.txt",
+      "id": 1
+    },
+    {
+      "case": "blob",
+      "completed": true,
+      "file": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-EPuCKS\\selected downloads\\axiver-check-1792916331638-blob.txt",
+      "id": 2
+    },
+    {
+      "case": "cancel",
+      "cancelled": true
+    },
+    {
+      "case": "cancel-dialog",
+      "cancelled": true
+    }
+  ],
+  "uiResults": {
+    "startsCollapsed": true,
+    "compactPill": true,
+    "frostFilter": "blur(12px) saturate(1.25)",
+    "native": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 1904328,
+          "Title": "AXIVER Frost Fixture",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 3673596,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    },
+    "backdropUpdates": true,
+    "enterSaves": true,
+    "staysBeforeTenSeconds": true,
+    "smoothReturnSamples": 19,
+    "smoothReturn": true,
+    "returnTrajectory": [
+      192,
+      147.64,
+      90.38,
+      41.59,
+      23.39,
+      6.84,
+      6.2,
+      6.24,
+      6.61,
+      7.75,
+      8.77,
+      11.48,
+      13.63,
+      14.29,
+      14.02,
+      13.36,
+      13.01,
+      12.4,
+      11.99,
+      11.79,
+      11.75,
+      12
+    ],
+    "returnedHome": true,
+    "dragDidNotOpen": true,
+    "remoteDownloadsDenied": true,
+    "waitsForConfirmation": true,
+    "defaultModeNeedsOnlyConfirmation": true,
+    "askModeHasNoExtraConfirmation": true,
+    "nativeSaveDialog": true,
+    "modePersisted": true,
+    "originalHttpRequestUsedOnce": true,
+    "revealAccepted": true,
+    "actualSelectedDirectory": true,
+    "explorerSelectedExpectedFile": true,
+    "recentListHasAllRecords": true,
+    "finalNative": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 1904328,
+          "Title": "AXIVER Frost Fixture",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 3673596,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    }
+  }
+}

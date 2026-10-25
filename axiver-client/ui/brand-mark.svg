@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="glass" x1="32" y1="16" x2="218" y2="242" gradientUnits="userSpaceOnUse"><stop stop-color="#748f9e"/><stop offset=".5" stop-color="#3b5367"/><stop offset="1" stop-color="#263a4e"/></linearGradient>
+    <linearGradient id="edge" x1="46" y1="16" x2="210" y2="240" gradientUnits="userSpaceOnUse"><stop stop-color="#f0faff" stop-opacity=".85"/><stop offset=".5" stop-color="#f0faff" stop-opacity=".2"/><stop offset="1" stop-color="#b6e9f4" stop-opacity=".5"/></linearGradient>
+    <linearGradient id="link" x1="62" y1="70" x2="194" y2="182" gradientUnits="userSpaceOnUse"><stop stop-color="#fff"/><stop offset="1" stop-color="#b4edf6"/></linearGradient>
+  </defs>
+  <rect x="9" y="9" width="238" height="238" rx="66" fill="url(#glass)" stroke="url(#edge)" stroke-width="3"/>
+  <path d="M62 182 113 78C119 66 137 66 143 78L194 182M91 148H165" stroke="url(#link)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m106 174 44-47" stroke="#6ad9eb" stroke-width="16" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AXIVER</title><link rel="stylesheet" href="./shell.css" />
+</head>
+<body>
+<button id="pill" class="glass pill" type="button" aria-expanded="false" aria-controls="panel" title="点击打开控制面板；拖动可移动，松手 10 秒后归位"><span id="pill-dot" class="dot dot-idle" aria-hidden="true"></span><span id="pill-label">正在准备</span></button>
+<section id="panel" class="glass panel" aria-label="AXIVER 控制面板" hidden>
+<header class="panel-header"><div><strong>AXIVER</strong><span class="eyebrow">会话控制</span></div><button id="btn-hide" class="quiet" type="button" aria-label="收起控制面板">收起</button></header>
+<nav class="tabs" role="tablist" aria-label="控制面板">
+<button id="tab-connection" role="tab" aria-selected="true" aria-controls="page-connection" tabindex="0" type="button">连接</button>
+<button id="tab-downloads" role="tab" aria-selected="false" aria-controls="page-downloads" tabindex="-1" type="button">下载<span id="download-badge" hidden></span></button>
+<button id="tab-settings" role="tab" aria-selected="false" aria-controls="page-settings" tabindex="-1" type="button">设置</button>
+</nav>
+<main>
+<section id="page-connection" role="tabpanel" aria-labelledby="tab-connection" tabindex="0">
+<div class="status-heading"><span id="status-dot" class="dot dot-idle" aria-hidden="true"></span><strong id="status-text" aria-live="polite">正在准备…</strong></div>
+<p id="status-target" class="target selectable">—</p><p id="status-time" class="hint"></p><div id="status-error" class="error-banner" hidden></div>
+<div class="actions"><button id="btn-reconnect" class="primary" type="button">重新连接</button><button id="btn-refresh" class="secondary" type="button">刷新页面</button></div><p id="op-status" class="hint" role="status"></p>
+<button id="btn-return" class="secondary full" type="button" hidden>返回远程桌面</button>
+<div class="divider"></div><button id="btn-details" class="disclosure" type="button" aria-expanded="false" aria-controls="status-details">连接详情与诊断 <span aria-hidden="true">⌄</span></button>
+<div id="status-details" hidden><dl id="details-list" class="details selectable"></dl><p class="hint">连接状态表示网络可达与页面加载完成，登录与远程画面需另行确认。</p><button id="btn-copy-diag" class="secondary" type="button">复制诊断信息</button><span id="copy-result" class="hint" role="status"></span></div>
+
+</section>
+<section id="page-downloads" role="tabpanel" aria-labelledby="tab-downloads" tabindex="0" hidden>
+<h2>最近下载</h2><p id="download-empty" class="hint">下载请求和保存位置会显示在这里。</p><div id="download-list" class="download-list" aria-live="polite"></div><p id="download-feedback" class="hint" role="status"></p><p class="hint">点击已完成的文件，可在文件夹中显示。</p>
+</section>
+<section id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden>
+<h2>下载</h2>
+<div class="download-modes" role="radiogroup" aria-label="下载模式">
+<label><input id="download-mode-default" type="radio" name="download-mode" value="default" checked><span>默认位置</span></label>
+<label><input id="download-mode-ask" type="radio" name="download-mode" value="ask"><span>每次询问</span></label>
+</div><p id="download-mode-hint" class="hint">确认是否下载后，保存到默认目录。</p>
+<div id="default-download-location" class="location-row"><span id="download-directory" class="selectable"></span><button id="btn-download-directory" class="secondary" type="button">更改目录</button></div>
+<p id="download-settings-result" class="hint" role="status"></p><p id="db-warning" class="db-warning" role="alert" hidden></p>
+<details id="connection-settings" class="settings-group"><summary>连接设置</summary><div class="settings-group-body"><div class="field"><label for="broadcast-name">广播名</label><input id="broadcast-name" type="text" autocomplete="off" spellcheck="false" placeholder="AXISNSBOX-000" maxlength="32" aria-describedby="broadcast-hint" /><p id="broadcast-hint" class="hint">与服务器一致，支持字母、数字、下划线和连字符。</p><p id="broadcast-error" class="field-error" hidden></p></div>
+<div class="field"><label for="wide-url">广域地址 <span class="hint">可选</span></label><input id="wide-url" type="text" autocomplete="off" spellcheck="false" placeholder="https://example.com:3001/" aria-describedby="wide-hint" /><p id="wide-hint" class="hint">优先连接局域网，未找到时使用此地址。</p><p id="wide-error" class="field-error" hidden></p></div>
+<div class="actions"><button id="btn-save" class="primary" type="button">保存设置</button><button id="btn-cancel" class="secondary" type="button">撤销修改</button></div><p id="save-status" class="hint" role="status"></p></div></details><details class="ui-options"><summary>界面选项</summary><div class="actions"><button id="btn-pin" class="quiet" type="button" aria-pressed="false">主窗口置顶</button><button id="btn-reset" class="quiet" type="button">状态点归位</button></div></details>
+</section>
+</main>
+<footer hidden><span id="version">AXIVER Client</span></footer>
+</section>
+<script src="./shell.js" defer></script>
+</body></html>

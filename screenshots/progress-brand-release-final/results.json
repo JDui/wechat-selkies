@@ -1,0 +1,673 @@
+{
+  "exe": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C\\SNSBox\\axiver-client\\target\\release\\axiver-client.exe",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-MFMNpr",
+  "origin": "http://127.0.0.1:2524",
+  "requests": [
+    "/",
+    "/favicon.ico",
+    "/api/dock-download/file/http?token=fixture",
+    "/api/dock-download/file/progress-known?token=fixture",
+    "/api/dock-download/file/progress-stream?token=fixture",
+    "/api/dock-download/file/cancel?token=fixture",
+    "/api/dock-download/file/cancel-dialog?token=fixture"
+  ],
+  "results": [
+    {
+      "case": "http",
+      "completed": true,
+      "file": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-MFMNpr\\selected downloads\\axiver-check-1792918386970-http.txt",
+      "id": 1
+    },
+    {
+      "case": "progress-known",
+      "completed": true,
+      "samples": [
+        {
+          "received": 262144,
+          "total": 2097152,
+          "speed": 715623.5540128659,
+          "dom": {
+            "indeterminate": false,
+            "value": "12.5",
+            "text": "256.0 KB / 2.0 MB · 698.9 KB/s",
+            "received": 262144,
+            "speed": 715623.5540128659,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 262144,
+          "total": 2097152,
+          "speed": 261751.45134841275,
+          "dom": {
+            "indeterminate": false,
+            "value": "12.5",
+            "text": "256.0 KB / 2.0 MB · 255.6 KB/s",
+            "received": 262144,
+            "speed": 261751.45134841275,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 393216,
+          "total": 2097152,
+          "speed": 130861.91428281036,
+          "dom": {
+            "indeterminate": false,
+            "value": "18.8",
+            "text": "384.0 KB / 2.0 MB · 127.8 KB/s",
+            "received": 393216,
+            "speed": 130861.91428281036,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 393216,
+          "total": 2097152,
+          "speed": 130896.31097141416,
+          "dom": {
+            "indeterminate": false,
+            "value": "18.8",
+            "text": "384.0 KB / 2.0 MB · 127.8 KB/s",
+            "received": 393216,
+            "speed": 130896.31097141416,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 589824,
+          "total": 2097152,
+          "speed": 327120.8523271173,
+          "dom": {
+            "indeterminate": false,
+            "value": "28.1",
+            "text": "576.0 KB / 2.0 MB · 319.5 KB/s",
+            "received": 589824,
+            "speed": 327120.8523271173,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 589824,
+          "total": 2097152,
+          "speed": 327110.3046933461,
+          "dom": {
+            "indeterminate": false,
+            "value": "28.1",
+            "text": "576.0 KB / 2.0 MB · 319.4 KB/s",
+            "received": 589824,
+            "speed": 327110.3046933461,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 851968,
+          "total": 2097152,
+          "speed": 451311.76451259817,
+          "dom": {
+            "indeterminate": false,
+            "value": "40.6",
+            "text": "832.0 KB / 2.0 MB · 440.7 KB/s",
+            "received": 851968,
+            "speed": 451311.76451259817,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 851968,
+          "total": 2097152,
+          "speed": 458133.74850639066,
+          "dom": {
+            "indeterminate": false,
+            "value": "40.6",
+            "text": "832.0 KB / 2.0 MB · 447.4 KB/s",
+            "received": 851968,
+            "speed": 458133.74850639066,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1048576,
+          "total": 2097152,
+          "speed": 450789.391426657,
+          "dom": {
+            "indeterminate": false,
+            "value": "50.0",
+            "text": "1.0 MB / 2.0 MB · 440.2 KB/s",
+            "received": 1048576,
+            "speed": 450789.391426657,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1048576,
+          "total": 2097152,
+          "speed": 458201.2878721065,
+          "dom": {
+            "indeterminate": false,
+            "value": "50.0",
+            "text": "1.0 MB / 2.0 MB · 447.5 KB/s",
+            "received": 1048576,
+            "speed": 458201.2878721065,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1245184,
+          "total": 2097152,
+          "speed": 385160.6349328244,
+          "dom": {
+            "indeterminate": false,
+            "value": "59.4",
+            "text": "1.2 MB / 2.0 MB · 376.1 KB/s",
+            "received": 1245184,
+            "speed": 385160.6349328244,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1245184,
+          "total": 2097152,
+          "speed": 392665.28693507356,
+          "dom": {
+            "indeterminate": false,
+            "value": "59.4",
+            "text": "1.2 MB / 2.0 MB · 383.5 KB/s",
+            "received": 1245184,
+            "speed": 392665.28693507356,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1441792,
+          "total": 2097152,
+          "speed": 386520.0427356603,
+          "dom": {
+            "indeterminate": false,
+            "value": "68.8",
+            "text": "1.4 MB / 2.0 MB · 377.5 KB/s",
+            "received": 1441792,
+            "speed": 386520.0427356603,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1441792,
+          "total": 2097152,
+          "speed": 392619.45400158997,
+          "dom": {
+            "indeterminate": false,
+            "value": "68.8",
+            "text": "1.4 MB / 2.0 MB · 383.4 KB/s",
+            "received": 1441792,
+            "speed": 392619.45400158997,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1441792,
+          "total": 2097152,
+          "speed": 392596.67873928876,
+          "dom": {
+            "indeterminate": false,
+            "value": "68.8",
+            "text": "1.4 MB / 2.0 MB · 383.4 KB/s",
+            "received": 1441792,
+            "speed": 392596.67873928876,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1703936,
+          "total": 2097152,
+          "speed": 458050.35846090957,
+          "dom": {
+            "indeterminate": false,
+            "value": "81.3",
+            "text": "1.6 MB / 2.0 MB · 447.3 KB/s",
+            "received": 1703936,
+            "speed": 458050.35846090957,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1703936,
+          "total": 2097152,
+          "speed": 458011.85284580116,
+          "dom": {
+            "indeterminate": false,
+            "value": "81.3",
+            "text": "1.6 MB / 2.0 MB · 447.3 KB/s",
+            "received": 1703936,
+            "speed": 458011.85284580116,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1900544,
+          "total": 2097152,
+          "speed": 458135.3498191434,
+          "dom": {
+            "indeterminate": false,
+            "value": "90.6",
+            "text": "1.8 MB / 2.0 MB · 447.4 KB/s",
+            "received": 1900544,
+            "speed": 458135.3498191434,
+            "animation": "none",
+            "transform": "none"
+          }
+        },
+        {
+          "received": 1900544,
+          "total": 2097152,
+          "speed": 458258.5471963789,
+          "dom": {
+            "indeterminate": false,
+            "value": "100.0",
+            "text": "2.0 MB / 2.0 MB · 623.5 KB/s",
+            "received": 2097152,
+            "speed": 638510.7236208047,
+            "animation": "none",
+            "transform": "none"
+          }
+        }
+      ],
+      "bytes": 2097152
+    },
+    {
+      "case": "progress-stream",
+      "completed": true,
+      "samples": [
+        {
+          "received": 262144,
+          "total": null,
+          "speed": 630637.8910543597,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "256.0 KB · 615.9 KB/s",
+            "received": 262144,
+            "speed": 630637.8910543597,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 20.1344, 0)"
+          }
+        },
+        {
+          "received": 458752,
+          "total": null,
+          "speed": 193463.388051593,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "448.0 KB · 188.9 KB/s",
+            "received": 458752,
+            "speed": 193463.388051593,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, -110.573, 0)"
+          }
+        },
+        {
+          "received": 458752,
+          "total": null,
+          "speed": 196333.9962747989,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "448.0 KB · 191.7 KB/s",
+            "received": 458752,
+            "speed": 196333.9962747989,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, -56.8522, 0)"
+          }
+        },
+        {
+          "received": 458752,
+          "total": null,
+          "speed": 196340.8586277511,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "448.0 KB · 191.7 KB/s",
+            "received": 458752,
+            "speed": 196340.8586277511,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 66.0048, 0)"
+          }
+        },
+        {
+          "received": 655360,
+          "total": null,
+          "speed": 327281.82892692747,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "640.0 KB · 319.6 KB/s",
+            "received": 655360,
+            "speed": 327281.82892692747,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 216.628, 0)"
+          }
+        },
+        {
+          "received": 655360,
+          "total": null,
+          "speed": 327208.0351301283,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "640.0 KB · 319.5 KB/s",
+            "received": 655360,
+            "speed": 327208.0351301283,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 341.627, 0)"
+          }
+        },
+        {
+          "received": 851968,
+          "total": null,
+          "speed": 392556.70102063584,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "832.0 KB · 383.4 KB/s",
+            "received": 851968,
+            "speed": 392556.70102063584,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 397.951, 0)"
+          }
+        },
+        {
+          "received": 851968,
+          "total": null,
+          "speed": 392412.65281715273,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "832.0 KB · 383.2 KB/s",
+            "received": 851968,
+            "speed": 392412.65281715273,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, -99.5973, 0)"
+          }
+        },
+        {
+          "received": 1114112,
+          "total": null,
+          "speed": 457819.5589043795,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.1 MB · 447.1 KB/s",
+            "received": 1114112,
+            "speed": 457819.5589043795,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, -20.1247, 0)"
+          }
+        },
+        {
+          "received": 1114112,
+          "total": null,
+          "speed": 457712.99150927394,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.1 MB · 447.0 KB/s",
+            "received": 1114112,
+            "speed": 457712.99150927394,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 121.271, 0)"
+          }
+        },
+        {
+          "received": 1310720,
+          "total": null,
+          "speed": 457799.45667050563,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.3 MB · 447.1 KB/s",
+            "received": 1310720,
+            "speed": 457799.45667050563,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 272.618, 0)"
+          }
+        },
+        {
+          "received": 1310720,
+          "total": null,
+          "speed": 457973.8566202166,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.3 MB · 447.2 KB/s",
+            "received": 1310720,
+            "speed": 457973.8566202166,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 372.377, 0)"
+          }
+        },
+        {
+          "received": 1507328,
+          "total": null,
+          "speed": 384086.45696125936,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.4 MB · 375.1 KB/s",
+            "received": 1507328,
+            "speed": 384086.45696125936,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, -113.019, 0)"
+          }
+        },
+        {
+          "received": 1507328,
+          "total": null,
+          "speed": 392630.70540744916,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.4 MB · 383.4 KB/s",
+            "received": 1507328,
+            "speed": 392630.70540744916,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, -74.4375, 0)"
+          }
+        },
+        {
+          "received": 1507328,
+          "total": null,
+          "speed": 392672.5019899956,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.4 MB · 383.5 KB/s",
+            "received": 1507328,
+            "speed": 392672.5019899956,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 34.8193, 0)"
+          }
+        },
+        {
+          "received": 1769472,
+          "total": null,
+          "speed": 454942.67400204606,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.7 MB · 444.3 KB/s",
+            "received": 1769472,
+            "speed": 454942.67400204606,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 183.596, 0)"
+          }
+        },
+        {
+          "received": 1769472,
+          "total": null,
+          "speed": 458193.00453446794,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.7 MB · 447.5 KB/s",
+            "received": 1769472,
+            "speed": 458193.00453446794,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 320.129, 0)"
+          }
+        },
+        {
+          "received": 1966080,
+          "total": null,
+          "speed": 451791.7416079619,
+          "dom": {
+            "indeterminate": true,
+            "value": null,
+            "text": "1.9 MB · 441.2 KB/s",
+            "received": 1966080,
+            "speed": 451791.7416079619,
+            "animation": "download-stream",
+            "transform": "matrix(1, 0, 0, 1, 391.901, 0)"
+          }
+        }
+      ],
+      "bytes": 2097152
+    },
+    {
+      "case": "blob",
+      "completed": true,
+      "file": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-download-check-MFMNpr\\selected downloads\\axiver-check-1792918386970-blob.txt",
+      "id": 4
+    },
+    {
+      "case": "cancel",
+      "cancelled": true
+    },
+    {
+      "case": "cancel-dialog",
+      "cancelled": true
+    }
+  ],
+  "uiResults": {
+    "waitingUsesUnifiedLogo": true,
+    "startsCollapsed": true,
+    "initialPill": {
+      "width": 96.703125,
+      "expected": 96.703125,
+      "height": 26,
+      "viewWidth": 97,
+      "text": "已连接 · 广域"
+    },
+    "compactPill": true,
+    "pillBlurReducedTwentyPercent": true,
+    "frostFilter": "blur(12px) saturate(1.25)",
+    "native": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 1839412,
+          "Title": "AXIVER Frost Fixture",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 4393580,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    },
+    "backdropUpdates": true,
+    "enterSaves": true,
+    "staysBeforeTenSeconds": true,
+    "smoothReturnSamples": 21,
+    "smoothReturn": true,
+    "returnTrajectory": [
+      192,
+      147.64,
+      90.38,
+      41.59,
+      10.07,
+      6.84,
+      6.2,
+      6.24,
+      6.61,
+      7.75,
+      10.06,
+      12.77,
+      14.12,
+      14.29,
+      14.02,
+      13.36,
+      12.68,
+      12.17,
+      11.87,
+      11.76,
+      11.77,
+      11.79,
+      12
+    ],
+    "returnedHome": true,
+    "dragDidNotOpen": true,
+    "remoteDownloadsDenied": true,
+    "waitsForConfirmation": true,
+    "defaultModeNeedsOnlyConfirmation": true,
+    "pillAdaptsToText": true,
+    "progress-knownRealProgress": true,
+    "progress-knownRealSpeed": true,
+    "progress-knownProgressMode": true,
+    "progress-streamRealProgress": true,
+    "progress-streamRealSpeed": true,
+    "progress-streamProgressMode": true,
+    "streamAnimationMoves": true,
+    "askModeHasNoExtraConfirmation": true,
+    "nativeSaveDialog": true,
+    "modePersisted": true,
+    "originalHttpRequestUsedOnce": true,
+    "revealAccepted": true,
+    "actualSelectedDirectory": true,
+    "explorerSelectedExpectedFile": true,
+    "recentListHasAllRecords": true,
+    "finalNative": {
+      "VisibleNativeWindows": 1,
+      "InfrastructureWindows": 1,
+      "Windows": [
+        {
+          "Handle": 1839412,
+          "Title": "AXIVER Frost Fixture",
+          "Class": "Tauri Window",
+          "Width": 1296,
+          "Height": 859
+        },
+        {
+          "Handle": 4393580,
+          "Title": "",
+          "Class": "Tao Thread Event Target",
+          "Width": 16,
+          "Height": 16
+        }
+      ]
+    }
+  }
+}

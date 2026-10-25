@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "IPC belongs only to the bundled local shell child webview, never the shared native host or remote children.",
+  "webviews": ["shell"],
+  "permissions": ["core:default"]
+}
