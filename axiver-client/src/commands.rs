@@ -102,16 +102,22 @@ pub fn client_get_config(
 }
 
 #[tauri::command]
-pub fn client_update_config(
+pub async fn client_update_config(
     webview: Webview,
     app: AppHandle,
     state: State<'_, Arc<CoreState>>,
     input: UpdateConfigInput,
-) -> CommandResult<ClientConfigV1> {
+) -> Result<CommandResult<ClientConfigV1>, String> {
     if crate::app_state::ensure_trusted_caller(&webview).is_err() {
-        return forbidden();
+        return Ok(forbidden());
     }
-    save_config(&app, &state, &state.repository, &input)
+    // SQLite checkpoint, backup and commit must not block the UI message loop.
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        save_config(&app, &state, &state.repository, &input)
+    })
+    .await
+    .map_err(|error| format!("设置保存任务失败：{error}"))
 }
 
 #[tauri::command]
@@ -378,18 +384,21 @@ pub fn client_get_download_settings(
     CommandResult::ok(state.downloads.settings())
 }
 #[tauri::command]
-pub fn client_set_download_mode(
+pub async fn client_set_download_mode(
     webview: Webview,
     state: State<'_, Arc<CoreState>>,
     mode: crate::downloads::DownloadMode,
-) -> CommandResult<crate::downloads::DownloadSettings> {
+) -> Result<CommandResult<crate::downloads::DownloadSettings>, String> {
     if crate::app_state::ensure_trusted_caller(&webview).is_err() {
-        return forbidden();
+        return Ok(forbidden());
     }
-    match state.downloads.set_mode(mode) {
+    let downloads = state.downloads.clone();
+    tauri::async_runtime::spawn_blocking(move || match downloads.set_mode(mode) {
         Ok(settings) => CommandResult::ok(settings),
-        Err(e) => CommandResult::err(error_code::OPERATION_FAILED, e, true),
-    }
+        Err(error) => CommandResult::err(error_code::OPERATION_FAILED, error, true),
+    })
+    .await
+    .map_err(|error| format!("下载设置保存任务失败：{error}"))
 }
 #[tauri::command]
 pub async fn client_choose_download_directory(

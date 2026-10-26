@@ -215,8 +215,10 @@ impl ManagerInner {
                 Err(_) => return,
             }
         };
-        if let Ok(snapshot) = self.snapshot.lock() {
-            let _ = self.app.emit(EVENT_CONNECTION_STATUS, &*snapshot);
+        // Listeners may read the manager again; emit after releasing its lock.
+        let snapshot = self.snapshot.lock().ok().map(|guard| guard.clone());
+        if let Some(snapshot) = snapshot {
+            let _ = self.app.emit(EVENT_CONNECTION_STATUS, &snapshot);
         }
         if let Some(shell) = self.app.get_webview(SHELL_LABEL) {
             let _ = shell.eval(format!(

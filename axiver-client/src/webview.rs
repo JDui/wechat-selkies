@@ -116,9 +116,13 @@ pub fn build_remote(
         .on_new_window(move |url, _features| {
             let current = session_origin_snapshot(&popup_origin);
             if is_internal_uploader_url(&url, current.as_deref()) {
-                if let Some(ui) = popup_app.try_state::<Arc<crate::ui_layout::UiController>>() {
-                    let _ = ui.open_tool(url.clone());
-                }
+                // Let NewWindowRequested return before navigating another WebView.
+                let app = popup_app.clone();
+                std::thread::spawn(move || {
+                    if let Some(ui) = app.try_state::<Arc<crate::ui_layout::UiController>>() {
+                        let _ = ui.open_tool(url);
+                    }
+                });
                 return NewWindowResponse::Deny;
             }
 

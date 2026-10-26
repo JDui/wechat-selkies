@@ -61,26 +61,37 @@ pub fn start(app: tauri::AppHandle) {
                     platform.controller().CoreWebView2()?.CapturePreview(
                         COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG, &stream,
                         &CapturePreviewCompletedHandler::create(Box::new(move |status| {
-                            let result = || -> windows::core::Result<()> {
+                            // Read the COM stream on its owning UI apartment, but
+                            // keep encoding and cross-webview calls out of this callback.
+                            let result = (|| -> windows::core::Result<Option<Vec<u8>>> {
                                 status?;
                                 let mut stat = STATSTG::default();
                                 output.Stat(&mut stat, STATFLAG_NONAME)?;
-                                // Bounds prevent a pathological page/frame from allocating without limit.
-                                if stat.cbSize == 0 || stat.cbSize > 16 * 1024 * 1024 { return Ok(()); }
+                                if stat.cbSize == 0 || stat.cbSize > 16 * 1024 * 1024 {
+                                    return Ok(None);
+                                }
                                 let mut bytes = vec![0u8; stat.cbSize as usize];
                                 output.Seek(0, STREAM_SEEK_SET, None)?;
                                 let mut count = 0;
-                                output.Read(bytes.as_mut_ptr().cast(), bytes.len() as u32, Some(&mut count)).ok()?;
+                                output.Read(bytes.as_mut_ptr().cast(), bytes.len() as u32, Some(&mut count))?;
                                 bytes.truncate(count as usize);
-                                if let (Some(shell), Some(size)) = (target.get_webview(SHELL_LABEL), logical) {
-                                    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                                    let json = serde_json::json!({"src":format!("data:image/jpeg;base64,{data}"),"width":size.width,"height":size.height});
-                                    let _ = shell.eval(format!("window.__AXIVER_SHELL__&&window.__AXIVER_SHELL__.onBackdrop({json});"));
-                                }
-                                Ok(())
-                            };
-                            let _ = result();
-                            finished.store(false, Ordering::SeqCst);
+                                Ok(Some(bytes))
+                            })();
+                            if let Ok(Some(bytes)) = result {
+                                let finished = finished.clone();
+                                let target = target.clone();
+                                let logical = logical.clone();
+                                std::thread::spawn(move || {
+                                    if let (Some(shell), Some(size)) = (target.get_webview(SHELL_LABEL), logical) {
+                                        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                        let json = serde_json::json!({"src":format!("data:image/jpeg;base64,{data}"),"width":size.width,"height":size.height});
+                                        let _ = shell.eval(format!("window.__AXIVER_SHELL__&&window.__AXIVER_SHELL__.onBackdrop({json});"));
+                                    }
+                                    finished.store(false, Ordering::SeqCst);
+                                });
+                            } else {
+                                finished.store(false, Ordering::SeqCst);
+                            }
                             Ok(())
                         })),
                     )?;

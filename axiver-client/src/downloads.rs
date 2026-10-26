@@ -78,6 +78,9 @@ pub struct DownloadManager {
     settings: Mutex<DownloadSettings>,
     settings_path: PathBuf,
     dialog_gate: tauri::async_runtime::Mutex<()>,
+    reservation_gate: tauri::async_runtime::Mutex<()>,
+    persistence_gate: Mutex<()>,
+    publish_revision: Arc<AtomicU64>,
 }
 
 impl DownloadManager {
@@ -115,6 +118,9 @@ impl DownloadManager {
             settings: Mutex::new(settings),
             settings_path,
             dialog_gate: tauri::async_runtime::Mutex::new(()),
+            reservation_gate: tauri::async_runtime::Mutex::new(()),
+            persistence_gate: Mutex::new(()),
+            publish_revision: Arc::new(AtomicU64::new(0)),
         }
     }
     pub fn settings(&self) -> DownloadSettings {
@@ -131,13 +137,12 @@ impl DownloadManager {
         Ok(self.settings())
     }
     fn save_settings(&self, settings: DownloadSettings) -> Result<DownloadSettings, String> {
-        let mut current = self.settings.lock().unwrap();
-        std::fs::write(
-            &self.settings_path,
-            serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| format!("保存下载设置失败：{e}"))?;
-        *current = settings.clone();
+        // Only serialize writers; the settings lock is never held during disk IO.
+        let _persistence = self.persistence_gate.lock().unwrap();
+        let bytes = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
+        std::fs::write(&self.settings_path, bytes)
+            .map_err(|e| format!("保存下载设置失败：{e}"))?;
+        *self.settings.lock().unwrap() = settings.clone();
         Ok(settings)
     }
     pub async fn choose_directory(&self) -> Result<DownloadSettings, String> {
@@ -160,12 +165,25 @@ impl DownloadManager {
         self.records.lock().unwrap().clone()
     }
     fn publish(&self) {
-        if let Some(shell) = self.app.get_webview(SHELL_LABEL) {
-            let json = serde_json::to_string(&self.snapshot()).unwrap();
-            let _ = shell.eval(format!(
-                "window.__AXIVER_SHELL__&&window.__AXIVER_SHELL__.onDownloads({json});"
-            ));
-        }
+        // Dispatch Shell updates outside WebView2 COM event handlers.
+        let app = self.app.clone();
+        let snapshot = self.snapshot();
+        let revision = self.publish_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = self.publish_revision.clone();
+        tauri::async_runtime::spawn(async move {
+            if current.load(Ordering::SeqCst) != revision {
+                return;
+            }
+            if let (Some(shell), Ok(json)) =
+                (app.get_webview(SHELL_LABEL), serde_json::to_string(&snapshot))
+            {
+                if current.load(Ordering::SeqCst) == revision {
+                    let _ = shell.eval(format!(
+                        "window.__AXIVER_SHELL__&&window.__AXIVER_SHELL__.onDownloads({json});"
+                    ));
+                }
+            }
+        });
     }
     fn update(&self, id: u64, change: impl FnOnce(&mut DownloadRecord)) {
         if let Some(record) = self.records.lock().unwrap().iter_mut().find(|r| r.id == id) {
@@ -216,15 +234,26 @@ impl DownloadManager {
             (record.name.clone(), record.mode, record.directory.clone())
         };
         if mode == DownloadMode::DefaultLocation {
-            let directory = directory
-                .filter(|p| p.is_dir())
-                .ok_or("默认下载目录不可用，请在设置中重新选择")?;
-            let mut records = self.records.lock().unwrap();
-            let occupied = records
+            // Reserve names serially, but never hold the records lock while
+            // checking a slow/filtered filesystem.
+            let _reservation = self.reservation_gate.lock().await;
+            let directory = directory.ok_or("默认下载目录不可用，请在设置中重新选择")?;
+            let occupied = self
+                .records
+                .lock()
+                .unwrap()
                 .iter()
-                .filter_map(|r| r.path.clone())
+                .filter_map(|record| record.path.clone())
                 .collect::<Vec<_>>();
-            let path = available_path(&directory, &name, &occupied)?;
+            let path = tauri::async_runtime::spawn_blocking(move || {
+                if !directory.is_dir() {
+                    return Err("默认下载目录不可用，请在设置中重新选择".to_string());
+                }
+                available_path(&directory, &name, &occupied)
+            })
+            .await
+            .map_err(|error| format!("下载路径检查任务失败：{error}"))??;
+            let mut records = self.records.lock().unwrap();
             let record = records
                 .iter_mut()
                 .find(|r| r.id == id)
@@ -382,7 +411,14 @@ mod native {
                         if state==COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
                             let mut path=PWSTR::null();operation.ResultFilePath(&mut path)?;
                             let path=PathBuf::from(take_pwstr(path));
-                            changes.update(id,|r|{r.status="completed".into();r.speed_bps=0.0;r.name=path.file_name().unwrap_or_default().to_string_lossy().to_string();r.path=Some(path.clone());if let Ok(meta)=path.metadata(){r.total=Some(meta.len());r.received=meta.len();}});
+                            changes.update(id,|r|{
+                                r.status="completed".into();
+                                r.speed_bps=0.0;
+                                r.name=path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                r.path=Some(path.clone());
+                                // Do not query the disk from the COM completion handler.
+                                if r.total.is_none() && r.received>0 {r.total=Some(r.received);}
+                            });
                         } else if state==COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED {
                             let mut reason=COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON::default();operation.InterruptReason(&mut reason)?;
                             changes.update(id,|r|{
