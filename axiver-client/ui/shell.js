@@ -83,8 +83,14 @@
   }
   function materialOffsets(layout) {
     if (!layout || !backdrop) return;
-    for (const [id,x,y] of [["pill",layout.viewX+layout.pillX,layout.viewY+layout.pillY],["panel",layout.viewX+layout.panelX,layout.viewY+layout.panelY]]) {
-      const surface=$(id);
+    for (const id of ["pill", "panel", "pill-wan"]) {
+      const surface = $(id);
+      if (surface.hidden) continue;
+      const rect = surface.getBoundingClientRect();
+      // Each surface samples the remote pixels directly beneath itself,
+      // including the chip as it follows the changing pill width.
+      const x = layout.viewX + rect.left + surface.clientLeft;
+      const y = layout.viewY + rect.top + surface.clientTop;
       surface.style.setProperty("--sample-x", (-x+18)+"px");
       surface.style.setProperty("--sample-y", (-y+18)+"px");
     }
@@ -185,13 +191,169 @@
     if(!result?.ok)$("download-feedback").textContent=result?.error?.message||"操作未完成";
   });
   const pill = $("pill");
-  let measuredPillWidth=0;
-  const pillObserver=new ResizeObserver(()=>{
-    const width=Math.ceil(pill.getBoundingClientRect().width);
-    if(width===measuredPillWidth)return;
-    ui("pill_width",{width}).then(result=>{if(result?.ok)measuredPillWidth=width;});
+  const dock = $("dock");
+  const wanBtn = $("pill-wan");
+  const wanLabelNode = document.createTextNode("");
+  const wanArrow = document.createElement("span");
+  wanArrow.className = "wan-arrow";
+  wanArrow.setAttribute("aria-hidden", "true");
+  wanArrow.textContent = "↗";
+  wanBtn.append(wanLabelNode, wanArrow);
+  let measuredPillWidth = 0;
+  let requestedPillWidth = 0;
+  let pillWidthRequests = Promise.resolve();
+  let pillWidthAnim = null;
+  let pillLabelAnim = null;
+  let pillWidthBusy = false;
+  let pillCollapsed = true;
+  let pillTargetWidth = 26;
+  let pillAnimationGeneration = 0;
+  function sendPillWidth(width) {
+    width = Math.ceil(width);
+    if (width === requestedPillWidth) return pillWidthRequests;
+    requestedPillWidth = width;
+    // Native eval-push and the IPC reply both apply the layout. Serialize
+    // width changes so an older reservation cannot overwrite the rest size.
+    pillWidthRequests = pillWidthRequests.then(async () => {
+      const result = await ui("pill_width", {width});
+      if (result?.ok) measuredPillWidth = width;
+      else if (requestedPillWidth === width) requestedPillWidth = 0;
+      return result;
+    });
+    return pillWidthRequests;
+  }
+  const pillObserver = new ResizeObserver(() => {
+    if (pillWidthBusy) return;
+    const width = Math.ceil(dock.getBoundingClientRect().width);
+    if (width === measuredPillWidth) return;
+    sendPillWidth(width);
+    materialOffsets(window.__AXIVER_SHELL__?.layout);
   });
-  pillObserver.observe(pill);
+  pillObserver.observe(dock);
+
+  // ---- auto-docking status pill --------------------------------------------
+  // Idle: only the dot. Hover/focus opens the label with a springy overshoot
+  // bounce; leaving re-collapses 0.5 s later with the mirrored bounce. The
+  // native view is pre-widened so the bounce never clips, then settles.
+  // The panel being open, an active drag or a pending download notice keep
+  // the pill expanded.
+  const PILL_COLLAPSE_MS = 500;
+  let pillAttention = false;
+  let pillCollapseTimer = null;
+  function schedulePillCollapse(delay) {
+    clearTimeout(pillCollapseTimer);
+    pillCollapseTimer = setTimeout(() => { pillAttention = false; syncPill(); }, delay);
+  }
+  const LAN_ATTEMPT_PHASES = new Set(["discovering_lan", "scanning_subnet", "connecting_lan"]);
+  function renderWanChip() {
+    const snapshot = lastSnapshot;
+    let mode = "";
+    if (snapshot && !downloadNotice) {
+      // Trying (or freshly failed on) LAN -> offer the WAN jump;
+      // trying WAN -> offer a LAN retry. Hidden once actually connected.
+      if (LAN_ATTEMPT_PHASES.has(snapshot.phase) || snapshot.phase === "disconnected") mode = "wan";
+      else if (snapshot.phase === "connecting_wan") mode = "lan";
+    }
+    if (!mode) {
+      wanBtn.hidden = true;
+      wanBtn.removeAttribute("data-mode");
+      return;
+    }
+    wanBtn.hidden = false;
+    wanBtn.dataset.mode = mode;
+    wanLabelNode.nodeValue = mode === "wan" ? "切外网" : "转内网";
+    if (mode === "wan") {
+      const wide = (config?.wideUrl || "").trim();
+      wanBtn.title = wide ? "正在尝试局域网，点击切外网直连" : "正在尝试局域网，点击去设置外网地址";
+    } else {
+      wanBtn.title = "正在尝试外网地址，点击转内网重新嗅探局域网";
+    }
+    wanBtn.setAttribute("aria-label", wanBtn.title);
+  }
+  function naturalDockWidths() {
+    // 2px border + 16px padding + 8px dot + 6px gap. scrollWidth
+    // measures the full label even when the circular rest state hides it.
+    return {wc: 26, we: Math.min(240, Math.max(40, $("pill-label").scrollWidth + 32))};
+  }
+  async function animatePillTo(expanded) {
+    const generation = ++pillAnimationGeneration;
+    const {wc, we} = naturalDockWidths();
+    const fromWidth = pill.getBoundingClientRect().width;
+    const fromOpacity = getComputedStyle($("pill-label")).opacity;
+    const targetWidth = expanded ? we : wc;
+    if (pillWidthAnim) pillWidthAnim.cancel();
+    if (pillLabelAnim) pillLabelAnim.cancel();
+    pillWidthAnim = pillLabelAnim = null;
+    pillWidthBusy = true;
+    $("pill-label").style.opacity = fromOpacity;
+    pill.style.width = fromWidth + "px";
+    pill.classList.remove("collapsed");
+    pill.classList.add("animating");
+    const chipExtra = wanBtn.hidden ? 0 : Math.ceil(wanBtn.getBoundingClientRect().width) + 6;
+    // Reserve native bounds before revealing pixels. A clip-path on a wide
+    // button cuts away its right border instead of drawing a smaller capsule.
+    await sendPillWidth(Math.max(Math.ceil(Math.max(fromWidth, we) + chipExtra + 4), measuredPillWidth));
+    if (generation !== pillAnimationGeneration) return;
+    const keyframes = expanded
+      ? [{width: fromWidth + "px"}, {width: (we + 3) + "px", offset: .72}, {width: we + "px"}]
+      : [{width: fromWidth + "px"}, {width: wc + "px"}];
+    const duration = expanded ? 400 : 320;
+    const easing = expanded ? "cubic-bezier(.25,.85,.3,1)" : "cubic-bezier(.4,.6,.25,1)";
+    pillLabelAnim = $("pill-label").animate(
+      [{opacity: fromOpacity}, {opacity: expanded ? 1 : 0}],
+      {duration, easing: "cubic-bezier(.3,.8,.35,1)", fill: "forwards"}
+    );
+    const anim = pill.animate(keyframes, {duration, easing, fill: "forwards"});
+    pillWidthAnim = anim;
+    function sampleMaterial() {
+      if (generation !== pillAnimationGeneration) return;
+      materialOffsets(window.__AXIVER_SHELL__?.layout);
+      if (pillWidthBusy) requestAnimationFrame(sampleMaterial);
+    }
+    requestAnimationFrame(sampleMaterial);
+    anim.finished.then(() => {
+      if (generation !== pillAnimationGeneration) return;
+      pill.style.width = expanded ? targetWidth + "px" : "";
+      pill.classList.toggle("collapsed", !expanded);
+      anim.cancel();
+      if (pillLabelAnim) { pillLabelAnim.cancel(); pillLabelAnim = null; }
+      $("pill-label").style.removeProperty("opacity");
+      pillWidthAnim = null;
+      pill.classList.remove("animating");
+      pillWidthBusy = false;
+      const width = Math.ceil(dock.getBoundingClientRect().width);
+      if (width !== measuredPillWidth) sendPillWidth(width);
+    }).catch(() => {/* superseded by a newer toggle */});
+  }
+  function syncPill(options = {}) {
+    renderWanChip();
+    const collapsed = $("panel").hidden && !pillAttention && !drag && document.activeElement !== pill && !downloadNotice;
+    const targetWidth = collapsed ? 26 : naturalDockWidths().we;
+    // Compare the desired state, not the temporary animation classes:
+    // echoed layout reports must not restart a closing animation forever.
+    if (collapsed !== pillCollapsed || targetWidth !== pillTargetWidth) {
+      pillCollapsed = collapsed;
+      pillTargetWidth = targetWidth;
+      if (options.instant || motion.matches) {
+        ++pillAnimationGeneration;
+        if (pillWidthAnim) pillWidthAnim.cancel();
+        if (pillLabelAnim) pillLabelAnim.cancel();
+        pillWidthAnim = pillLabelAnim = null;
+        $("pill-label").style.removeProperty("opacity");
+        pill.classList.remove("animating");
+        pill.classList.toggle("collapsed", collapsed);
+        pill.style.width = collapsed ? "" : targetWidth + "px";
+        pillWidthBusy = false;
+      } else {
+        animatePillTo(!collapsed);
+      }
+    }
+    materialOffsets(window.__AXIVER_SHELL__?.layout);
+  }
+  pill.addEventListener("mouseenter", () => { pillAttention = true; clearTimeout(pillCollapseTimer); syncPill(); });
+  pill.addEventListener("mouseleave", () => schedulePillCollapse(PILL_COLLAPSE_MS));
+  pill.addEventListener("focus", () => { pillAttention = true; clearTimeout(pillCollapseTimer); syncPill(); });
+  pill.addEventListener("blur", () => schedulePillCollapse(PILL_COLLAPSE_MS));
 
   function selectTab(name, focus = false) {
     activeTab = name;
@@ -213,17 +375,18 @@
     const text = downloadNotice
       ? (downloadNotice.failed ? "下载失败" : downloadNotice.pending ? "等待确认下载" : downloadNotice.choosing ? "选择保存位置" : downloadNotice.cancelled ? "下载已取消" : downloadNotice.finished ? "下载完成" : "正在下载…")
       : snapshot ? (phaseLabels[snapshot.phase] || "正在连接") + (snapshot.kind === "lan" ? " · 局域网" : snapshot.kind === "wan" ? " · 广域" : "") : "正在准备";
-    if($("pill-label").textContent!==text){$("pill-label").textContent=text;animate($("pill-label"),[{opacity:0,transform:"translateY(2px)"},{opacity:1,transform:"translateY(0)"}],{duration:150});}
+    if($("pill-label").textContent!==text){$("pill-label").textContent=text;if(!pillCollapsed&&!pillWidthBusy)animate($("pill-label"),[{opacity:0,transform:"translateY(2px)"},{opacity:1,transform:"translateY(0)"}],{duration:150});}
     $("pill-dot").className = "dot " + (downloadNotice ? downloadNotice.failed ? "dot-err" : downloadNotice.finished ? "dot-ok" : "dot-busy" : phaseClass[snapshot?.phase] || "dot-idle");
     pill.title = (downloadNotice?.message || text) + " — 点击打开面板；拖动后 10 秒归位";
+    syncPill();
   }
 
   function applyLayout(layout) {
     if (!layout) return;
     const wasExpanded=window.__AXIVER_SHELL__.layout?.expanded;
     window.__AXIVER_SHELL__.layout = layout;
-    pill.style.left = layout.pillX + "px";
-    pill.style.top = layout.pillY + "px";
+    dock.style.left = layout.pillX + "px";
+    dock.style.top = layout.pillY + "px";
     pill.setAttribute("aria-expanded", String(layout.expanded));
     const panel = $("panel");
     panel.hidden = !layout.expanded;
@@ -234,6 +397,7 @@
     panel.style.height = layout.panelHeight + "px";
     $("btn-return").hidden = !layout.toolActive;
     materialOffsets(layout);
+    syncPill();
   }
 
   async function ui(action, values = {}) {
@@ -274,6 +438,9 @@
     if (!drag.moved) {
       drag.moved = true;
       pill.classList.add("dragging");
+      clearTimeout(pillCollapseTimer);
+      pillAttention = true;
+      syncPill();
       moveTail = moveTail.then(() => ui("drag_start"));
     }
     drag.latest = {dx,dy};
@@ -299,6 +466,7 @@
       suppressClickUntil = performance.now() + 500;
       moveTail = moveTail.then(() => ui("drag_end"));
     }
+    schedulePillCollapse(PILL_COLLAPSE_MS);
   }
   pill.addEventListener("pointerup", finishDrag);
   pill.addEventListener("pointercancel", finishDrag);
@@ -316,6 +484,34 @@
   });
   $("btn-reset").addEventListener("click", () => ui("reset"));
   $("btn-return").addEventListener("click", () => ui("close_tool"));
+
+  // Attempt-only breathing chip. While LAN is being tried (or has just
+  // failed): jump straight to the configured WAN address — or to the
+  // wide-URL setting when none exists yet. While WAN is being tried:
+  // restart the LAN-first discovery pipeline.
+  wanBtn.addEventListener("click", async event => {
+    event.stopPropagation();
+    const mode = wanBtn.dataset.mode;
+    if (mode === "lan") {
+      const result = await call("client_reconnect", undefined, null);
+      opStatus.textContent = result?.ok ? "" : `重试局域网失败：${result?.error?.message || "未知错误"}`;
+      return;
+    }
+    if (mode !== "wan") return;
+    const wide = (config?.wideUrl || "").trim();
+    if (!wide) {
+      await ui("open");
+      selectTab("settings", true);
+      $("connection-settings").open = true;
+      saveStatus.textContent = "尚未设置外网地址：填写广域地址并保存后即可切换";
+      saveStatus.className = "inline-hint";
+      wideInput.scrollIntoView({block: "center"});
+      wideInput.focus();
+      return;
+    }
+    const result = await call("client_connect_wan", undefined, null);
+    opStatus.textContent = result?.ok ? "" : `切换外网失败：${result?.error?.message || "未知错误"}`;
+  });
 
   const phaseClass = {
     connected: "dot-ok",
@@ -405,6 +601,7 @@
   function renderConfig(next) {
     if (!next) return;
     config = next;
+    renderWanChip();
     // Never clobber what the user is editing (legacy drawer behaviour kept).
     if (editingDirty || document.activeElement === broadcastInput || document.activeElement === wideInput) {
       return;
@@ -489,7 +686,7 @@
         invoke("client_get_download_settings"),
       ]);
       await ui("get");
-      await ui("pill_width",{width:Math.ceil(pill.getBoundingClientRect().width)});
+      await ui("pill_width",{width:Math.ceil(dock.getBoundingClientRect().width)});
       renderDownloadSettings(downloadOptions?.ok?downloadOptions.data:null);
       renderDownloads(history?.ok ? history.data : []);
       renderConfig(cfg?.ok ? cfg.data : null);

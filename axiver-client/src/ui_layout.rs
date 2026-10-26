@@ -12,6 +12,8 @@ pub const DOT_RESET_DELAY: Duration = Duration::from_secs(10);
 const MARGIN: f64 = 12.0;
 const PILL_WIDTH: f64 = 128.0;
 const PILL_HEIGHT: f64 = 26.0;
+// Leave room for antialiased rounded edges and the material's soft shadow.
+const SURFACE_GUTTER: f64 = 6.0;
 
 #[derive(Default)]
 struct UiState {
@@ -91,6 +93,10 @@ fn placement(state: &mut UiState, width: f64, height: f64) -> Placement {
     } else {
         (state.x, state.y, pill_width, PILL_HEIGHT)
     };
+    let right = (vx + vw + SURFACE_GUTTER).min(width);
+    let bottom = (vy + vh + SURFACE_GUTTER).min(height);
+    let vx = (vx - SURFACE_GUTTER).max(0.0);
+    let vy = (vy - SURFACE_GUTTER).max(0.0);
     Placement {
         expanded: state.expanded,
         tool_active: state.tool_active,
@@ -98,8 +104,8 @@ fn placement(state: &mut UiState, width: f64, height: f64) -> Placement {
         y: state.y,
         view_x: vx,
         view_y: vy,
-        width: vw,
-        height: vh,
+        width: right - vx,
+        height: bottom - vy,
         pill_x: state.x - vx,
         pill_y: state.y - vy,
         panel_x: px - vx,
@@ -248,7 +254,9 @@ impl UiController {
     }
 
     pub fn set_pill_width(&self, width: f64) -> tauri::Result<Placement> {
-        self.state.lock().unwrap().pill_width = Some(width.ceil().clamp(48.0, 240.0));
+        // The Shell docks the pill (auto-collapsed to just the dot) plus an
+        // optional WAN chip; the dock can be as narrow as the bare dot.
+        self.state.lock().unwrap().pill_width = Some(width.ceil().clamp(24.0, 380.0));
         self.apply()
     }
 
@@ -381,7 +389,7 @@ mod tests {
                 (400.0, 250.0),
             ] {
                 for expanded in [false, true] {
-                    for pill_width in [78.0, 112.0, 240.0] {
+                    for pill_width in [25.0, 78.0, 112.0, 240.0, 340.0] {
                         let mut s = UiState {
                             x,
                             y,

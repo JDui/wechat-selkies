@@ -200,7 +200,10 @@ mod tests {
     #[test]
     fn stale_generation_cancels_before_browsing() {
         let daemon = ServiceDaemon::new().unwrap();
-        let cancel = CancelToken { my_generation: 4 };
+        let cancel = CancelToken {
+            my_generation: 4,
+            live: None,
+        };
         let outcome = discover_lan(&daemon, "AXISNSBOX-000", Duration::from_millis(50), &cancel, 5, |_| {})
             .unwrap();
         assert!(matches!(outcome, LanOutcome::Cancelled));

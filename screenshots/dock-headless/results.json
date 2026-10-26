@@ -1,0 +1,739 @@
+{
+  "scope": "headless Chromium with delayed IPC fixture; no native client launched",
+  "results": [
+    {
+      "scale": 1,
+      "opening": [
+        {
+          "width": 42.765625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 81.8125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 111.796875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 110.484375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.671875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.28125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.109375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.015625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        }
+      ],
+      "closing": [
+        {
+          "width": 90.578125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 62.3125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 43.0625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 32.375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 28.46875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26.65625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26.015625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        }
+      ],
+      "offset": {
+        "actual": -110,
+        "expected": -110
+      },
+      "nativeWidthReports": [
+        26,
+        99,
+        186,
+        182,
+        186,
+        99,
+        186,
+        182,
+        186,
+        197,
+        193,
+        197,
+        99,
+        193,
+        99
+      ]
+    },
+    {
+      "scale": 1.25,
+      "opening": [
+        {
+          "width": 42.875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 88.578125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 111.78125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 110.484375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.671875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.328125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.109375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.03125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        }
+      ],
+      "closing": [
+        {
+          "width": 98.5625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 72.234375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 49.40625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 34.953125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 29.71875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26.890625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26.078125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        }
+      ],
+      "offset": {
+        "actual": -110,
+        "expected": -110
+      },
+      "nativeWidthReports": [
+        26,
+        26,
+        99,
+        186,
+        182,
+        186,
+        99,
+        186,
+        182,
+        186,
+        197,
+        193,
+        197,
+        99,
+        193,
+        99
+      ]
+    },
+    {
+      "scale": 1.5,
+      "opening": [
+        {
+          "width": 51.125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 94.75,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 111.453125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 110.140625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.59375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.234375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.09375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109.015625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 109,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        }
+      ],
+      "closing": [
+        {
+          "width": 90.609375,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 67.265625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 43.046875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 33.578125,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 28.46875,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26.640625,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": true
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        },
+        {
+          "width": 26,
+          "height": 26,
+          "dotX": 13,
+          "dotY": 13,
+          "gap": 6,
+          "busy": false
+        }
+      ],
+      "offset": {
+        "actual": -110,
+        "expected": -110
+      },
+      "nativeWidthReports": [
+        26,
+        26,
+        99,
+        186,
+        182,
+        186,
+        99,
+        186,
+        182,
+        186,
+        197,
+        193,
+        197,
+        99,
+        193,
+        99
+      ]
+    }
+  ]
+}

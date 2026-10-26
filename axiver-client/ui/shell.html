@@ -5,7 +5,7 @@
 <title>AXIVER</title><link rel="stylesheet" href="./shell.css" />
 </head>
 <body>
-<button id="pill" class="glass pill" type="button" aria-expanded="false" aria-controls="panel" title="点击打开控制面板；拖动可移动，松手 10 秒后归位"><span id="pill-dot" class="dot dot-idle" aria-hidden="true"></span><span id="pill-label">正在准备</span></button>
+<div id="dock" class="dock"><button id="pill" class="glass pill collapsed" type="button" aria-expanded="false" aria-controls="panel" title="点击打开控制面板；拖动可移动，松手 10 秒后归位"><span id="pill-dot" class="dot dot-idle" aria-hidden="true"></span><span id="pill-label">正在准备</span></button><button id="pill-wan" class="glass wan" type="button" hidden></button></div>
 <section id="panel" class="glass panel" aria-label="AXIVER 控制面板" hidden>
 <header class="panel-header"><div><strong>AXIVER</strong><span class="eyebrow">会话控制</span></div><button id="btn-hide" class="quiet" type="button" aria-label="收起控制面板">收起</button></header>
 <nav class="tabs" role="tablist" aria-label="控制面板">

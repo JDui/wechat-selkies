@@ -1,6 +1,6 @@
 [package]
 name = "axiver-client"
-version = "0.2.0"
+version = "0.2.1"
 description = "Portable AXIVER desktop client with LAN discovery and WAN fallback (local shell rebuild)"
 authors = ["AXIVER"]
 edition = "2024"

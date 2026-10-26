@@ -34,6 +34,9 @@ use url::Url;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManagerCommand {
     Reconnect,
+    /// Skip LAN discovery on the next attempt and go straight to the WAN
+    /// fallback (Shell "外网" chip). Ignored when no wide URL is configured.
+    ForceWan,
     Shutdown,
 }
 
@@ -42,7 +45,7 @@ struct ManagerInner {
     remote: Webview,
     waiting_url: Url,
     snapshot: Mutex<ConnectionSnapshotV1>,
-    generation: AtomicU64,
+    generation: Arc<AtomicU64>,
     failed_attempts: AtomicU32,
     config: Arc<Mutex<crate::protocol::ClientConfigV1>>,
     session_origin: Arc<Mutex<Option<String>>>,
@@ -71,7 +74,7 @@ impl ConnectionManager {
                 remote,
                 waiting_url,
                 snapshot: Mutex::new(ConnectionSnapshotV1::default()),
-                generation: AtomicU64::new(0),
+                generation: Arc::new(AtomicU64::new(0)),
                 failed_attempts: AtomicU32::new(0),
                 config,
                 session_origin,
@@ -95,8 +98,19 @@ impl ConnectionManager {
     }
 
     /// Queue a full re-discovery (never equivalent to a plain page reload).
+    /// The generation bump also aborts an in-flight attempt early.
     pub fn reconnect(&self) {
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
         let _ = self.commands.send(ManagerCommand::Reconnect);
+    }
+
+    /// Queue an immediate switch to the configured wide (WAN) address,
+    /// skipping mDNS and subnet scanning on the next attempt. The generation
+    /// bump aborts an in-flight LAN attempt early so the switch feels
+    /// immediate instead of waiting out the discovery timeouts.
+    pub fn force_wan(&self) {
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        let _ = self.commands.send(ManagerCommand::ForceWan);
     }
 
     pub fn snapshot(&self) -> ConnectionSnapshotV1 {
@@ -259,18 +273,27 @@ fn connection_worker(inner: Arc<ManagerInner>, receiver: Receiver<ManagerCommand
     };
     // None = start discovery immediately; Some(delay) = wait before retrying.
     let mut wait_before_retry: Option<Duration> = None;
+    // Set by the Shell "外网" chip: the next attempt skips LAN stages entirely.
+    let mut pending_force_wan = false;
 
     loop {
         // ---- command gate -------------------------------------------------
         if let Some(delay) = wait_before_retry.take() {
             match receiver.recv_timeout(delay) {
                 Ok(ManagerCommand::Shutdown) => return,
+                Ok(ManagerCommand::ForceWan) => pending_force_wan = true,
                 Ok(ManagerCommand::Reconnect) | Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
         // Coalesce queued reconnect requests into one task.
-        while receiver.try_recv().is_ok() {}
+        while let Ok(command) = receiver.try_recv() {
+            match command {
+                ManagerCommand::Shutdown => return,
+                ManagerCommand::ForceWan => pending_force_wan = true,
+                ManagerCommand::Reconnect => {}
+            }
+        }
 
         let current = inner
             .config
@@ -280,100 +303,122 @@ fn connection_worker(inner: Arc<ManagerInner>, receiver: Receiver<ManagerCommand
         let generation = inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel = CancelToken {
             my_generation: generation,
+            live: Some(inner.generation.clone()),
         };
         let is_stale = || inner.generation.load(Ordering::SeqCst) != generation;
         inner.reset_target_fields();
+        // A forced WAN switch is only meaningful with a configured wide URL.
+        let force_wan = pending_force_wan && !current.wide_url.trim().is_empty();
+        pending_force_wan = false;
 
-        // ---- stage 1: mDNS -------------------------------------------------
-        inner.update(|snapshot| {
-            snapshot.phase = ConnectionPhase::DiscoveringLan;
-            snapshot.kind = LinkKind::None;
-            snapshot.target_url = None;
-            snapshot.detail = format!("正在嗅探 {}", current.broadcast_name);
-            snapshot.error_code = None;
-            snapshot.transport_reachable = None;
-            snapshot.page_loaded = None;
-            snapshot.last_checked_at = Some(now_iso8601());
-        });
         let mut discovery_error: Option<(String, String)> = None; // (code, detail)
-        let mut endpoint: Option<Endpoint> = match mdns.as_ref() {
-            Some(daemon) => {
-                match discover_lan(
-                    daemon,
-                    &current.broadcast_name,
-                    DISCOVERY_TIMEOUT,
-                    &cancel,
-                    generation,
-                    |progress| match progress {
-                        DiscoveryProgress::InstanceFound { name } => {
-                            let name2 = name.clone();
-                            inner.update(move |snapshot| {
-                                snapshot.phase = ConnectionPhase::DiscoveringLan;
-                                snapshot.detail = format!("已发现 {name2}，正在解析地址");
-                            });
+        let mut endpoint: Option<Endpoint> = None;
+        if force_wan {
+            inner.update(|snapshot| {
+                snapshot.phase = ConnectionPhase::ConnectingWan;
+                snapshot.kind = LinkKind::None;
+                snapshot.target_url = None;
+                snapshot.detail = "正在切换到广域地址".to_string();
+                snapshot.error_code = None;
+                snapshot.transport_reachable = None;
+                snapshot.page_loaded = None;
+                snapshot.last_checked_at = Some(now_iso8601());
+            });
+        }
+        if !force_wan {
+            // ---- stage 1: mDNS ---------------------------------------------
+            inner.update(|snapshot| {
+                snapshot.phase = ConnectionPhase::DiscoveringLan;
+                snapshot.kind = LinkKind::None;
+                snapshot.target_url = None;
+                snapshot.detail = format!("正在嗅探 {}", current.broadcast_name);
+                snapshot.error_code = None;
+                snapshot.transport_reachable = None;
+                snapshot.page_loaded = None;
+                snapshot.last_checked_at = Some(now_iso8601());
+            });
+            endpoint = match mdns.as_ref() {
+                Some(daemon) => {
+                    match discover_lan(
+                        daemon,
+                        &current.broadcast_name,
+                        DISCOVERY_TIMEOUT,
+                        &cancel,
+                        generation,
+                        |progress| match progress {
+                            DiscoveryProgress::InstanceFound { name } => {
+                                let name2 = name.clone();
+                                inner.update(move |snapshot| {
+                                    snapshot.phase = ConnectionPhase::DiscoveringLan;
+                                    snapshot.detail = format!("已发现 {name2}，正在解析地址");
+                                });
+                            }
+                            DiscoveryProgress::Resolved { name } => {
+                                let name2 = name.clone();
+                                inner.update(move |snapshot| {
+                                    snapshot.phase = ConnectionPhase::ConnectingLan;
+                                    snapshot.kind = LinkKind::Lan;
+                                    snapshot.detail = format!("已发现 {name2}，正在验证连接");
+                                });
+                            }
+                            DiscoveryProgress::Rejected { reason } => {
+                                let reason2 = reason.clone();
+                                inner.update(move |snapshot| {
+                                    snapshot.detail = reason2;
+                                });
+                            }
+                        },
+                    ) {
+                        Ok(LanOutcome::Found(endpoint)) => Some(endpoint),
+                        Ok(LanOutcome::MatchedButFailed(reason)) => {
+                            let code = if reason.contains("身份") {
+                                error_code::LAN_IDENTITY_MISMATCH.to_string()
+                            } else {
+                                error_code::TARGET_UNREACHABLE.to_string()
+                            };
+                            discovery_error = Some((code, reason));
+                            None
                         }
-                        DiscoveryProgress::Resolved { name } => {
-                            let name2 = name.clone();
-                            inner.update(move |snapshot| {
-                                snapshot.phase = ConnectionPhase::ConnectingLan;
-                                snapshot.kind = LinkKind::Lan;
-                                snapshot.detail = format!("已发现 {name2}，正在验证连接");
-                            });
+                        Ok(LanOutcome::Cancelled) => continue,
+                        Ok(LanOutcome::NotFound) => None,
+                        Err(error) => {
+                            discovery_error =
+                                Some((error_code::MDNS_BROWSE_FAILED.to_string(), error));
+                            None
                         }
-                        DiscoveryProgress::Rejected { reason } => {
-                            let reason2 = reason.clone();
-                            inner.update(move |snapshot| {
-                                snapshot.detail = reason2;
-                            });
-                        }
-                    },
-                ) {
-                    Ok(LanOutcome::Found(endpoint)) => Some(endpoint),
-                    Ok(LanOutcome::MatchedButFailed(reason)) => {
-                        let code = if reason.contains("身份") {
-                            error_code::LAN_IDENTITY_MISMATCH.to_string()
-                        } else {
-                            error_code::TARGET_UNREACHABLE.to_string()
-                        };
-                        discovery_error = Some((code, reason));
-                        None
-                    }
-                    Ok(LanOutcome::Cancelled) => continue,
-                    Ok(LanOutcome::NotFound) => None,
-                    Err(error) => {
-                        discovery_error = Some((error_code::MDNS_BROWSE_FAILED.to_string(), error));
-                        None
                     }
                 }
-            }
-            None => {
-                discovery_error = Some((
-                    error_code::MDNS_UNAVAILABLE.to_string(),
-                    mdns_error
-                        .clone()
-                        .unwrap_or_else(|| "mDNS 初始化失败".to_string()),
-                ));
-                None
-            }
-        };
-        if is_stale() {
-            continue;
-        }
-
-        // ---- stage 2: subnet scan ------------------------------------------
-        if endpoint.is_none() {
-            inner.update(|snapshot| {
-                snapshot.phase = ConnectionPhase::ScanningSubnet;
-                snapshot.kind = LinkKind::None;
-                snapshot.detail = format!("mDNS 未响应，正在扫描同网段 {}", current.broadcast_name);
-            });
-            let (found, cancelled) = scan_lan_subnets(&current.broadcast_name, &cancel, generation);
-            if cancelled || is_stale() {
+                None => {
+                    discovery_error = Some((
+                        error_code::MDNS_UNAVAILABLE.to_string(),
+                        mdns_error
+                            .clone()
+                            .unwrap_or_else(|| "mDNS 初始化失败".to_string()),
+                    ));
+                    None
+                }
+            };
+            if is_stale() {
                 continue;
             }
-            if let Some(found) = found {
-                endpoint = Some(found);
-                discovery_error = None;
+
+            // ---- stage 2: subnet scan --------------------------------------
+            if endpoint.is_none() {
+                inner.update(|snapshot| {
+                    snapshot.phase = ConnectionPhase::ScanningSubnet;
+                    snapshot.kind = LinkKind::None;
+                    snapshot.detail =
+                        format!("mDNS 未响应，正在扫描同网段 {}", current.broadcast_name);
+                });
+                let (found, cancelled) =
+                    scan_lan_subnets(&current.broadcast_name, &cancel, generation);
+                if cancelled || is_stale() {
+                    continue;
+                }
+                if let Some(found) = found {
+                    endpoint = Some(found);
+                    discovery_error = None;
+                }
             }
         }
 
@@ -477,6 +522,14 @@ fn connection_worker(inner: Arc<ManagerInner>, receiver: Receiver<ManagerCommand
         loop {
             match receiver.recv_timeout(PROBE_INTERVAL) {
                 Ok(ManagerCommand::Shutdown) => return,
+                Ok(ManagerCommand::ForceWan) => {
+                    pending_force_wan = true;
+                    inner.update(|snapshot| {
+                        snapshot.phase = ConnectionPhase::Reconnecting;
+                        snapshot.detail = "正在切换到广域地址".to_string();
+                    });
+                    break;
+                }
                 Ok(ManagerCommand::Reconnect) => {
                     inner.update(|snapshot| {
                         snapshot.phase = ConnectionPhase::Reconnecting;

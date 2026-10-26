@@ -1,0 +1,16 @@
+{
+  "artifact": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C-AXIVER-Client\\axiver-client\\dist\\AXIVER-Client.exe",
+  "bytes": 5131776,
+  "previousExecutable": "C:\\Users\\Muxinzheng\\Desktop\\Wechat-C-AXIVER-Client\\axiver-client\\dist\\AXIVER-Client.previous-dock-1793022196.exe",
+  "runningClientsUntouched": [
+    {
+      "Id": 48036,
+      "Path": "D:\\Program Files\\AXIVER-Client\\AXIVER-Client.exe"
+    }
+  ],
+  "validation": "Headless Chromium 100/125/150% DPI and existing Rust layout test; release build passed; no native client launched",
+  "embeddedAssetsVerified": [
+    "shell.js: decompressed bytes match current source and compressed payload exists in EXE",
+    "shell.css: decompressed bytes match current source and compressed payload exists in EXE"
+  ]
+}

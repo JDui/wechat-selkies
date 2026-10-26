@@ -9,6 +9,10 @@ pub mod subnet;
 use serde::{Deserialize, Serialize};
 use std::{
     net::{SocketAddr, TcpStream, ToSocketAddrs},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use url::Url;
@@ -39,14 +43,22 @@ pub struct Endpoint {
 
 /// Token used by every discovery stage to drop stale work when a newer
 /// generation has started (spec section 5.3: single owner + cancellation).
-#[derive(Clone, Copy, Debug)]
+/// With `live` wired to the connection worker's counter, a queued user
+/// command (reconnect / force WAN) aborts long probes *mid-scan* instead of
+/// only at stage boundaries; `current_generation` stays as the fallback
+/// source for unit tests.
+#[derive(Clone, Debug)]
 pub struct CancelToken {
     pub my_generation: u64,
+    pub live: Option<Arc<AtomicU64>>,
 }
 
 impl CancelToken {
     pub fn is_stale(&self, current_generation: u64) -> bool {
-        current_generation != self.my_generation
+        match &self.live {
+            Some(live) => live.load(Ordering::SeqCst) != self.my_generation,
+            None => current_generation != self.my_generation,
+        }
     }
 }
 

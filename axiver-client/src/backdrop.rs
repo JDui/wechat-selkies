@@ -73,7 +73,7 @@ pub fn start(app: tauri::AppHandle) {
                                 let mut bytes = vec![0u8; stat.cbSize as usize];
                                 output.Seek(0, STREAM_SEEK_SET, None)?;
                                 let mut count = 0;
-                                output.Read(bytes.as_mut_ptr().cast(), bytes.len() as u32, Some(&mut count))?;
+                                output.Read(bytes.as_mut_ptr().cast(), bytes.len() as u32, Some(&mut count)).ok()?;
                                 bytes.truncate(count as usize);
                                 Ok(Some(bytes))
                             })();

@@ -119,8 +119,15 @@ pub fn scan_lan_subnets(
         let stop = stop.clone();
         let result_tx = result_tx.clone();
         let expected_name = expected_name.to_string();
+        let cancel = cancel.clone();
         workers.push(thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
+                // Live staleness check so a queued reconnect / WAN switch
+                // stops this scan within one probe interval.
+                if cancel.is_stale(current_generation) {
+                    stop.store(true, Ordering::Relaxed);
+                    break;
+                }
                 let address = queue.lock().ok().and_then(|mut queue| queue.pop_front());
                 let Some(address) = address else {
                     break;
@@ -135,7 +142,19 @@ pub fn scan_lan_subnets(
         }));
     }
     drop(result_tx);
-    let result = result_rx.recv().ok();
+    // Poll with a timeout instead of blocking on recv(), so cancellation is
+    // noticed while the queue is still being drained.
+    let result = loop {
+        match result_rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(endpoint) => break Some(endpoint),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if cancel.is_stale(current_generation) {
+                    break None;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break None,
+        }
+    };
     stop.store(true, Ordering::Relaxed);
     for worker in workers {
         let _ = worker.join();
