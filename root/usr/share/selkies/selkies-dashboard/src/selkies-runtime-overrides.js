@@ -1029,6 +1029,13 @@
         if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
           noteVideoHealthEvent("pipeline-reset");
         }
+        if (event.data === "text_commit_failed") {
+          setActivityTask("ime-delivery-failed", {
+            title: "文字提交未完成",
+            detail: "远端应用未确认读取文字。请检查输入框中的内容，再补输缺少的部分。",
+            kind: "warning", priority: 90, expiresAt: Date.now() + 12000
+          });
+        }
         if (event.data === "clipboard_nochange" || event.data === "clipboard_unavailable") {
           if (pendingRemoteClipboardPull && pendingRemoteClipboardPull.timerId) {
             window.clearTimeout(pendingRemoteClipboardPull.timerId);

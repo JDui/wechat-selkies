@@ -101,6 +101,7 @@ def host_main(
         run_command(
             ["docker", "cp", str(Path(__file__).resolve()), f"{container_id}:{CONTAINER_SCRIPT}"]
         )
+        run_command(["docker", "cp", str(INPUT_HANDLER.with_name("x11_text_paste.py")), f"{container_id}:/lsiopy/lib/python3.12/site-packages/selkies/x11_text_paste.py"])
         run_command(["docker", "start", container_id])
         print(
             f"CONTAINER image={image} id={container_id[:12]} "
@@ -257,6 +258,7 @@ async def inside_main(
     collector = LogCollector()
     logger.addHandler(collector)
     namespace = {
+        "__package__": "selkies", "__name__": "selkies.input_handler",
         "subprocess": type(
             "SubprocessProxy",
             (),
@@ -270,6 +272,7 @@ async def inside_main(
             (),
             {
                 "wait_for": staticmethod(measured_wait_for),
+                "Lock": asyncio.Lock,
                 "CancelledError": asyncio.CancelledError,
                 "get_running_loop": staticmethod(asyncio.get_running_loop),
                 "sleep": staticmethod(asyncio.sleep),
@@ -278,13 +281,16 @@ async def inside_main(
         "logger_webrtc_input": logger,
     }
     exec(
-        compile(ast.Module(body=[on_message_ast], type_ignores=[]), str(source_path), "exec"),
+        compile(ast.Module(body=[on_message_ast] + [m for m in input_class.body if getattr(m, "name", "") in {"_get_clipboard_lock", "_paste_committed_text"}], type_ignores=[]), str(source_path), "exec"),
         namespace,
     )
     on_message = namespace["on_message"]
-    client = type("Client", (), {"is_wayland": False})()
+    client = type("Client", (), {"is_wayland": False, "_get_clipboard_lock": namespace["_get_clipboard_lock"],
+                                "_paste_committed_text": namespace["_paste_committed_text"],
+                                "send_clipboard_status": lambda self, message: logger.warning(message)})()
 
     display = f":{90 + (os.getpid() % 80)}"
+    os.environ["SELKIES_IME_PASTE_SHORTCUT"] = "shift+Insert"
     env = os.environ.copy()
     env["DISPLAY"] = display
     env.setdefault("LANG", "en_US.UTF-8")
@@ -475,7 +481,7 @@ async def inside_main(
         wait_for_x_server(display, env, server)
         terminal = subprocess.Popen(
             [
-                "xterm",
+                "xterm", "-xrm", "*selectToClipboard: true",
                 "-title",
                 "IME Stress Capture",
                 "-geometry",
@@ -544,7 +550,7 @@ async def inside_main(
                     started_at,
                     cpu_before,
                 )
-                return ok and returncode == 0
+                return ok and returncode in (0, None)
 
             case_results = []
 

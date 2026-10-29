@@ -130,6 +130,8 @@ ENV TITLE="AXi-SNS-Box"
 ENV TZ="Asia/Shanghai"
 ENV LC_ALL="zh_CN.UTF-8"
 ENV AUTO_START_WECHAT="true"
+ENV PERSIST_SYSTEM_IDENTITY="true"
+ENV WECHAT_PROXY_MODE="direct"
 ENV AUTO_START_QQ="false"
 ENV DISABLE_CORE_DUMPS="true"
 ENV DESKTOP_APP_LOG_MAX_BYTES="1048576"
@@ -272,6 +274,7 @@ RUN chmod 1777 /tmp && chmod 1777 /var/tmp 2>/dev/null || true
 
 # normalize line endings for scripts copied from Windows worktrees
 RUN sed -i 's/\r$//' \
+    /etc/cont-init.d/89-stable-desktop-environment \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/91-selkies-single-session-patch \
@@ -314,7 +317,8 @@ RUN sed -i 's/\r$//' \
     /scripts/qq/*.sh
 
 # ensure custom cont-init scripts are executable
-RUN chmod +x /etc/cont-init.d/90-selkies-paste-config \
+RUN chmod +x /etc/cont-init.d/89-stable-desktop-environment \
+    /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/94-selkies-drop-cache \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \

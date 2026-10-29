@@ -34,11 +34,21 @@ class WebSocket:
             yield None
 
 
-def stats_server(gpus=True, probe_error=False):
+def stats_server(gpus=True, probe_error=False, input_handler=None, input_queue_enabled=True,
+                 display_id=None):
     # Exercise the actual connection handler without X11/PulseAudio/native dependencies.
     tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DataStreamingServer")
     original.body = [node for node in original.body if getattr(node, "name", "") == "ws_handler"]
+    # ACK tests start with an already registered display; the SETTINGS/capture
+    # handshake is outside this connection-lifecycle fixture.
+    if display_id is not None:
+        for node in ast.walk(original):
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                    and node.value.value is None
+                    and any(isinstance(t, ast.Name) and t.id == "client_display_id"
+                            for t in node.targets)):
+                node.value.value = display_id
     recorded_tasks = []
 
     async def monitor(kind, shared_data):
@@ -60,6 +70,8 @@ def stats_server(gpus=True, probe_error=False):
         "logger": logging.getLogger("stats-test"), "client_permissions": {},
         "TARGET_FRAMERATE": 30, "GPU_ID_DEFAULT": 0, "SETTING_DEFINITIONS": [],
         "PULSEAUDIO_AVAILABLE": False, "upload_dir_path": None,
+        "INPUT_QUEUE_ENABLED": input_queue_enabled, "INPUT_QUEUE_MAX": 256,
+        "INPUT_QUEUE_HARD_MAX": 4096,
         "GPUtil": SimpleNamespace(getGPUs=get_gpus),
         "websockets": SimpleNamespace(exceptions=SimpleNamespace(
             ConnectionClosed=ConnectionClosed, ConnectionClosedOK=ConnectionClosed,
@@ -85,10 +97,12 @@ def stats_server(gpus=True, probe_error=False):
     server.mode = "test"
     server._sent_frame_timestamps = {}
     server._rtt_samples = []
-    server.input_handler = object()
+    server.input_handler = object() if input_handler is None else input_handler
     server.last_start_video_request_times = {}
     server.display_clients = {}
     server._frame_backpressure_task = None
+    server._register_input_priority = lambda *_: None
+    server._set_display_high_load_state = lambda *_: None
     server._reconfigure_lock = asyncio.Lock()
     server.reconfigure_displays = AsyncMock()
     server.shutdown_pipelines = AsyncMock()

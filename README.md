@@ -40,12 +40,17 @@
 
 ## 本轮稳定性加固（源码，待部署）
 
+- 中文整段提交改为等待 X11 文本传输完成后恢复原剪贴板，修复忙窗口下临时键位映射导致的首字丢失；支持更多文本和图片剪贴板格式、超时回收和重复手动收取。微信环境新增标识持久化、启动互斥和显式代理模式，详见 [输入与剪贴板加固](docs/ops/input-clipboard-environment-hardening.md)。隔离验证通过，NAS 和登录态微信 / QQ 尚未验收。
 - 默认禁用微信 / QQ 的系统 core dump，Compose 同时设置 `ulimits.core` 为 0，避免崩溃转储长期占满 `/config`。历史 core 不自动删除；禁用转储不等于修复客户端本身的崩溃。
 - 微信 / QQ 输出写入 `wechat-client.log` / `qq-client.log`，每份默认上限 1 MiB，记录启动和退出状态；QQ 不再把崩溃退出误判为提优先级失败而重复启动。
 - Selkies 断开时回收本连接的采样任务；主画面背压暂停发送并保持编码帧顺序，沿用现有溢出恢复机制。
 - 周期 HTTP 请求限制单个在途并设置 5 秒超时；活动上报合并待发送更新。满额日志预留写入空间，低频事件及时落盘。
 - 上传会话空闲缓存回收；完成元数据保留 24 小时，未完成上传仍可续传。焦点命令超时清理整个进程组。
 - 微信进程监控与隔夜采集明确不检测账号登录态；缺少证据时原因保持 `unknown`。详情见 [稳定性加固说明](docs/ops/stability-hardening.md)。
+
+## 1.76 更新
+
+- 中文提交改用 X11 剪贴板事务，输入队列与画面确认解耦，并扩展剪贴板格式兼容。新增系统标识持久化与微信代理模式；首次迁移及终端粘贴快捷键说明见 [输入与剪贴板加固](docs/ops/input-clipboard-environment-hardening.md)。真实 NAS 和登录态微信 / QQ 尚未验收。
 
 ## 1.75 更新
 
@@ -179,10 +184,10 @@
 
 ### 使用 Release 镜像包
 
-下载最新 Release 中的 `wechat-selkies-1.75.tar` 后导入：
+下载最新 Release 中的 `wechat-selkies-1.76.tar` 后导入：
 
 ```bash
-docker load -i wechat-selkies-1.75.tar
+docker load -i wechat-selkies-1.76.tar
 ```
 
 启动：
@@ -197,7 +202,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.75
+  wechat-selkies:1.76
 ```
 
 访问：
@@ -220,7 +225,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.75
+    image: wechat-selkies:1.76
     container_name: wechat-selkies
     init: true
     ports:
@@ -289,6 +294,13 @@ services:
 | `SELKIES_PASTE_IMAGE` | `true` | 启用图片粘贴 |
 | `SELKIES_PASTE_IMAGE_MAX_SIZE` | `20971520` | 图片粘贴大小上限 |
 | `SELKIES_PASTE_IMAGE_AUTO_PASTE` | `true` | 写入远端剪贴板后自动 Ctrl+V |
+| `SELKIES_XTEST_INPUT` | `true` | 已映射按键（回车、退格、空格等）通过 XTEST 注入；不影响中文整段提交；设为 `false` 回退旧按键路径 |
+| `SELKIES_IME_PASTE_SHORTCUT` | `ctrl+v` | X11 中文提交使用的粘贴键，另支持 `ctrl+shift+v`、`shift+Insert` |
+| `SELKIES_CLIPBOARD_DIAGNOSTICS` | `false` | 临时记录每次剪贴板格式列表；默认只记录格式变化，不记录内容 |
+| `PERSIST_SYSTEM_IDENTITY` | `true` | 将容器系统标识保存在 `/config/.system-identity`，首次升级迁移说明见加固文档 |
+| `WECHAT_PROXY_MODE` | `direct` | 微信启动时清除代理环境变量；`inherit` 保留环境代理，不控制 TUN/VPN/路由器 |
+| `SELKIES_INPUT_QUEUE` | `true` | 每连接一条有序队列处理按键、剪贴板和 IO 重置，接收循环继续处理帧确认，避免打字期间画面暂停；设为 `false` 恢复串行处理 |
+| `SELKIES_INPUT_QUEUE_MAX` | `256` | 输入积压告警水位（16–4096），超过后继续保序处理帧确认；合并相邻无按键鼠标移动，硬上限为 `max(4096, 水位×4)`，达到硬上限时关闭该过载连接，避免无限积压或静默丢弃按键 |
 | `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | 可选编码器列表 |
 | `SELKIES_DEFAULT_ENCODER` | `x264enc` | 默认编码器；`x264enc` 优先 VAAPI，`x264enc-striped` 为 CPU 分片模式 |
 | `SELKIES_DEFAULT_FRAMERATE` | `30` | 默认推流帧率 |
@@ -382,7 +394,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.75 \
+  wechat-selkies:1.76 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -445,7 +457,7 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.75 .
+docker build -t wechat-selkies:1.76 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
@@ -464,13 +476,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.75 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.76 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.75.tar wechat-selkies:1.75
+docker save -o wechat-selkies-1.76.tar wechat-selkies:1.76
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。

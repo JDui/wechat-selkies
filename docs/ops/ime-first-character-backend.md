@@ -2,6 +2,10 @@
 
 Date: 2026-10-25
 
+Update 2026-10-30: Later 300/500-ms busy-target probes reproduced lost or wrong
+characters beyond the timing cases in this historical report. See
+[the implemented text-transfer fix](input-clipboard-environment-hardening.md).
+
 ## Outcome
 
 No first-character loss was reproduced in the focused X11 backend cases. The first Chinese character arrived after a fresh focus and on the first Unicode injection into a new X server; appending a Chinese commit after existing ASCII text also preserved the complete string. Server-side Space and numeric-key state injections around a commit preserved the complete Unicode text and the deliberately injected key.
@@ -41,3 +45,7 @@ The targeted test ran one unittest method; all four X11 cases passed. It complet
 ## Verification boundary
 
 This checks the current server handler, real Linux subprocesses, and Xvfb/X11 events in an xterm. It does not emulate Chromium composition events, an operating-system IME, a Qt application, or a logged-in WeChat/QQ chat box. No production source was changed from this investigation because these cases did not demonstrate a backend defect.
+
+## Update (2026-10-28)
+
+The receive-loop finding above is superseded by [typing-freeze-input-decoupling.md](typing-freeze-input-decoupling.md): each connection now owns an ordered input queue, including clipboard operations and IO resets, so text injection no longer blocks frame ACK processing. The temporary Unicode XTEST mapping tried on 2026-10-28 was removed after review reproduced lost text when the target paused for 140 ms. Chinese commits retain the existing `xdotool key --delay 200` path; XTEST is limited to keys the server already maps. The updated container probe checks the busy target and continuous frame ACKs during a real multi-second commit.
