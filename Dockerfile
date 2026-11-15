@@ -293,7 +293,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="1.83"
+LABEL org.opencontainers.image.version="1.84"
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 

@@ -256,6 +256,8 @@ async def probe_frame_acks(client, spawn_records, drain, lines, terminal_pid) ->
     client.send_x11_mouse = ignore_mouse
     ws = ProbeWebSocket()
     server, _ = fixture.stats_server(input_handler=client, display_id="primary")
+    # This isolated server has no capture allocation to release on disconnect.
+    server._release_idle_capture_memory = lambda: None
     state = {"ws": ws, "acknowledged_frame_id": -1}
     server.display_clients["primary"] = state
     handler = asyncio.create_task(server.ws_handler(ws))
@@ -444,6 +446,20 @@ async def inside_main(source_path: Path) -> int:
                 "123!?-", True, 6,
             ),
         ]
+        # No drain/sleep between a commit and its sending Return, or between
+        # messages. Verify each line, so a suffix shifted into the next message
+        # cannot pass by merely preserving the concatenated character count.
+        focus()
+        start_line = len(lines())
+        rapid_messages = [f"第{i}句，快速输入后立即回车。" for i in range(8)]
+        for text in rapid_messages:
+            await client.on_message("co,end," + text, "primary")
+            await client.on_message("kd,65293", "primary")
+            await client.on_message("ku,65293", "primary")
+        drain()
+        rapid_ok = lines()[start_line:] == rapid_messages + ["", ""]
+        print(f"CASE rapid_enter status={'PASS' if rapid_ok else 'FAIL'} messages={len(rapid_messages)}")
+        cases.append(rapid_ok)
         # Exercise actual delayed application consumption, not a sleep in the
         # sender. Confirm both first-character preservation and binary restore.
         import signal
