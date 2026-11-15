@@ -2,7 +2,7 @@
 
 基于 Docker 的微信 / QQ Linux 远程桌面镜像，通过 Selkies WebRTC 在浏览器中使用容器内的微信和 QQ。
 
-当前维护分支：`codex/intel-quicksync`。改造前的完整代码（含当时未提交的输入法修复）保存在 `_AMDGPU`。
+当前维护分支：`AXiVer`，以 Intel Quick Sync 版本继续维护。改造前的完整代码（含当时未提交的输入法修复）保存在 `_AMDGPU`。
 
 本分支面向 **Intel N355**，默认使用 `iHD` 驱动，通过现有 Selkies / pixelflux 的 VA-API H.264 路径调用 Quick Sync 硬件；不使用独立的 FFmpeg `h264_qsv` 编码器。启动时自动选择 Intel 渲染节点，以桌面用户检查编码能力；不可用时锁定 CPU 回退。部署与验收见 [Intel Quick Sync 说明](docs/ops/intel-quicksync.md)。
 

@@ -1,6 +1,6 @@
 # Intel Quick Sync（N355）
 
-本分支从当前 AXiVer 1.76 工作区继续开发。`_AMDGPU` 保存改造前代码和当时未提交的输入法修复；Intel 代码位于 `codex/intel-quicksync`。AMD 分支与原有发布镜像不随本次改造修改。
+`AXiVer` 以 Intel Quick Sync 版本继续维护，起点为 AXiVer 1.76 工作区。`_AMDGPU` 保存改造前代码和当时未提交的输入法修复；首轮 Intel 改造从 `codex/intel-quicksync` 快进合入 `AXiVer`。AMD 分支与原有发布镜像不随本次改造修改。
 
 ## 实现
 
