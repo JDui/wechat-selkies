@@ -8,7 +8,24 @@
 
 ## 界面截图
 
-![WeChat Selkies AXiVer 界面截图](./Demo.png)
+2026-11-15 更新：以下为独立临时容器加载当前前端后的实拍截图，微信 / QQ 均未登录个人账号。
+
+**桌面与快捷 Bar**
+
+![微信 / QQ 登录窗口与新版快捷 Bar](./Demo.png)
+
+<details>
+<summary>查看更多：PIN 登录与妙妙小工具</summary>
+
+**PIN 登录**
+
+![AXiVer PIN 登录界面](./docs/images/axiver-pin-20261115.png)
+
+**妙妙小工具**
+
+![AXiVer 侧边栏与妙妙小工具设置](./docs/images/axiver-tools-20261115.png)
+
+</details>
 
 ## 主要功能
 
