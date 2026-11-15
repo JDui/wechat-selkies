@@ -275,14 +275,24 @@ LABEL org.opencontainers.image.description="WeChat Linux desktop with Intel Quic
 # Intel Quick Sync uses the existing pixelflux VA-API H.264 pipeline.
 # The full media driver supplies encoding kernels omitted by the free build.
 # ARM64 remains a CPU-compatible build; Intel media drivers are x86-only.
+COPY root/etc/apt/keyrings/intel-graphics.asc /etc/apt/keyrings/intel-graphics.asc
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
+      chmod 644 /etc/apt/keyrings/intel-graphics.asc && \
+      printf '%s\n' 'deb [arch=amd64 signed-by=/etc/apt/keyrings/intel-graphics.asc] https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu noble main' > /etc/apt/sources.list.d/intel-graphics.list && \
+      printf '%s\n' \
+        'Package: intel-media-va-driver-non-free libigdgmm12 libva2 libva-drm2 libva-x11-2 libva-wayland2' \
+        'Pin: release o=LP-PPA-kobuk-team-intel-graphics' 'Pin-Priority: 600' '' \
+        'Package: *' 'Pin: release o=LP-PPA-kobuk-team-intel-graphics' 'Pin-Priority: 1' \
+        > /etc/apt/preferences.d/intel-media && \
       apt-get update -o Acquire::Retries=5 && \
       apt-get install -y --no-install-recommends \
-        intel-media-va-driver-non-free i965-va-driver-shaders vainfo && \
+        intel-media-va-driver-non-free libigdgmm12 libva2 libva-drm2 libva-x11-2 libva-wayland2 \
+        i965-va-driver-shaders vainfo && \
+      dpkg --compare-versions "$(dpkg-query -W -f='${Version}' intel-media-va-driver-non-free)" ge 25.1 && \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="1.77"
+LABEL org.opencontainers.image.version="1.78"
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 
