@@ -6,7 +6,7 @@ const path = require("path");
 const vm = require("vm");
 const source = fs.readFileSync(path.join(__dirname, "../../root/usr/share/selkies/selkies-dashboard/src/selkies-runtime-overrides.js"), "utf8");
 const start = source.indexOf("  var ASSIST_TYPING_COOLDOWN_MS");
-const end = source.indexOf("  function focusKeyboardAssist()", start);
+const end = source.indexOf("  function focusKeyboardAssist(", start);
 assert(start > 0 && end > start);
 
 function createClock() {
@@ -44,6 +44,7 @@ function fixture(options = {}) {
     clearTimeout: options.clock ? options.clock.clearTimeout : function (id) { timers.delete(id); }
   };
   const context = vm.createContext({ window, document: { getElementById: () => state.assist },
+    navigator: options.navigator,
     console: { warn: (...args) => warnings.push(args), log() {} },
     Date: options.clock ? { now: options.clock.now } : Date, imeCompositionActive: false,
     getPrimaryOpenDataSocket: () => state.socket,

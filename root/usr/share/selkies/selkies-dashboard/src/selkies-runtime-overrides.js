@@ -8537,6 +8537,25 @@
     assistCompositionCommit = null;
   }
 
+  function abandonAssistComposition() {
+    // An element can lose focus without window.blur or compositionend (iPad).
+    // Discard only preedit; a later compositionend still supplies committed data.
+    if (assistComposing && assistCompositionTarget) assistCompositionTarget.value = "";
+    assistComposing = imeCompositionActive = false;
+    assistCompositionTarget = null;
+    assistConfirmedCompositionText = "";
+    assistCompositionKeys = Object.create(null);
+  }
+
+  function useNativeAssistText(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (event.key === "Unidentified" || event.key === "Dead") return true;
+    var appleTouch = typeof navigator !== "undefined" &&
+      (/iPad|iPhone|iPod/.test(navigator.userAgent || "") ||
+       (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+    return appleTouch && typeof event.key === "string" && Array.from(event.key).length === 1;
+  }
+
   function installAssistInputGuard() {
     if (assistGuardAttached) return;
     assistGuardAttached = true;
@@ -8549,6 +8568,7 @@
       window.addEventListener(type, function (event) {
         if (!isAssist(event)) return;
         traceAssistInput(type, event);
+        if (assistComposing && assistCompositionTarget !== event.target) abandonAssistComposition();
         var key = event.code || event.key;
         if (assistComposing || event.isComposing || event.keyCode === 229 ||
             (type === "keyup" && assistCompositionKeys[key])) {
@@ -8559,6 +8579,14 @@
         }
         if (type === "keydown") {
           clearAssistCompositionCommit(true);
+        }
+        // Let iPad edit the assist, then send its input event exactly once.
+        // The legacy key handler cancels native editing even for unmapped keys.
+        if (useNativeAssistText(event)) {
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (type === "keydown") {
           if (!flushAssistInput()) {
             var socket = getPrimaryOpenDataSocket();
             if (socket && socket === assistPendingSocket && socket.readyState === window.WebSocket.OPEN) {
@@ -8652,7 +8680,8 @@
       var compositionInput = event.isComposing || /Composition/.test(event.inputType || "");
       var legacyEcho = commit && !event.inputType && (event.data === commit.text || value === commit.text || !value);
       if (commit && commit.target === event.target && (compositionInput || legacyEcho ||
-          (!commit.cleared && event.inputType === "insertText" && event.data === commit.text))) {
+          (!commit.cleared && event.inputType === "insertText" && event.data === commit.text &&
+           (value === commit.text || !value)))) {
         clearAssistCompositionCommit(true);
         flushAssistInput();
         return;
@@ -8668,15 +8697,14 @@
       queueAssistText(value);
       flushAssistInput();
     }, true);
+    window.addEventListener("focusout", function (event) {
+      if (!isAssist(event) || (assistComposing && event.target !== assistCompositionTarget)) return;
+      traceAssistInput("focusout", event);
+      abandonAssistComposition();
+    }, true);
     window.addEventListener("blur", function () {
       traceAssistInput("blur");
-      assistCompositionKeys = Object.create(null);
-      // Do not flush unfinished preedit on blur. If the OS later emits end,
-      // its committed data is still accepted; a new plain input can recover.
-      if (assistComposing && assistCompositionTarget) assistCompositionTarget.value = "";
-      assistComposing = imeCompositionActive = false;
-      assistCompositionTarget = null;
-      assistConfirmedCompositionText = "";
+      abandonAssistComposition();
     });
     // Recovery is explicit after reconnect; copying never transmits pending text.
     window.selkiesRecoverPendingInput = function () {
@@ -8692,14 +8720,26 @@
     console.log("selkies-overrides: assist input guard attached");
   }
 
-  function focusKeyboardAssist() {
+  function isRemoteKeyboardSurface(target) {
+    return !!(target && target.closest && target.closest("#overlayInput,#stream,#videoCanvas"));
+  }
+
+  function focusKeyboardAssist(userGesture) {
     var assist = normalizeKeyboardAssist();
     if (!assist || document.hidden) return;
-    if (imeCompositionActive) return;
-    if (Date.now() - lastAssistInputAt < ASSIST_TYPING_COOLDOWN_MS) return;
+    if (assistComposing && assistCompositionTarget !== assist) abandonAssistComposition();
     var active = document.activeElement;
-    if (active && active !== document.body && active !== assist && isFormLikeElement(active)) return;
+    if (active === assist) return;
+    if (imeCompositionActive) return;
+    if (!userGesture && active && active !== document.body &&
+        !isRemoteKeyboardSurface(active) && isFormLikeElement(active)) return;
+    var remaining = ASSIST_TYPING_COOLDOWN_MS - (Date.now() - lastAssistInputAt);
+    if (!userGesture && remaining > 0) {
+      scheduleKeyboardAssistFocus(remaining);
+      return;
+    }
     try {
+      assist.removeAttribute("aria-hidden");
       assist.focus({ preventScroll: true });
     } catch (_err) {
       try {
@@ -8726,11 +8766,27 @@
       "pointerdown",
       function (event) {
         noteUiInteraction();
+        if (isRemoteKeyboardSurface(event.target)) {
+          focusKeyboardAssist(true);
+          return;
+        }
         if (isFormLikeElement(event.target)) return;
         scheduleKeyboardAssistFocus(80);
       },
       true
     );
+    // Keep readonly overlay/default mouse focus from displacing the assist.
+    // Do not stop propagation: Selkies still needs the remote mouse/touch event.
+    ["mousedown", "touchstart"].forEach(function (type) {
+      document.addEventListener(type, function (event) {
+        if (!isRemoteKeyboardSurface(event.target)) return;
+        if (type === "mousedown" && event.button !== 0) return;
+        focusKeyboardAssist(true);
+        if (type === "mousedown" && document.activeElement === document.getElementById("keyboard-input-assist")) {
+          event.preventDefault();
+        }
+      }, type === "touchstart" ? { capture: true, passive: true } : true);
+    });
     window.addEventListener("focus", function () {
       noteUiInteraction();
       scheduleKeyboardAssistFocus(60);
@@ -8763,7 +8819,7 @@
       if (document.hidden) return;
       if (!hasVisibleStreamSurface()) return;
       if (imeCompositionActive) return;
-      if (isFormLikeElement(document.activeElement)) return;
+      if (!isRemoteKeyboardSurface(document.activeElement) && isFormLikeElement(document.activeElement)) return;
       if (Date.now() - lastUiInteractionAt < 5000) return;
       scheduleKeyboardAssistFocus(0);
     }, 20000);

@@ -14,15 +14,20 @@ const classStart = bundle.indexOf("class iu{");
 const prefixEnd = bundle.indexOf("class Ay{", classStart);
 assert(classStart > 0 && prefixEnd > classStart, "shipped input-class boundary changed");
 const guardStart = source.indexOf("  var ASSIST_TYPING_COOLDOWN_MS");
-const guardEnd = source.indexOf("  function focusKeyboardAssist()", guardStart);
+const guardEnd = source.indexOf("  function focusKeyboardAssist(", guardStart);
 assert(guardStart > 0 && guardEnd > guardStart);
 
-async function setup(browser) {
-  const page = await browser.newPage();
+async function setup(browser, appleTouch = false) {
+  const page = await browser.newPage({ hasTouch: appleTouch });
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
   await page.setContent('<div style="width:800px;height:600px"><input id="overlayInput" readonly>' +
-    '<video id="stream" contenteditable="true"></video><input id="keyboard-input-assist"></div>');
+    '<video id="stream" contenteditable="true"></video><input id="keyboard-input-assist"><input id="settings"></div>');
+  if (appleTouch) await page.evaluate(() => {
+    // Exercise our iPad branch in Chromium; this is not native WebKit validation.
+    Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
+    Object.defineProperty(navigator, "maxTouchPoints", { get: () => 5 });
+  });
   await page.evaluate(guard => {
     window.sent = []; window.events = [];
     for (const type of ["keydown", "keyup", "beforeinput", "input", "compositionstart", "compositionupdate", "compositionend"]) {
@@ -46,6 +51,13 @@ async function setup(browser) {
     assist.addEventListener("input", () => { if (assist.value) { inst._typeString(assist.value); assist.value = ""; } });
     assist.focus();
   });
+  if (appleTouch) await page.evaluate(focusSource => {
+    window.ensureLocalLinkUiStyle = () => {};
+    window.noteUiInteraction = () => {};
+    window.hasVisibleStreamSurface = () => true;
+    window.eval("var imeFocusTimer = null, lastUiInteractionAt = 0;\n" + focusSource + "\nbindImeFocusRecovery();");
+  }, source.slice(source.indexOf("  function isFormLikeElement("), source.indexOf("  // Own assist events")) +
+     source.slice(source.indexOf("  function isRemoteKeyboardSurface("), source.indexOf("  function startClientAwakeHeartbeat(")));
   return { page, cdp: await page.context().newCDPSession(page), errors };
 }
 
@@ -74,5 +86,30 @@ async function compose(cdp, text, key = "Space") {
         console.log("PASS native Chromium repeated long commits: " + key);
       } finally { await page.close(); }
     }
+    const { page, errors } = await setup(browser, true);
+    try {
+      await page.keyboard.type("a11");
+      await page.locator("#overlayInput").click();
+      assert.strictEqual(await page.evaluate(() => document.activeElement.id), "keyboard-input-assist");
+      await page.keyboard.type("b2");
+      await page.evaluate(() => {
+        const assist = document.getElementById("keyboard-input-assist");
+        assist.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        assist.value = "ni";
+        document.getElementById("settings").focus();
+        focusKeyboardAssist();
+      });
+      assert.strictEqual(await page.evaluate(() => document.activeElement.id), "settings");
+      assert.strictEqual(await page.evaluate(() => assistComposing), false);
+      const box = await page.locator("#overlayInput").boundingBox();
+      await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+      assert.strictEqual(await page.evaluate(() => document.activeElement.id), "keyboard-input-assist");
+      await page.keyboard.type("c3");
+      const packets = await page.evaluate(() => sent);
+      assert.strictEqual(packets.filter(s => s.startsWith("co,end,")).map(s => s.slice(7)).join(""), "a11b2c3");
+      assert(!packets.some(s => /^(kd|ku),(49|50|51|97|98|99)$/.test(s)), "text must not also take legacy key path");
+      assert.deepStrictEqual(errors, []);
+      console.log("PASS Chromium iPad profile: native text, mouse/touch focus, element blur recovery, no duplicate keys");
+    } finally { await page.close(); }
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });
