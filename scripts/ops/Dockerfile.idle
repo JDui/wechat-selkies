@@ -1,0 +1,17 @@
+# Small update layer over the user's already-built Intel driver image.
+# docker build -f scripts/ops/Dockerfile.idle -t wechat-selkies:1.83 .
+FROM wechat-selkies:1.78
+LABEL org.opencontainers.image.version="1.83"
+ENV SELKIES_HIDDEN_STREAM_IDLE_SECONDS="60"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="2"
+ENV SELKIES_CONTAINER_SLEEP="true"
+COPY root/etc/s6-overlay/s6-rc.d/init-nginx/run /etc/s6-overlay/s6-rc.d/init-nginx/run
+COPY root/scripts/idle-resource-probe.py /scripts/idle-resource-probe.py
+COPY root/usr/share/selkies/selkies-dashboard/assets/index-CzFxBFXa.js /usr/share/selkies/selkies-dashboard/assets/index-CzFxBFXa.js
+COPY root/scripts/container_sleep_manager.py root/scripts/notification_bridge.py root/scripts/x11_window_reader.py root/scripts/session_auth_bridge.py root/scripts/xdnd_receiver.py /scripts/
+COPY root/scripts/healthcheck.sh /scripts/healthcheck.sh
+COPY root/lsiopy/lib/python3.12/site-packages/selkies/selkies.py /lsiopy/lib/python3.12/site-packages/selkies/selkies.py
+COPY root/etc/cont-init.d/90-selkies-paste-config /etc/cont-init.d/90-selkies-paste-config
+COPY root/usr/share/selkies/selkies-dashboard/index.html /usr/share/selkies/selkies-dashboard/index.html
+COPY root/usr/share/selkies/selkies-dashboard/src/selkies-runtime-config.js root/usr/share/selkies/selkies-dashboard/src/selkies-runtime-overrides.js root/usr/share/selkies/selkies-dashboard/src/selkies-dock-download.js /usr/share/selkies/selkies-dashboard/src/
+RUN sed -i 's/\r$//' /etc/cont-init.d/90-selkies-paste-config /scripts/healthcheck.sh /etc/s6-overlay/s6-rc.d/init-nginx/run && chmod +x /etc/cont-init.d/90-selkies-paste-config /scripts/healthcheck.sh /etc/s6-overlay/s6-rc.d/init-nginx/run && python3 -m py_compile /scripts/container_sleep_manager.py /scripts/notification_bridge.py /scripts/x11_window_reader.py /scripts/session_auth_bridge.py /scripts/xdnd_receiver.py /scripts/idle-resource-probe.py /lsiopy/lib/python3.12/site-packages/selkies/selkies.py

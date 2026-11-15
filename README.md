@@ -55,7 +55,7 @@
 - **局域网发现广播**：可在侧边栏【妙妙小工具】中启用 mDNS 广播并设置广播名，供单窗口客户端优先发现局域网地址。
 - **输入采样增幅**：可在侧边栏【妙妙小工具】中把指针与触摸输入的上报采样频率设为基准的 `0.5×～2×`（基准为触控板 60Hz、鼠标 125Hz），默认 `1×`；设置持久保存到 `/config/state`。
 - **动态节流**：浏览器长时间无鼠标键盘交互后，可在低带宽、低帧率或低占用模式之间切换，降低客户端解码、渲染和 NAS 出站带宽压力；JPEG 直接限发送，H.264 会在进入 / 退出不活跃时重启采集以保持编码帧顺序。
-- **超低占用内部休眠**：设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，空闲时仅保留 nginx、PIN 鉴权和 sleep-manager，微信 / QQ / 桌面 / 推流进程会在容器内部被暂停，CPU、网络、编码器和 GPU 活跃占用接近 0；再次输入 PIN 后快速唤醒。
+- **静息优化与深度休眠**：普通静息保持微信 / QQ 收消息并减少后台开销。设置 `PASSWORD` 且启用 `SELKIES_CONTAINER_SLEEP=true` 后，达到待机时间会暂停桌面、应用、推流等工作进程，只保留登录页、鉴权、唤醒及必要监督服务；输入 PIN 后恢复。深度休眠期间不实时收消息。
 
 ## 本轮稳定性加固（源码，待部署）
 
@@ -66,6 +66,32 @@
 - 周期 HTTP 请求限制单个在途并设置 5 秒超时；活动上报合并待发送更新。满额日志预留写入空间，低频事件及时落盘。
 - 上传会话空闲缓存回收；完成元数据保留 24 小时，未完成上传仍可续传。焦点命令超时清理整个进程组。
 - 微信进程监控与隔夜采集明确不检测账号登录态；缺少证据时原因保持 `unknown`。详情见 [稳定性加固说明](docs/ops/stability-hardening.md)。
+
+## 1.83 更新
+
+- 动态节流全部参数写入 `/config/state/ui-preferences.json`：开关、模式、闲置延迟、帧率上限、强度及派生的 CRF / 采样比例 / 精绘禁用值。
+- 复用现有偏好接口和离线重试；容器端配置优先，未保存时导入旧浏览器值，清理浏览器存储或换设备后恢复共享配置。保留 `/config` 卷即可跨容器重建保留。
+- 修复旧迁移逻辑把既有节流强度重置为 10 的问题。
+
+## 1.82 更新
+
+- 修复仅替换镜像、未设置休眠环境变量时按钮无法连接服务：镜像默认启用休眠，仍要求 PIN；显式关闭时接口返回具体原因。
+- 合并鼠标停留免节流及橙色状态条：鼠标离开重新计时，触屏沿用原逻辑，失焦 / 页面隐藏清除停留状态。
+- 修复 Xlib `WM_HINTS` 对象读取异常，避免真实微信 / QQ 窗口导致通知查询退回大量命令子进程。
+- 音频活动改看已解码 PCM 的非静音信号，避免静音缓冲持续阻止视频空闲节流；音频播放数据不变。
+- 详见 [1.82 修复及实际采样](docs/ops/sleep-cpu-1.82.md)。
+
+## 1.81 更新
+
+- 侧边栏“妙妙小工具”增加“进入休眠”：立即暂停工作进程并返回 PIN 登录页，输入正确 PIN 恢复。手动休眠不依赖自动待机开关。休眠期间微信 / QQ 暂停运行，内存保留。
+
+## 1.80 更新
+
+- 区分普通静息和深度休眠：普通静息保留收消息；深度休眠暂停应用与桌面，只保留登录及唤醒所需服务。页面隐藏 60 秒后的停流只是普通静息优化。
+- 通知窗口读取复用 python-xlib 连接和短期快照，保留原检测周期及命令降级路径；无人使用拖拽下载时停止高频 X11 查询。
+- 拖拽开始改由 XFixes 事件唤醒，无拖拽时降低查询与浏览器租约刷新频率；深度休眠保留登录页可用，并修复休眠鉴权 418 引发的 nginx 500 以及健康检查误报。
+- 新浏览器默认空闲帧率降至 2 FPS，保留已有浏览器设置。停止采集后归还 Selkies 自身的空闲堆内存，不清宿主机缓存。
+- 修复编号诊断归档的过期清理，并在启动和定时维护时执行。见 [静息资源优化说明](docs/ops/idle-resources-1.80.md)。
 
 ## 1.78 更新
 
@@ -282,7 +308,7 @@ services:
       - SELKIES_DISABLE_GAMEPAD=true
       - SELKIES_DYNAMIC_THROTTLE=true
       - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
-      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
+      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=2
       - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
@@ -341,13 +367,14 @@ services:
 | `SELKIES_DYNAMIC_THROTTLE` | `true` | 启用动态节流；`SELKIES_DYNAMIC_LOW_LATENCY` 仍作为兼容别名 |
 | `SELKIES_DYNAMIC_THROTTLE_MODE` | `idle-low-occupancy` | 动态节流模式：`idle-low-bandwidth`、`idle-low-framerate` 或 `idle-low-occupancy` |
 | `SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS` | `15000` | 最后一次交互后多久进入动态节流 |
-| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `8` | 低帧率模式发送帧率上限，可设置为 `1` 到 `120` |
+| `SELKIES_DYNAMIC_LOW_LATENCY_FPS` | `2` | 低帧率模式发送帧率上限，可设置为 `1` 到 `120`；已有浏览器设置优先 |
 | `SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF` | `35` | 低带宽侧的 H264 CRF 默认值 |
 | `SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT` | `87` | 低带宽采样 / 带宽缩放下限 |
 | `SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS` | `3600` | 自适应休眠默认待机秒数；界面可选 `60`、`900`、`1800`、`2700`、`3600` |
 | `SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS` | `5` | 自适应休眠检查间隔 |
 | `SELKIES_AUTO_SPLIT` | `false` | 自动分屏首次默认值；超过 `4:3` / `3:4` 阈值时分屏，阈值内全部全屏；界面修改后写入 `/config/state/notification-bridge.json` 持久保存 |
-| `SELKIES_CONTAINER_SLEEP` | `false` | 启用 PIN 驱动的容器内部超低占用休眠；compose 示例中已开启，但只有设置 `PASSWORD` 后才会实际生效 |
+| `SELKIES_CONTAINER_SLEEP` | `false` | 启用 PIN 驱动的深度休眠，暂停微信 / QQ 等工作进程；compose 示例中已开启，但只有设置 `PASSWORD` 后才会实际生效 |
+| `SELKIES_HIDDEN_STREAM_IDLE_SECONDS` | `60` | 所有页面隐藏后停止音视频采集的等待秒数；页面可见时恢复。`0` 禁用此快捷策略，回到自适应休眠设置 |
 | `SELKIES_CONTAINER_SLEEP_IDLE_SECONDS` | `180` | 旧版兜底值；启用自适应休眠后以界面选择的待机时间为准 |
 | `SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS` | `180` | 容器启动后多久以内不进入内部休眠，避免刚启动就睡眠 |
 | `SELKIES_STREAM_WAIT_THRESHOLD_MS` | `35000` | 长时间等待视频流时触发恢复 |
@@ -474,9 +501,9 @@ docker run -d \
 - 动态节流对 JPEG 使用发送端节流；对 H.264 会在进入 / 退出不活跃时重启采集应用低帧率配置，避免丢弃依赖帧导致坏块或解码器回退。
 - 自适应休眠按所有客户端的键鼠交互判断，可选择 1、15、30、45、60 分钟待机时间。
 - 达到待机时间后会推送 60 秒全屏逐渐变暗的确认遮罩；鼠标点击或任意按键会解除遮罩并重置倒计时。
-- 超过 60 秒仍无交互时，`SELKIES_CONTAINER_SLEEP=true` 会进入更深一层的超低占用休眠：只保留 PIN 页面、鉴权桥和 sleep-manager，微信 / QQ / 桌面 / Selkies 推流等重进程会被 `SIGSTOP` 暂停。此时 CPU、网络、编码器和 GPU 活跃占用通常接近 0，但内存不会释放；输入 PIN 后通过 `SIGCONT` 唤醒并恢复会话。
+- 警告后超过 60 秒仍无交互时，`SELKIES_CONTAINER_SLEEP=true` 会进入深度休眠，以 `SIGSTOP` 暂停微信 / QQ / 桌面 / 推流等工作进程，只保留登录页、鉴权、唤醒及必要监督服务。输入 PIN 后以 `SIGCONT` 恢复。页面隐藏 60 秒后的采集暂停是另一项普通静息优化，不提前进入深度休眠。
 - PIN 页面只有在容器确实休眠时才会在背景显示“容器等待唤醒”。
-- 休眠期间微信 / QQ 也会暂停，因此不会实时收消息；这是为最低闲置开销做出的取舍。
+- 深度休眠期间微信 / QQ 暂停，不实时收消息；普通静息仍正常收消息。暂停进程保留内存以便快速恢复，不等于释放全部内存。只在停止采集时释放 Selkies 的闲置资源，不强制清理宿主机缓存。
 
 ## 侧边栏和快捷键
 

@@ -69,6 +69,38 @@ class SleepTimingTests(unittest.TestCase):
             self.manager.leave_sleep()
             self.assertEqual(self.manager.latest_frontend_interaction_at(), 2100)
 
+    def test_full_sleep_freezes_workload_and_wake_resumes_it(self):
+        self.manager.ENABLED = True
+        self.manager.REQUIRE_PIN = False
+        with mock.patch.object(self.manager, "list_freezable_pids", return_value=[201, 200]), \
+             mock.patch.object(self.manager, "signal", mock.Mock(SIGSTOP=19, SIGCONT=18)), \
+             mock.patch.object(self.manager, "send_signal", return_value=True) as signal_process:
+            self.assertTrue(self.manager.enter_sleep("idle"))
+            self.assertTrue(self.manager.enter_sleep("manual"))
+            self.assertEqual(signal_process.call_args_list, [
+                mock.call(201, self.manager.signal.SIGSTOP), mock.call(200, self.manager.signal.SIGSTOP)])
+            state = self.manager.read_state()
+            self.assertEqual(state["mode"], "full")
+            self.assertEqual(state["frozen_pids"], [201, 200])
+            signal_process.reset_mock()
+            self.manager.leave_sleep()
+            self.assertEqual(signal_process.call_args_list, [
+                mock.call(201, self.manager.signal.SIGCONT), mock.call(200, self.manager.signal.SIGCONT)])
+            self.assertFalse(self.manager.read_state()["sleeping"])
+
+    def test_manual_sleep_survives_disabled_automatic_timer(self):
+        self.manager.ENABLED = True
+        self.manager.REQUIRE_PIN = False
+        self.manager.MODE_STATE_PATH.write_text(json.dumps({"adaptive_sleep_enabled": False}))
+        self.manager.write_state({"sleeping": True, "reason": "manual", "mode": "full"})
+        with mock.patch.object(self.manager.time, "sleep", side_effect=[None, KeyboardInterrupt]), \
+             mock.patch.object(self.manager, "leave_sleep") as wake:
+            with self.assertRaises(KeyboardInterrupt):
+                self.manager.monitor_loop()
+            wake.assert_not_called()
+        self.assertTrue(self.manager.read_state()["sleeping"])
+        self.assertEqual(self.manager.status_payload()["sleep_block_reason"], "sleeping")
+
 
 class PreferencesTests(unittest.TestCase):
     def setUp(self):
@@ -103,6 +135,22 @@ class PreferencesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.bridge.update_preferences({"download_favorites:/files/:/config": [{"path": path, "name": "name"}]})
         self.assertEqual(self.bridge.read_preferences(), {"notification_center_enabled": True})
+
+    def test_all_throttle_parameters_survive_reload_and_invalid_patch_is_atomic(self):
+        settings = {"dynamic_low_latency_enabled": False, "dynamic_throttle_mode": "idle-low-occupancy",
+                    "dynamic_low_latency_hold_ms": 8700, "dynamic_low_latency_fps": 4,
+                    "dynamic_throttle_strength": 63, "dynamic_low_latency_h264_crf": 40,
+                    "dynamic_low_latency_sample_percent": 60, "dynamic_low_latency_disable_paint_over": True}
+        self.bridge.update_preferences(settings)
+        restarted = load("session_auth_bridge")
+        restarted.PREFERENCES_PATH = self.bridge.PREFERENCES_PATH
+        self.assertEqual(restarted.read_preferences(), settings)
+        for key, value in [("dynamic_low_latency_fps", True), ("dynamic_low_latency_fps", 0),
+                           ("dynamic_low_latency_hold_ms", 30001), ("dynamic_throttle_strength", 1.5),
+                           ("dynamic_throttle_mode", "unknown")]:
+            with self.assertRaises(ValueError):
+                restarted.update_preferences({"dynamic_low_latency_enabled": True, key: value})
+            self.assertEqual(restarted.read_preferences(), settings)
 
 
 if __name__ == "__main__":

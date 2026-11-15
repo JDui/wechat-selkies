@@ -9,6 +9,30 @@ is_true() {
     esac
 }
 
+# A sleeping upload/desktop process deliberately cannot answer health probes.
+# Verify the services needed to display login and wake up instead.
+if python3 - <<'PY'
+import json, os, sys
+try:
+    with open(os.getenv("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-container-sleep.json")) as handle:
+        state = json.load(handle)
+    sleeping = state.get("sleeping") is True and state.get("mode") == "full"
+except (OSError, ValueError, AttributeError):
+    sleeping = False
+sys.exit(0 if sleeping else 1)
+PY
+then
+    pgrep -x nginx >/dev/null
+    curl -fsS --max-time 3 "http://127.0.0.1:${SELKIES_SESSION_AUTH_PORT:-38082}/health" >/dev/null
+    curl -fsS --max-time 3 "http://127.0.0.1:${SELKIES_CONTAINER_SLEEP_PORT:-38083}/health" >/dev/null
+    exit 0
+fi
+
+if ! curl -fsS --max-time 3 "http://127.0.0.1:${SELKIES_CONTAINER_SLEEP_PORT:-38083}/health" >/dev/null; then
+    echo "container sleep service unavailable"
+    exit 1
+fi
+
 if ! pgrep -x openbox >/dev/null 2>&1; then
     echo "openbox process missing"
     exit 1

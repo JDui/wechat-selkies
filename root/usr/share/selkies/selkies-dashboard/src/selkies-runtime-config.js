@@ -38,7 +38,7 @@ window.__SELKIES_RUNTIME__ = window.__SELKIES_RUNTIME__ || {
   dynamicLowLatencyEnabled: true,
   dynamicLowLatencyHoldMs: 15000,
   dynamicThrottleMode: "idle-low-occupancy",
-  dynamicLowLatencyFps: 8,
+  dynamicLowLatencyFps: 2,
   dynamicLowLatencyH264Crf: 35,
   dynamicLowLatencySamplePercent: 87,
   defaultBinaryClipboard: true

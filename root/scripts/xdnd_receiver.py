@@ -77,7 +77,7 @@ def map_rect(dock, surface, remote):
 def run(manager):
     rect = manager.geometry() or [0, 0, 1, 1]
     from Xlib import X, Xatom, display, protocol
-    from Xlib.ext import shape
+    from Xlib.ext import shape, xfixes
 
     connection = display.Display()
     root = connection.screen().root
@@ -98,6 +98,21 @@ def run(manager):
     target.change_property(connection.intern_atom("_AXI_DOWNLOAD_TARGET"), Xatom.CARDINAL, 32, [1])
     target.map()
     connection.sync()
+    selection_events = False
+    cached_owner = None
+    if connection.has_extension("XFIXES"):
+        try:
+            connection.xfixes_query_version()
+            connection.xfixes_select_selection_input(
+                target, atoms["XdndSelection"],
+                xfixes.XFixesSetSelectionOwnerNotifyMask |
+                xfixes.XFixesSelectionWindowDestroyNotifyMask |
+                xfixes.XFixesSelectionClientCloseNotifyMask)
+            connection.sync()
+            cached_owner = connection.get_selection_owner(atoms["XdndSelection"])
+            selection_events = True
+        except Exception:
+            pass  # Keep the original 20 ms polling on older X servers.
     source = None
     source_version = 0
     accepted = False
@@ -131,12 +146,19 @@ def run(manager):
     try:
         while True:
             current_rect = manager.geometry()
+            if not current_rect and not armed and not source and not connection.pending_events():
+                # No browser has leased the target. Avoid 100 X11 round trips/s
+                # for pointer/selection queries while nobody can use downloads.
+                select.select([connection.fileno()], [], [], 0.5)
+                continue
             if current_rect and list(current_rect) != list(rect):
                 rect = current_rect
                 x, y, width, height = rect
                 target.configure(x=x, y=y, width=width, height=height)
             pointer = root.query_pointer()
-            owner = connection.get_selection_owner(atoms["XdndSelection"])
+            button_down = bool(pointer.mask & X.Button1Mask)
+            owner = cached_owner if selection_events else (
+                connection.get_selection_owner(atoms["XdndSelection"]) if button_down else None)
             # Arm at drag start, before the first crossing of the rectangle.
             # Arming only after a pointer enters races a fast button release.
             should_arm = bool(current_rect and owner and pointer.mask & X.Button1Mask)
@@ -155,9 +177,13 @@ def run(manager):
                     target.configure(stack_mode=X.Above)
                 connection.flush()
                 emit("armed" if armed else "idle")
+            selection_changed = False
             while connection.pending_events():
                 event = connection.next_event()
-                if event.type == X.ClientMessage and event.data[0] == 32:
+                if selection_events and isinstance(event, xfixes.SelectionNotify):
+                    cached_owner = event.owner
+                    selection_changed = True
+                elif event.type == X.ClientMessage and event.data[0] == 32:
                     data = event.data[1]
                     kind = event.client_type
                     if kind == atoms["XdndEnter"]:
@@ -217,7 +243,11 @@ def run(manager):
                 if awaiting_selection:
                     send("XdndFinished", [target.id, 0, 0, 0, 0])
                 reset("cancelled")
-            select.select([connection.fileno()], [], [], 0.02)
+            # Selection ownership changes wake select immediately at drag start.
+            # Idle pages need only a low-rate lease/geometry refresh; keep the
+            # original fast path throughout actual dragging and conversion.
+            interval = 0.02 if (not selection_events or button_down or armed or source or cached_owner) else 0.5
+            select.select([connection.fileno()], [], [], 0 if selection_changed else interval)
     finally:
         target.destroy()
         connection.flush()

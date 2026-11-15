@@ -25,7 +25,7 @@ COOKIE_PATH = os.environ.get("SELKIES_SESSION_COOKIE_PATH", os.environ.get("SUBF
 SLEEP_MANAGER_PORT = int(os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", "38083"))
 SLEEP_MANAGER_URL = f"http://127.0.0.1:{SLEEP_MANAGER_PORT}"
 SLEEP_WAKE_TIMEOUT_SECONDS = float(os.environ.get("SELKIES_CONTAINER_SLEEP_WAKE_TIMEOUT_SECONDS", "45") or "45")
-SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "false").strip().lower() in (
+SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "true").strip().lower() in (
     "1",
     "true",
     "yes",
@@ -55,6 +55,14 @@ TOOL_PREFERENCES = {
     "notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
     "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
     "bottom_action_dock_collapsed", "input_sampling_multiplier",
+    "dynamic_low_latency_enabled", "dynamic_low_latency_disable_paint_over",
+}
+DYNAMIC_PREFERENCE_RANGES = {
+    "dynamic_low_latency_hold_ms": (300, 30000),
+    "dynamic_low_latency_fps": (1, 120),
+    "dynamic_throttle_strength": (0, 100),
+    "dynamic_low_latency_h264_crf": (5, 60),
+    "dynamic_low_latency_sample_percent": (10, 100),
 }
 
 
@@ -69,7 +77,20 @@ def read_preferences():
 def update_preferences(patch):
     clean = {}
     for key, value in patch.items():
-        if key in TOOL_PREFERENCES:
+        if key in DYNAMIC_PREFERENCE_RANGES:
+            try:
+                number = int(str(value))
+            except (TypeError, ValueError):
+                raise ValueError("Invalid dynamic throttle number")
+            minimum, maximum = DYNAMIC_PREFERENCE_RANGES[key]
+            if not minimum <= number <= maximum:
+                raise ValueError("Dynamic throttle value out of range")
+            clean[key] = number
+        elif key == "dynamic_throttle_mode":
+            if value not in ("idle-low-bandwidth", "idle-low-framerate", "idle-low-occupancy"):
+                raise ValueError("Invalid dynamic throttle mode")
+            clean[key] = value
+        elif key in TOOL_PREFERENCES:
             if key == "bottom_action_dock_position":
                 if value not in ("top", "bottom"):
                     raise ValueError("Invalid dock position")
@@ -148,6 +169,7 @@ DIAGNOSTICS_KEEP_SAMPLES = str(
 DIAGNOSTICS_DATE_FORMAT = "%Y%m%d"
 MAX_DIAGNOSTICS_BODY = 64 * 1024
 _diagnostics_active_date = None
+DIAGNOSTICS_LOCK = threading.RLock()
 
 
 def normalize_cookie_path(path):
@@ -365,13 +387,22 @@ def prune_diagnostics_archives(now_ts):
         if not entry.name.startswith(prefix):
             continue
         suffix = entry.name[len(prefix):]
-        if len(suffix) != 8 or not suffix.isdigit():
+        if not suffix.isascii() or not suffix.isdigit() or entry.is_symlink():
             continue
-        if suffix <= cutoff:
-            try:
+        try:
+            if not entry.is_file():
+                continue
+            if len(suffix) == 8:
+                expired = suffix <= cutoff
+            else:
+                # Numbered archives retain the original file mtime on rename.
+                # Also remove archives left behind after reducing the count.
+                expired = (int(suffix) > DIAGNOSTICS_SIZE_ARCHIVES or
+                           entry.stat().st_mtime <= now_ts - DIAGNOSTICS_RETENTION_DAYS * 86400)
+            if expired:
                 entry.unlink()
-            except OSError:
-                pass
+        except OSError:
+            pass
 
 
 def rotate_diagnostics_file(now_ts):
@@ -448,12 +479,17 @@ def strip_periodic_samples(payload):
 
 
 def append_diagnostics(payload):
+    with DIAGNOSTICS_LOCK:
+        _append_diagnostics_unlocked(payload)
+
+
+def _append_diagnostics_unlocked(payload):
+    rotate_diagnostics_file(time.time())
     filtered = strip_periodic_samples(payload)
     records = filtered.get("records") if isinstance(filtered, dict) else None
     if isinstance(records, list) and not records:
         # Heartbeats only: keep the log for real events.
         return
-    rotate_diagnostics_file(time.time())
     DIAGNOSTICS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "timestamp_ms": int(time.time() * 1000),
@@ -558,7 +594,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_empty(HTTPStatus.NO_CONTENT)
                 return
             if is_container_sleeping():
-                self.send_empty(HTTPStatus.IM_A_TEAPOT)
+                # nginx auth_request only accepts 2xx, 401 and 403. A custom
+                # 418 becomes a 500 before the login-page error mapping runs.
+                self.send_empty(HTTPStatus.UNAUTHORIZED)
                 return
             if not request_has_valid_session(self):
                 self.send_empty(HTTPStatus.UNAUTHORIZED)
@@ -699,6 +737,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Maintenance must run even when no browser sends diagnostic events.
+    rotate_diagnostics_file(time.time())
+    def maintain_diagnostics():
+        while True:
+            time.sleep(3600)
+            with DIAGNOSTICS_LOCK:
+                rotate_diagnostics_file(time.time())
+    threading.Thread(target=maintain_diagnostics, daemon=True).start()
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     initial_state = ensure_upload_signing_key(read_state())
     if not initial_state.get("session_id") and not PASSWORD:

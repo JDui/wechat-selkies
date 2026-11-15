@@ -3,7 +3,7 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:1.78
+    image: wechat-selkies:1.83
     container_name: wechat-selkies
     init: true
     volumes:
@@ -82,6 +82,7 @@ services:
       - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
+      - SELKIES_HIDDEN_STREAM_IDLE_SECONDS=60
       - SELKIES_AUTO_SPLIT=false
       - QQ_NICE_LEVEL=-2
       - QQ_WATCHDOG_HANG_DETECT=true
@@ -104,7 +105,7 @@ services:
       - SELKIES_DYNAMIC_THROTTLE=true
       - SELKIES_DYNAMIC_THROTTLE_MODE=idle-low-occupancy
       - SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS=15000
-      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=8
+      - SELKIES_DYNAMIC_LOW_LATENCY_FPS=2
       - SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF=35
       - SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT=87
       - SELKIES_STREAM_WAIT_THRESHOLD_MS=35000
@@ -127,7 +128,7 @@ services:
   axisnsbox-discovery:
     build:
       context: .
-    image: wechat-selkies:1.78
+    image: wechat-selkies:1.83
     container_name: axisnsbox-discovery
     init: true
     entrypoint: ["python3", "-u", "/scripts/lan_discovery_service.py"]

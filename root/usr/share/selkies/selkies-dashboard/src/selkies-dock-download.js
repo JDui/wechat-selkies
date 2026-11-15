@@ -142,7 +142,13 @@
       else if (response.status === 401) { render(shell, {phase: "idle"}); holding = false; }
       else if (response.status === 409 && holding) render(shell, {phase: "error", error_id: "conflict:" + dragSerial, error: "下载接收区正由另一个页面使用，请关闭该页面后重试"});
     } catch (_) { shell.dataset.dropPhase = "idle"; }
-    finally { busy = false; timer = setTimeout(tick, holding ? 100 : document.hidden ? 2000 : 750); }
+    finally {
+      busy = false;
+      var transferActive = shell.dataset.dropPhase === "target" || shell.dataset.dropPhase === "preparing";
+      // Renew the 3-second lease less often at rest; pointerdown still refreshes
+      // immediately and dragging / file preparation keeps the original cadence.
+      timer = setTimeout(tick, holding ? 100 : document.hidden ? 2000 : transferActive ? 750 : 1500);
+    }
   }
   document.addEventListener("pointerdown", function (e) {
     if (e.button === 0 && e.target && (e.target.tagName === "CANVAS" || e.target.id === "overlayInput")) {

@@ -10,6 +10,9 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from x11_window_reader import WindowReader
+
+WINDOW_READER = WindowReader()
 
 from lan_discovery_common import (
     DEFAULT_BROADCAST_NAME,
@@ -317,6 +320,15 @@ def get_focused_window_id():
 
 
 def get_active_app_payload():
+    snapshot = WINDOW_READER.snapshot()
+    if snapshot is not None:
+        info = snapshot["active"] or {}
+        return {
+            "ok": True, "focused": bool(info),
+            "app": detect_app(info.get("wm_class", ""), info.get("title", ""), "", ""),
+            "window_id": info.get("wid", ""), "title": info.get("title", ""),
+            "wm_class": info.get("wm_class", ""),
+        }
     focused_wid = get_focused_window_id()
     if focused_wid is None:
         wid = run_text_command(["xdotool", "getactivewindow"], timeout=2.0)
@@ -460,6 +472,13 @@ def score_window_candidate(app, info):
 
 
 def find_app_window(app):
+    snapshot = WINDOW_READER.snapshot()
+    if snapshot is not None:
+        patterns = APP_SEARCH_PATTERNS.get(app, {})
+        candidates = [info for info in snapshot["windows"] if
+                      any(re.search(pattern, info["wm_class"], re.I) for pattern in patterns.get("classes", [])) or
+                      any(re.search(pattern, info["title"], re.I) for pattern in patterns.get("names", []))]
+        return dict(max(candidates, key=lambda info: score_window_candidate(app, info))) if candidates else None
     best = None
     best_score = -999999
     for wid in search_window_candidates(app):

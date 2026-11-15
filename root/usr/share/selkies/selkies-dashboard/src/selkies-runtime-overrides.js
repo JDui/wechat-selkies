@@ -80,6 +80,7 @@
   var dynamicLatencyMountTimer = null;
   var dynamicLatencyTimer = null;
   var dynamicLatencyApplied = false;
+  var dynamicLatencyMouseInside = false;
   var dynamicLatencyUntil = 0;
   var dynamicLatencySuppressedUntil = Date.now() + 2500;
   var dynamicLatencyOriginals = null;
@@ -701,6 +702,7 @@
         .fetch(logoutUrl, {
           method: "POST",
           credentials: "same-origin",
+          signal: AbortSignal.timeout(5000),
           headers: { "X-Requested-With": "XMLHttpRequest" },
           cache: "no-store"
         })
@@ -1473,9 +1475,9 @@
   }
 
   function isRemoteAudioPlaying() {
-    var bufferSize = Number(window.currentAudioBufferSize || 0);
-    if (Number.isFinite(bufferSize) && bufferSize > 0) return true;
-    return false;
+    // The server sends silence too; queued PCM is not evidence of audible sound.
+    return window.selkiesRemoteAudioActive === true &&
+      Date.now() - Number(window.selkiesRemoteAudioActivityAt || 0) < 1500;
   }
 
   function isTransportBusy() {
@@ -1934,10 +1936,12 @@
         method: "POST",
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(15000),
         headers: { "X-Requested-With": "XMLHttpRequest" }
       })
       .then(function (response) {
-        return response.ok;
+        if (!response.ok) return false;
+        return response.json().then(function (payload) { return payload.ok === true; });
       })
       .catch(function () {
         return false;
@@ -3649,7 +3653,10 @@
   function isPersistentToolPreference(name) {
     return ["notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
       "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
-      "bottom_action_dock_collapsed", "input_sampling_multiplier"].indexOf(name) !== -1;
+      "bottom_action_dock_collapsed", "input_sampling_multiplier",
+      "dynamic_low_latency_enabled", "dynamic_throttle_mode", "dynamic_low_latency_hold_ms",
+      "dynamic_low_latency_fps", "dynamic_throttle_strength", "dynamic_low_latency_h264_crf",
+      "dynamic_low_latency_sample_percent", "dynamic_low_latency_disable_paint_over"].indexOf(name) !== -1;
   }
 
   async function loadPersistentToolPreferences() {
@@ -3658,7 +3665,10 @@
       var preferences = await window.selkiesPreferences.load();
       ["notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
         "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
-        "bottom_action_dock_collapsed", "input_sampling_multiplier"].forEach(function (name) {
+        "bottom_action_dock_collapsed", "input_sampling_multiplier",
+        "dynamic_low_latency_enabled", "dynamic_throttle_mode", "dynamic_low_latency_hold_ms",
+        "dynamic_low_latency_fps", "dynamic_throttle_strength", "dynamic_low_latency_h264_crf",
+        "dynamic_low_latency_sample_percent", "dynamic_low_latency_disable_paint_over"].forEach(function (name) {
         if (Object.prototype.hasOwnProperty.call(preferences, name)) {
           try {
             window.localStorage.setItem("selkies.preferences:" + appBasePath() + ":" + name, String(preferences[name]));
@@ -3780,7 +3790,7 @@
     var dynamicLatencyEnabled = sanitizeBool(runtime.dynamicLowLatencyEnabled, true);
     var dynamicLatencyHoldMs = sanitizeInt(runtime.dynamicLowLatencyHoldMs, 15000, 300, 30000);
     var dynamicThrottleMode = sanitizeThrottleMode(runtime.dynamicThrottleMode || runtime.dynamicLowLatencyMode);
-    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 8, 1, 120);
+    var dynamicLatencyFps = sanitizeInt(runtime.dynamicLowLatencyFps, 2, 1, 120);
     var dynamicLatencyCrf = sanitizeInt(runtime.dynamicLowLatencyH264Crf, 33, 5, 50);
     var dynamicLatencySample = sanitizeInt(runtime.dynamicLowLatencySamplePercent, 91, 10, 100);
     var dynamicThrottleStrength = 10;
@@ -3847,9 +3857,8 @@
 
     var throttleMigrationKey = "dynamic_throttle_strength_default_10_v1";
     if (getStoredValue(throttleMigrationKey) === null) {
-      setStoredValue("dynamic_throttle_strength", 10);
-      setStoredValue("dynamic_low_latency_h264_crf", strengthToCrf(10));
-      setStoredValue("dynamic_low_latency_sample_percent", strengthToSamplePercent(10));
+      // applyRuntimeDefaults already fills missing values. Keep existing user
+      // values when importing an older browser's settings into /config.
       setStoredValue(throttleMigrationKey, "1");
     }
   }
@@ -6293,7 +6302,7 @@
       sanitizeInt(runtime.dynamicLowLatencySamplePercent, 87, 10, 100)
     );
     var strength = sanitizeInt(getStoredValue("dynamic_throttle_strength"), fallbackStrength, 0, 100);
-    var fps = sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 8, 1, 120), 1, 120);
+    var fps = sanitizeInt(getStoredValue("dynamic_low_latency_fps"), sanitizeInt(runtime.dynamicLowLatencyFps, 2, 1, 120), 1, 120);
     var crf = modeUsesBandwidth(mode) ? strengthToCrf(strength) : sanitizeInt(getStoredValue("h264_crf"), sanitizeInt(runtime.defaultH264Crf, 30, 5, 50), 5, 60);
     var samplePercent = modeUsesBandwidth(mode) ? strengthToSamplePercent(strength) : 100;
     return {
@@ -6310,6 +6319,9 @@
 
   function syncDynamicLatencySettingsToBackend() {
     var config = getDynamicLatencyConfig();
+    setStoredValue("dynamic_low_latency_h264_crf", config.crf);
+    setStoredValue("dynamic_low_latency_sample_percent", config.samplePercent);
+    setStoredValue("dynamic_low_latency_disable_paint_over", config.disablePaintOver);
     lastDynamicLatencyConfigSignature = getDynamicLatencyConfigSignature(config);
     postDashboardMessage("settings", {
       settings: {
@@ -6359,7 +6371,10 @@
       indicator.setAttribute("aria-hidden", "true");
       toggle.appendChild(indicator);
     }
-    if (dynamicLatencyApplied && getDynamicLatencyConfig().enabled) {
+    if (isDynamicLatencyMousePresent()) {
+      toggle.setAttribute("data-selkies-low-latency", "mouse");
+      indicator.setAttribute("data-active", "mouse");
+    } else if (dynamicLatencyApplied && getDynamicLatencyConfig().enabled) {
       toggle.setAttribute("data-selkies-low-latency", "active");
       indicator.setAttribute("data-active", "1");
     } else {
@@ -6493,6 +6508,7 @@
       "[data-selkies-sidebar-toggle='1'] .selkies-sidebar-rainbow-core[data-active='1']{opacity:1;background:linear-gradient(180deg,#ff5f6d 0%,#ffc371 20%,#7c3aed 42%,#06b6d4 68%,#22c55e 100%);background-size:100% 220%;animation:selkies-rainbow-fill 1.8s linear infinite;box-shadow:0 0 12px rgba(56,189,248,.32)}" +
       "[data-selkies-sidebar-toggle='1']::after{content:'';position:absolute;top:18%;bottom:18%;left:50%;width:4px;transform:translateX(-50%);border-radius:999px;opacity:0;pointer-events:none;transition:opacity .24s ease,box-shadow .24s ease}" +
       "[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active']::after{opacity:1;background:linear-gradient(180deg,#ff5f6d 0%,#ffc371 20%,#7c3aed 42%,#06b6d4 68%,#22c55e 100%);background-size:100% 220%;animation:selkies-rainbow-fill 1.8s linear infinite;box-shadow:0 0 12px rgba(56,189,248,.32)}" +
+      "[data-selkies-sidebar-toggle='1'] .selkies-sidebar-rainbow-core[data-active='mouse'],[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='mouse']::after{opacity:1;background:#f59e0b;animation:none;box-shadow:0 0 12px rgba(245,158,11,.4)}" +
       "[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] svg,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] path,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] span,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] i{animation:selkies-rainbow-fg 1.8s linear infinite;color:#ff5f6d !important;fill:currentColor !important;stroke:currentColor !important}" +
       "@keyframes selkies-rainbow-fg{0%{color:#ff5f6d}20%{color:#ffc371}40%{color:#7c3aed}60%{color:#06b6d4}80%{color:#22c55e}100%{color:#ff5f6d}}" +
       "@keyframes selkies-rainbow-fill{0%{background-position:50% 0%}100%{background-position:50% 100%}}";
@@ -6526,6 +6542,7 @@
   function activateDynamicLatency(trigger) {
     var config = getDynamicLatencyConfig();
     if (!config.enabled) return;
+    if (isDynamicLatencyMousePresent()) return;
     if (Date.now() < dynamicLatencySuppressedUntil) return;
     if (!lastVideoPipelineActive) return;
     if (!hasVisibleStreamSurface()) return;
@@ -6869,6 +6886,8 @@
       '<label class="selkies-tool-row"><span>\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177</span><input type="checkbox" data-debug-toggle="legacy-upload-fallback"></label>' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
+      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="sleep-now">进入休眠</button>' +
+      '<div class="selkies-repair-note">立即休眠并返回登录页，输入 PIN 后唤醒。休眠期间微信和 QQ 暂停运行。</div>' +
       '<label class="selkies-tool-row"><span>\u5c40\u57df\u7f51\u5e7f\u64ad</span><input type="checkbox" data-debug-toggle="lan-discovery"></label>' +
       '<label class="selkies-tool-row" data-debug-row="lan-broadcast-name"><span>\u5e7f\u64ad\u540d</span><input type="text" maxlength="32" spellcheck="false" autocomplete="off" placeholder="AXISNSBOX-000" data-debug-input="lan-broadcast-name"></label>' +
       '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
@@ -7030,6 +7049,35 @@
     }
     if (!section.dataset.bound) {
       section.dataset.bound = "1";
+      section.querySelector('[data-debug-action="sleep-now"]').addEventListener("click", async function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
+        button.textContent = "正在进入休眠…";
+        try {
+          var status = await loadContainerSleepStatus();
+          if (!status || !status.feature_enabled) {
+            throw new Error(!status ? "无法连接休眠服务，请检查容器服务状态。" :
+              status.disabled_reason === "environment-disabled" ? "容器配置关闭了休眠，请将 SELKIES_CONTAINER_SLEEP 设为 true 并重建容器。" :
+              "请先为容器设置登录 PIN，才能休眠并安全唤醒。");
+          }
+          if (!(await requestContainerSleepNow())) {
+            // A lost response can follow a successful sleep. Verify before reporting failure.
+            status = await loadContainerSleepStatus();
+            if (!status || !status.sleeping) throw new Error("容器未确认进入休眠，请稍后重试。");
+          }
+          forcePinLogin();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "进入休眠";
+          setActivityTask("manual-container-sleep", {
+            title: "未能进入休眠", detail: error.message, kind: "error",
+            progress: null, indeterminate: false, priority: 90, expiresAt: Date.now() + 5000
+          });
+        }
+      });
       var inputSamplingSlider = section.querySelector('[data-debug-range="input-sampling-multiplier"]');
       if (inputSamplingSlider) {
         inputSamplingSlider.addEventListener("input", function (event) {
@@ -7763,7 +7811,33 @@
     window.setInterval(renderDebugToolsSection, 6000);
   }
 
+  function isDynamicLatencyMousePresent() {
+    return dynamicLatencyMouseInside && !document.hidden;
+  }
+
+  function setDynamicLatencyMouseInside(inside) {
+    inside = !!inside && !document.hidden;
+    if (dynamicLatencyMouseInside === inside) return;
+    dynamicLatencyMouseInside = inside;
+    if (inside) {
+      markDynamicLatencyInteractive("mouse-enter");
+    } else {
+      // Start a full idle interval on exit, even after a long stationary hover.
+      dynamicLatencyUntil = Date.now() + getDynamicLatencyConfig().holdMs;
+    }
+    syncSidebarToggleLowLatencyState();
+  }
+
+  function updateDynamicLatencyMousePosition(event) {
+    // Touch and pen events must never latch the mouse hover exemption.
+    if (!event || event.pointerType !== "mouse") return;
+    // Coordinates also cover dragging with pointer capture, which can defer leave.
+    setDynamicLatencyMouseInside(event.clientX >= 0 && event.clientY >= 0 &&
+      event.clientX < window.innerWidth && event.clientY < window.innerHeight);
+  }
+
   function bindDynamicLatencyMode() {
+    ensureDynamicLatencyStyle();
     startDynamicLatencyMount();
     syncSidebarToggleLowLatencyState();
     dynamicLatencyUntil = Date.now() + getDynamicLatencyConfig().holdMs;
@@ -7774,6 +7848,10 @@
       dynamicLatencyTimer = window.setInterval(function () {
         var config = getDynamicLatencyConfig();
         if (!config.enabled) {
+          restoreDynamicLatency();
+          return;
+        }
+        if (isDynamicLatencyMousePresent()) {
           restoreDynamicLatency();
           return;
         }
@@ -7820,11 +7898,32 @@
       markDynamicLatencyInteractive(phase);
     }
 
-    document.addEventListener("pointerdown", function () {
+    // Listen on the root itself: crossing descendants is not leaving the page.
+    document.documentElement.addEventListener("pointerenter", updateDynamicLatencyMousePosition);
+    document.documentElement.addEventListener("pointerleave", function (event) {
+      if (event.pointerType === "mouse") setDynamicLatencyMouseInside(false);
+    });
+    document.addEventListener("pointercancel", function (event) {
+      if (event.pointerType === "mouse") setDynamicLatencyMouseInside(false);
+    }, true);
+    document.addEventListener("pointerup", updateDynamicLatencyMousePosition, true);
+    window.addEventListener("blur", function () {
+      setDynamicLatencyMouseInside(false);
+    });
+    window.addEventListener("pagehide", function () {
+      setDynamicLatencyMouseInside(false);
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) setDynamicLatencyMouseInside(false);
+    });
+
+    document.addEventListener("pointerdown", function (event) {
+      updateDynamicLatencyMousePosition(event);
       clearUnreadOnPrimaryInteraction();
       markInteraction("\u9f20\u6807\u6309\u4e0b");
     }, true);
     document.addEventListener("pointermove", function (event) {
+      updateDynamicLatencyMousePosition(event);
       if (!hasVisibleStreamSurface()) return;
       if (!event) return;
       if (!event.buttons && Math.abs(Number(event.movementX) || 0) + Math.abs(Number(event.movementY) || 0) === 0) {

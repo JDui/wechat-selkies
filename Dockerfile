@@ -179,7 +179,7 @@ ENV SELKIES_LEGACY_UPLOAD_ENABLED="false"
 ENV SELKIES_UPLOAD_DIAGNOSTICS_MAX_BYTES="524288"
 ENV SELKIES_UPLOAD_DIAGNOSTICS_ARCHIVES="3"
 ENV SELKIES_UPLOAD_DIAGNOSTICS_KEEP_SAMPLES="false"
-ENV SELKIES_CONTAINER_SLEEP="false"
+ENV SELKIES_CONTAINER_SLEEP="true"
 ENV SELKIES_CONTAINER_SLEEP_REQUIRE_PIN="true"
 ENV SELKIES_CONTAINER_SLEEP_PORT="38083"
 ENV SELKIES_CONTAINER_SLEEP_STATE_PATH="/run/selkies-container-sleep.json"
@@ -196,6 +196,7 @@ ENV SELKIES_AWAKE_STATE_PATH="/tmp/selkies-client-awake.json"
 ENV SELKIES_FRONTEND_ACTIVITY_STATE_PATH="/tmp/selkies-frontend-activity.json"
 ENV SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS="3600"
 ENV SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS="5"
+ENV SELKIES_HIDDEN_STREAM_IDLE_SECONDS="60"
 ENV SELKIES_AUTO_SPLIT="false"
 ENV QQ_EXTRA_FLAGS="--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu --disable-gpu-compositing --disable-gpu-rasterization --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer"
 ENV QQ_NICE_LEVEL="-2"
@@ -217,7 +218,7 @@ ENV SELKIES_DEFAULT_H264_CRF="30"
 ENV SELKIES_DYNAMIC_THROTTLE="true"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_HOLD_MS="15000"
 ENV SELKIES_DYNAMIC_THROTTLE_MODE="idle-low-occupancy"
-ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="8"
+ENV SELKIES_DYNAMIC_LOW_LATENCY_FPS="2"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_H264_CRF="33"
 ENV SELKIES_DYNAMIC_LOW_LATENCY_SAMPLE_PERCENT="91"
 ENV SELKIES_STREAM_WAIT_THRESHOLD_MS="35000"
@@ -292,7 +293,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="1.78"
+LABEL org.opencontainers.image.version="1.83"
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 

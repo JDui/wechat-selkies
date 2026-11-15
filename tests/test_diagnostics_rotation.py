@@ -131,6 +131,24 @@ class DiagnosticsRotationTests(unittest.TestCase):
             bridge.append_diagnostics({"records": [{"event": "websocket-close", "code": 1006}]})
             self.assertFalse(stale.exists())
 
+    def test_numbered_archives_expire_even_with_only_heartbeat_events(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge, path = self.load_bridge(temporary)
+            stale = path.with_name(path.name + ".1")
+            fresh = path.with_name(path.name + ".2")
+            extra = path.with_name(path.name + ".3")
+            unrelated = path.with_name(path.name + ".backup")
+            for item in (stale, fresh, extra, unrelated):
+                item.write_text("archive\n")
+            old = time.time() - 8 * 86400
+            os.utime(stale, (old, old))
+            bridge.append_diagnostics({"records": [{"event": "browser-sample"}]})
+            self.assertFalse(stale.exists())
+            self.assertFalse(extra.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertFalse(path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

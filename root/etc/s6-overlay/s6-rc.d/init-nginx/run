@@ -188,14 +188,8 @@ start_upload_sidecar() {
 }
 
 start_container_sleep_manager() {
-  case "${SELKIES_CONTAINER_SLEEP:-false}" in
-    true|TRUE|1|yes|YES|on|ON) ;;
-    *) return ;;
-  esac
-  case "${SELKIES_CONTAINER_SLEEP_REQUIRE_PIN:-true}" in
-    false|FALSE|0|no|NO|off|OFF) ;;
-    *) [ -n "${PASSWORD:-}" ] || return ;;
-  esac
+  # Keep status available even when sleep is disabled or PIN is missing.
+  # The manager enforces these prerequisites before freezing any process.
   if pgrep -f "/scripts/container_sleep_manager.py" >/dev/null 2>&1; then
     return
   fi

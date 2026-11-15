@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 
 PORT = int(os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", "38083"))
-ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "false").strip().lower() in (
+ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "true").strip().lower() in (
     "1",
     "true",
     "yes",
@@ -295,10 +295,10 @@ def status_payload():
     warning_remaining = max(0.0, warning_deadline_at - now) if pending_sleep else 0.0
     if not is_feature_enabled():
         sleep_block_reason = "feature-disabled"
-    elif not bool(config["adaptive_sleep_enabled"]):
-        sleep_block_reason = "adaptive-sleep-disabled"
     elif bool(state.get("sleeping")):
         sleep_block_reason = "sleeping"
+    elif not bool(config["adaptive_sleep_enabled"]):
+        sleep_block_reason = "adaptive-sleep-disabled"
     elif now - started_at < STARTUP_GRACE_SECONDS:
         sleep_block_reason = "startup-grace"
     elif idle_for < idle_seconds:
@@ -312,6 +312,7 @@ def status_payload():
         {
             "ok": True,
             "feature_enabled": is_feature_enabled(),
+            "disabled_reason": "environment-disabled" if not ENABLED else ("pin-required" if REQUIRE_PIN and not PASSWORD else ""),
             "adaptive_sleep_enabled": bool(config["adaptive_sleep_enabled"]),
             "adaptive_sleep_idle_seconds": idle_seconds,
             "idle_seconds": idle_seconds,
@@ -427,6 +428,8 @@ def enter_sleep(reason="idle"):
         state = read_state()
         if state.get("sleeping"):
             return True
+        # Ordinary idle keeps messaging online. Explicit/timed sleep freezes
+        # the desktop workload, leaving only login/auth/wakeup infrastructure.
         pids = list_freezable_pids()
         frozen = []
         for pid in pids:
@@ -435,6 +438,7 @@ def enter_sleep(reason="idle"):
         payload = {
             "enabled": True,
             "sleeping": True,
+            "mode": "full",
             "pending_sleep": False,
             "reason": reason,
             "entered_at": time.time(),
@@ -486,13 +490,15 @@ def monitor_loop():
                 config = read_sleep_mode_config()
                 adaptive_enabled = bool(config["adaptive_sleep_enabled"])
                 idle_seconds = int(config["adaptive_sleep_idle_seconds"])
-                if not is_feature_enabled() or not adaptive_enabled:
-                    if read_state().get("sleeping"):
+                state = read_state()
+                feature_enabled = is_feature_enabled()
+                if not feature_enabled or not adaptive_enabled:
+                    # The automatic idle preference must not undo an explicit sleep.
+                    if state.get("sleeping") and (not feature_enabled or state.get("reason") != "manual"):
                         leave_sleep("disabled")
                     clear_pending_sleep("disabled")
                     idle_since = 0.0
                     continue
-                state = read_state()
                 if state.get("sleeping"):
                     continue
                 now = time.time()
