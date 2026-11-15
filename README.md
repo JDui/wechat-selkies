@@ -50,6 +50,12 @@
 - 上传会话空闲缓存回收；完成元数据保留 24 小时，未完成上传仍可续传。焦点命令超时清理整个进程组。
 - 微信进程监控与隔夜采集明确不检测账号登录态；缺少证据时原因保持 `unknown`。详情见 [稳定性加固说明](docs/ops/stability-hardening.md)。
 
+## 1.77 更新
+
+- `AXiVer` 转为 Intel Quick Sync 维护版本，面向 N355，默认使用完整 iHD 驱动与现有 VA-API H.264 编码路径。
+- 自动选择 Intel 渲染节点并检查编码能力；不可用时锁定 CPU 回退。更新页面资源缓存版本至 1.77。
+- 部署镜像为 `wechat-selkies:1.77`，离线包为 `wechat-selkies-1.77-intel.tar`。N355 真机硬编与休眠唤醒需上机验收，见 [部署说明](docs/ops/intel-quicksync.md)。
+
 ## 1.76 更新
 
 - 中文提交改用 X11 剪贴板事务，输入队列与画面确认解耦，并扩展剪贴板格式兼容。新增系统标识持久化与微信代理模式；首次迁移及终端粘贴快捷键说明见 [输入与剪贴板加固](docs/ops/input-clipboard-environment-hardening.md)。真实 NAS 和登录态微信 / QQ 尚未验收。
@@ -186,10 +192,10 @@
 
 ### 构建 Intel 镜像
 
-本分支尚未发布 Intel Release 镜像包，先在仓库目录构建：
+可使用本地导出的 `wechat-selkies-1.77-intel.tar` 离线测试包，导入步骤见 [N355 部署说明](docs/ops/intel-quicksync.md)。需要自行构建时，在仓库目录执行：
 
 ```bash
-docker build -t wechat-selkies:intel-quicksync .
+docker build -t wechat-selkies:1.77 .
 ```
 
 启动：
@@ -204,7 +210,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:intel-quicksync
+  wechat-selkies:1.77
 ```
 
 访问：
@@ -227,7 +233,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:intel-quicksync
+    image: wechat-selkies:1.77
     container_name: wechat-selkies
     init: true
     ports:
@@ -397,7 +403,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:intel-quicksync \
+  wechat-selkies:1.77 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -460,14 +466,14 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:intel-quicksync .
+docker build -t wechat-selkies:1.77 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
 
 - `TARGETPLATFORM` / `BUILDPLATFORM`：默认 `linux/amd64`。
 - `QQ_LOCAL_URL`：可选，指定 QQ `.deb` 的下载镜像地址，覆盖官方 CDN。
-- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有当前 `wechat-selkies:1.76` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.76 -t wechat-selkies:intel-quicksync .` 复用微信 / QQ 安装层，仅构建 Intel 驱动、当前源码覆盖层和上传组件。
+- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有当前 `wechat-selkies:1.76` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.76 -t wechat-selkies:1.77 .` 复用微信 / QQ 安装层，仅构建 Intel 驱动、当前源码覆盖层和上传组件。
 
 如果构建时 QQ 下载报 `curl: (22) ... error: 403`，说明官方 CDN 拒绝了自动化下载，此时用任意可达地址替代即可（内网镜像、对象存储，或本机临时 HTTP 服务）：
 
@@ -480,13 +486,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:intel-quicksync .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.77 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-intel-quicksync.tar wechat-selkies:intel-quicksync
+docker save -o wechat-selkies-1.77-intel.tar wechat-selkies:1.77
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。

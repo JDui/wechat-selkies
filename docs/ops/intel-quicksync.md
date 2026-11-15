@@ -14,12 +14,27 @@
 
 宿主机须提供可用的 Intel 核显驱动和 `/dev/dri`。镜像只提供用户态驱动，不能替代 NAS 内核驱动与固件。
 
+### 1.77 离线测试包
+
+本地导出目录为 `dist/1.77-intel/`，包含 `wechat-selkies-1.77-intel.tar`、不含构建步骤的 `docker-compose.yml`、`.env.example` 和 `README.txt`。将这些文件放到 N355 的同一部署目录，执行：
+
+```bash
+docker load -i wechat-selkies-1.77-intel.tar
+cp .env.example .env
+# 编辑 .env，填写自己的 PASSWORD（访问 PIN）
+docker compose up -d --no-build --pull never
+```
+
+该包为 `linux/amd64`，镜像标签 `wechat-selkies:1.77`。配置数据写入同目录 `./config`；迁移既有环境时应沿用原配置目录。端口默认 3000 / 3001，可在 `.env` 调整。
+
+### 从源码构建
+
 ```bash
 docker compose build
 docker compose up -d
 ```
 
-构建得到 `wechat-selkies:intel-quicksync`。若 QQ 官方下载返回 403，沿用项目现有 `QQ_LOCAL_URL` 参数指定可访问的 QQ 安装包地址。旧的 `wechat-selkies-1.76.tar` 不包含本次 Intel 改造。
+构建得到 `wechat-selkies:1.77`。若 QQ 官方下载返回 403，沿用项目现有 `QQ_LOCAL_URL` 参数指定可访问的 QQ 安装包地址。旧的 `wechat-selkies-1.76.tar` 不包含本次 Intel 改造。
 
 本机已有当前 1.76 镜像时，可复用其应用安装层，避免再次下载微信 / QQ；Intel 驱动、源码覆盖层和上传组件仍从当前代码构建：
 
@@ -55,7 +70,7 @@ docker logs wechat-selkies 2>&1 | grep -E 'intel-gpu|Mode: H264|VAAPI'
 需要自动化推流探测时复用现有脚本（在能映射 Intel `/dev/dri` 的 Docker 环境运行）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/ops/validate-1.28-encoders.ps1 -Image wechat-selkies:intel-quicksync -IncludeVaapi
+powershell -ExecutionPolicy Bypass -File scripts/ops/validate-1.28-encoders.ps1 -Image wechat-selkies:1.77 -IncludeVaapi
 ```
 
 脚本的前置检查接受任意编号的 `renderD*` 字符设备；最终仍以实际 H.264 VA-API 推流日志判断通过。
