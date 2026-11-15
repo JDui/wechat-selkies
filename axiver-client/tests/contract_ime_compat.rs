@@ -1,6 +1,4 @@
-//! IME regression contract carried over verbatim from the legacy client's
-//! `webview_guard_preserves_chinese_ime_composition_until_commit` test
-//! (spec section 10 T11 and P1 exit criteria).
+//! IME injection boundaries. Event ordering is checked in ime-guard.cjs.
 
 use std::{fs, path::PathBuf};
 
@@ -12,13 +10,13 @@ fn script() -> String {
 #[test]
 fn webview_guard_preserves_chinese_ime_composition_until_commit() {
     let script = script();
-    assert!(script.contains("__selkiesCompositionGuardInstalled"));
+    assert!(script.contains("selkiesRecoverPendingInput"));
     assert!(script.contains(r#""compositionstart""#));
     assert!(script.contains("event.isComposing"));
     assert!(script.contains("event.stopImmediatePropagation()"));
     assert!(script.contains(r#""compositionend""#));
-    assert!(script.contains(r#"String(event.data || "")"#));
-    assert!(script.contains("if (finalInputSeen) return"));
+    assert!(script.contains(r#"typeof event.data === "string" ? event.data"#));
+    assert!(script.contains(r#"input.send("co,end," + value)"#));
     assert!(script.contains("input._typeString(value)"));
     // Legacy visible-UI hooks must be gone from the remote script.
     assert!(!script.contains("axiver-client-host"));
