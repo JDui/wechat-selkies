@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+python3 /scripts/configure-intel-gpu.py
+# Reload s6's selected device and fallback flags before generating UI defaults.
+with-contenv bash /etc/cont-init.d/90-selkies-paste-config

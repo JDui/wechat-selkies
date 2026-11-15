@@ -1,0 +1,70 @@
+# Intel Quick Sync（N355）
+
+本分支从当前 AXiVer 1.76 工作区继续开发。`_AMDGPU` 保存改造前代码和当时未提交的输入法修复；Intel 代码位于 `codex/intel-quicksync`。AMD 分支与原有发布镜像不随本次改造修改。
+
+## 实现
+
+- 复用 Selkies / pixelflux 的全帧 H.264 VA-API 编码路径。界面的 `x264enc` 是原有协议名称，关闭 CPU 编码且设备可用时走硬件路径；不是新增 `h264_qsv` / oneVPL 后端。JPEG 与分片 H.264 继续使用 CPU。
+- amd64 镜像安装 `intel-media-va-driver-non-free`、`i965-va-driver-shaders` 和 `vainfo`。N355 默认 `INTEL_VAAPI_DRIVER=iHD`；旧型号可选 `i965`，也可设 `auto` 依次探测。ARM64 保留 CPU 运行能力。
+- `DRI_NODE=auto` 按 sysfs 的 Intel 厂商 ID `0x8086` 选择已映射的 render 节点，不假定 Intel 一定位于 `renderD128`。显式指定节点时只检查该节点，选错厂商或路径则回退 CPU。
+- s6 的 `init-intel-gpu` 在基础镜像 `init-video` 完成设备权限配置之后运行，以实际桌面用户 `abc` 执行有 8 秒超时的 `vainfo`。H.264 普通 `EncSlice` 可用后才启用硬件；只解码或仅低功耗 `EncSliceLP` 不作为当前 pixelflux 路径可用的证据。
+- 失败时清空 DRI 节点，并设置 `SELKIES_USE_CPU=true|locked` 与前端 CPU 默认值，避免旧浏览器设置重新打开失败的硬编路径。诊断结果写入 `/run/selkies-intel-gpu.json`，`/scripts/cpu-diagnostics.sh` 会显示它。
+
+## 部署
+
+宿主机须提供可用的 Intel 核显驱动和 `/dev/dri`。镜像只提供用户态驱动，不能替代 NAS 内核驱动与固件。
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+构建得到 `wechat-selkies:intel-quicksync`。若 QQ 官方下载返回 403，沿用项目现有 `QQ_LOCAL_URL` 参数指定可访问的 QQ 安装包地址。旧的 `wechat-selkies-1.76.tar` 不包含本次 Intel 改造。
+
+本机已有当前 1.76 镜像时，可复用其应用安装层，避免再次下载微信 / QQ；Intel 驱动、源码覆盖层和上传组件仍从当前代码构建：
+
+```bash
+docker compose build --build-arg RUNTIME_BASE=wechat-selkies:1.76
+docker compose up -d
+```
+
+`RUNTIME_BASE` 默认是 Dockerfile 中的 `app-base`，不传此参数仍走完整源码构建。指定已有镜像时应使用当前 1.76 基线及对应 CPU 架构，不要用更老或不相关的镜像。
+
+Compose 已映射 `/dev/dri`，默认配置如下：
+
+```yaml
+environment:
+  - DRI_NODE=auto
+  - INTEL_VAAPI_DRIVER=iHD
+  - SELKIES_DEFAULT_ENCODER=x264enc
+  - SELKIES_DEFAULT_USE_CPU=false
+```
+
+多块 Intel GPU 时可通过 `.env` 指定 `DRI_NODE=/dev/dri/renderD129` 等实际节点。修改驱动或设备后需重建容器配置（`docker compose up -d --force-recreate`）。无 `/dev/dri` 的机器须先删除 Compose 的 `devices` 映射，否则 Docker 会在容器启动前报错；容器启动后会自动使用 CPU。
+
+## N355 上的最小验收
+
+```bash
+docker exec wechat-selkies cat /run/selkies-intel-gpu.json
+docker exec wechat-selkies /scripts/cpu-diagnostics.sh
+docker logs wechat-selkies 2>&1 | grep -E 'intel-gpu|Mode: H264|VAAPI'
+```
+
+状态应显示 `backend: intel-vaapi`、`driver: iHD` 和实际 Intel 节点。随后用浏览器连接，选择全帧 H.264 并关闭 CPU 编码，确认画面正常、日志出现 `Mode: H264 (VAAPI) FullFrame`，再验证一次休眠唤醒。能力探测通过不代表真实编码成功；仍需这些运行时证据。
+
+需要自动化推流探测时复用现有脚本（在能映射 Intel `/dev/dri` 的 Docker 环境运行）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/ops/validate-1.28-encoders.ps1 -Image wechat-selkies:intel-quicksync -IncludeVaapi
+```
+
+脚本的前置检查接受任意编号的 `renderD*` 字符设备；最终仍以实际 H.264 VA-API 推流日志判断通过。
+
+参考：[Intel N355 产品规格](https://www.intel.com/content/www/us/en/products/sku/241639/intel-core-3-processor-n355-6m-cache-up-to-3-90-ghz/specifications.html)、[Intel Media Driver](https://github.com/intel/media-driver)、[Ubuntu Noble 完整 Intel 驱动包](https://packages.ubuntu.com/noble/intel-media-va-driver-non-free)。
+
+## 本地验证（2026-11-15）
+
+- 6 个针对性单元测试通过：多显卡选择、旧驱动回退、显式错误节点、CPU 锁定、手动 CPU 模式及能力探测超时 / 仅解码拒绝。
+- Compose 配置检查通过。使用 `RUNTIME_BASE=wechat-selkies:1.76` 成功构建 `wechat-selkies:intel-quicksync`；镜像中完整 iHD 驱动、i965 驱动和 vainfo 已安装。
+- 独立临时容器未挂载用户 `/config`，关闭微信 / QQ 自动启动，启动与健康检查通过。无 `/dev/dri` 时，s6 初始化写入 CPU 回退状态、后端 `true|locked` 和前端 `defaultUseCpu: true`，且不再设置 DRI 节点。
+- 默认完整构建在 QQ 官方下载时遇到 HTTP 403，后续依赖下载也未完成；本次镜像验证使用现有 1.76 应用层。开发机没有可映射的 Intel GPU，因此没有声称 N355 真机硬编、实际浏览器画面或休眠唤醒通过。

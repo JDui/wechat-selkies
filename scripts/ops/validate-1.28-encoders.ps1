@@ -134,7 +134,7 @@ function Assert-VaapiDeviceMapping {
     $oldPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $output = & docker run --rm --device /dev/dri:/dev/dri --entrypoint sh $ImageName -lc "test -e /dev/dri/renderD128 -o -e /dev/dri/card0 && ls -l /dev/dri" 2>&1 | Out-String
+        $output = & docker run --rm --device /dev/dri:/dev/dri --entrypoint sh $ImageName -lc "find /dev/dri -maxdepth 1 -name 'renderD*' -type c -print -quit | grep -q . && ls -l /dev/dri" 2>&1 | Out-String
         $exitCode = $LASTEXITCODE
     }
     finally {
@@ -144,7 +144,7 @@ function Assert-VaapiDeviceMapping {
     if ($exitCode -ne 0) {
         throw @"
 VAAPI validation requested, but Docker could not map a usable /dev/dri device into the container.
-Run this validation on a Linux host with /dev/dri/renderD128 exposed to Docker.
+Run this validation on a Linux host with a /dev/dri/renderD* device exposed to Docker.
 
 Docker output:
 $output

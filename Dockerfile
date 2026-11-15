@@ -1,3 +1,6 @@
+# Reuse a locally built app image when converting an existing release; the
+# default still builds WeChat/QQ from the original base image below.
+ARG RUNTIME_BASE=app-base
 FROM rust:1.96-bookworm AS upload-sidecar-builder
 WORKDIR /build
 COPY upload-sidecar/Cargo.toml upload-sidecar/Cargo.lock ./
@@ -5,7 +8,7 @@ COPY upload-sidecar/src ./src
 RUN cargo build --locked --release
 
 # WeChat for Linux using Selkies baseimage
-FROM ghcr.io/linuxserver/baseimage-selkies:ubuntunoble
+FROM ghcr.io/linuxserver/baseimage-selkies:ubuntunoble AS app-base
 
 # Metadata labels
 LABEL org.opencontainers.image.title="WeChat Selkies"
@@ -262,7 +265,23 @@ ENV SPLIT_FAB_POSITION="bottom-center"
 # update favicon
 RUN cp /usr/share/icons/hicolor/512x512/apps/qq.png /usr/share/selkies/www/icon.png
 
-# add local files
+# Intel runtime overlay, also usable on the existing 1.76 application image.
+FROM ${RUNTIME_BASE} AS runtime
+ARG TARGETPLATFORM=linux/amd64
+ENV DRI_NODE="auto"
+ENV INTEL_VAAPI_DRIVER="iHD"
+LABEL org.opencontainers.image.title="WeChat Selkies Intel Quick Sync"
+LABEL org.opencontainers.image.description="WeChat Linux desktop with Intel Quick Sync H.264 via VA-API"
+# Intel Quick Sync uses the existing pixelflux VA-API H.264 pipeline.
+# The full media driver supplies encoding kernels omitted by the free build.
+# ARM64 remains a CPU-compatible build; Intel media drivers are x86-only.
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
+      apt-get update -o Acquire::Retries=5 && \
+      apt-get install -y --no-install-recommends \
+        intel-media-va-driver-non-free i965-va-driver-shaders vainfo && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 
@@ -274,6 +293,9 @@ RUN chmod 1777 /tmp && chmod 1777 /var/tmp 2>/dev/null || true
 
 # normalize line endings for scripts copied from Windows worktrees
 RUN sed -i 's/\r$//' \
+    /etc/s6-overlay/s6-rc.d/init-intel-gpu/run \
+    /etc/s6-overlay/s6-rc.d/init-intel-gpu/up \
+    /etc/s6-overlay/s6-rc.d/init-intel-gpu/type \
     /etc/cont-init.d/89-stable-desktop-environment \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
     /etc/cont-init.d/90-selkies-paste-config \
@@ -318,6 +340,7 @@ RUN sed -i 's/\r$//' \
 
 # ensure custom cont-init scripts are executable
 RUN chmod +x /etc/cont-init.d/89-stable-desktop-environment \
+    /etc/s6-overlay/s6-rc.d/init-intel-gpu/run \
     /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/94-selkies-drop-cache \
     /etc/cont-init.d/91-selkies-single-session-patch \

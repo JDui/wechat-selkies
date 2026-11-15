@@ -48,7 +48,7 @@ LOCAL_LINK_OPEN_RAW="${SELKIES_LOCAL_LINK_OPEN:-true}"
 LOCAL_LINK_POLL_INTERVAL_RAW="${SELKIES_LOCAL_LINK_POLL_INTERVAL_MS:-800}"
 STANDALONE_UPLOAD_RAW="${SELKIES_UPLOAD_ENABLED:-true}"
 LEGACY_UPLOAD_RAW="${SELKIES_LEGACY_UPLOAD_ENABLED:-false}"
-DRI_NODE_PATH="${DRI_NODE:-/dev/dri/renderD128}"
+DRI_NODE_PATH="${DRI_NODE:-}"
 LAN_HTTP_PORT_RAW="${SELKIES_LAN_ADVERTISE_HTTP_PORT:-${CUSTOM_PORT:-3000}}"
 LAN_HTTPS_PORT_RAW="${SELKIES_LAN_ADVERTISE_HTTPS_PORT:-${CUSTOM_HTTPS_PORT:-3001}}"
 
@@ -297,7 +297,7 @@ case "${LEGACY_UPLOAD_RAW,,}" in
 esac
 
 dri_available_js="false"
-if [ -e "$DRI_NODE_PATH" ] || [ -e "/dev/dri/renderD128" ] || [ -d "/dev/dri" ]; then
+if [[ "$DRI_NODE_PATH" =~ ^/dev/dri/renderD[0-9]+$ ]] && [ -c "$DRI_NODE_PATH" ]; then
   dri_available_js="true"
 fi
 

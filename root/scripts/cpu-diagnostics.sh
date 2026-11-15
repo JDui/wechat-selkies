@@ -76,6 +76,9 @@ done
 
 echo
 echo "== /dev/dri =="
+if [ -r /run/selkies-intel-gpu.json ]; then
+  cat /run/selkies-intel-gpu.json
+fi
 if [ -d /dev/dri ]; then
   ls -l /dev/dri
 else

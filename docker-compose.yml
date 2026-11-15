@@ -3,13 +3,13 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:latest
+    image: wechat-selkies:intel-quicksync
     container_name: wechat-selkies
     init: true
     volumes:
       - ./config:/config
     devices:
-      - /dev/dri:/dev/dri # optional, for hardware acceleration
+      - /dev/dri:/dev/dri # Intel Quick Sync; remove on CPU-only hosts
     ports:
       - "${SELKIES_HTTP_PORT:-3000}:3000"       # http port
       - "${SELKIES_HTTPS_PORT:-3001}:3001"       # https port
@@ -88,7 +88,8 @@ services:
       - QQ_WATCHDOG_FAIL_THRESHOLD=3
       - QQ_WATCHDOG_X11_PING=true
       - QQ_WATCHDOG_X11_TIMEOUT=2
-      - DRI_NODE=/dev/dri/renderD128
+      - DRI_NODE=${DRI_NODE:-auto}
+      - INTEL_VAAPI_DRIVER=${INTEL_VAAPI_DRIVER:-iHD}
       - SELKIES_ENABLE_BINARY_CLIPBOARD=true
       - SELKIES_PASTE_IMAGE=true
       - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
@@ -96,7 +97,7 @@ services:
       - SELKIES_DEFAULT_FRAMERATE=30
       - SELKIES_DISABLE_GAMEPAD=true
       - SELKIES_DEFAULT_BINARY_CLIPBOARD=true
-      - SELKIES_DEFAULT_USE_CPU=false
+      - SELKIES_DEFAULT_USE_CPU=${SELKIES_DEFAULT_USE_CPU:-false}
       - SELKIES_DEFAULT_H264_STREAMING_MODE=true
       - SELKIES_DEFAULT_USE_PAINT_OVER_QUALITY=false
       - SELKIES_DEFAULT_H264_CRF=30
@@ -126,7 +127,7 @@ services:
   axisnsbox-discovery:
     build:
       context: .
-    image: wechat-selkies:latest
+    image: wechat-selkies:intel-quicksync
     container_name: axisnsbox-discovery
     init: true
     entrypoint: ["python3", "-u", "/scripts/lan_discovery_service.py"]

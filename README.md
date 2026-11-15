@@ -1,8 +1,10 @@
-# WeChat Selkies AXiVer
+# WeChat Selkies AXiVer — Intel Quick Sync
 
 基于 Docker 的微信 / QQ Linux 远程桌面镜像，通过 Selkies WebRTC 在浏览器中使用容器内的微信和 QQ。
 
-当前维护分支：`AXiVer`
+当前维护分支：`codex/intel-quicksync`。改造前的完整代码（含当时未提交的输入法修复）保存在 `_AMDGPU`。
+
+本分支面向 **Intel N355**，默认使用 `iHD` 驱动，通过现有 Selkies / pixelflux 的 VA-API H.264 路径调用 Quick Sync 硬件；不使用独立的 FFmpeg `h264_qsv` 编码器。启动时自动选择 Intel 渲染节点，以桌面用户检查编码能力；不可用时锁定 CPU 回退。部署与验收见 [Intel Quick Sync 说明](docs/ops/intel-quicksync.md)。
 
 ## 界面截图
 
@@ -182,12 +184,12 @@
 
 ## 快速开始
 
-### 使用 Release 镜像包
+### 构建 Intel 镜像
 
-下载最新 Release 中的 `wechat-selkies-1.76.tar` 后导入：
+本分支尚未发布 Intel Release 镜像包，先在仓库目录构建：
 
 ```bash
-docker load -i wechat-selkies-1.76.tar
+docker build -t wechat-selkies:intel-quicksync .
 ```
 
 启动：
@@ -202,7 +204,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.76
+  wechat-selkies:intel-quicksync
 ```
 
 访问：
@@ -225,7 +227,7 @@ docker compose up -d
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.76
+    image: wechat-selkies:intel-quicksync
     container_name: wechat-selkies
     init: true
     ports:
@@ -329,7 +331,8 @@ services:
 | `SELKIES_LOCAL_LINK_OPEN` | `true` | 启用链接本地打开确认 |
 | `LOCAL_LINK_BRIDGE_PORT` | `38080` | 本地链接桥接端口 |
 | `LOCAL_LINK_BRIDGE_ALLOWED_SCHEMES` | `http,https,mailto` | 允许处理的链接协议 |
-| `DRI_NODE` | `/dev/dri/renderD128` | VAAPI 渲染节点 |
+| `DRI_NODE` | `auto` | 自动选择 Intel 渲染节点；可指定 `/dev/dri/renderD128` 等实际路径 |
+| `INTEL_VAAPI_DRIVER` | `iHD` | N355 默认驱动；旧 Intel 可选 `i965`，`auto` 依次探测 iHD / i965 |
 | `QQ_EXTRA_FLAGS` | 见 `docker-compose.yml` | QQ 启动附加参数 |
 | `QQ_NICE_LEVEL` | `-2` | QQ 进程优先级 |
 | `QQ_WATCHDOG_HANG_DETECT` | `true` | 启用 QQ 卡死检测 |
@@ -394,7 +397,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.76 \
+  wechat-selkies:intel-quicksync \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -457,13 +460,14 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.76 .
+docker build -t wechat-selkies:intel-quicksync .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
 
 - `TARGETPLATFORM` / `BUILDPLATFORM`：默认 `linux/amd64`。
 - `QQ_LOCAL_URL`：可选，指定 QQ `.deb` 的下载镜像地址，覆盖官方 CDN。
+- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有当前 `wechat-selkies:1.76` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.76 -t wechat-selkies:intel-quicksync .` 复用微信 / QQ 安装层，仅构建 Intel 驱动、当前源码覆盖层和上传组件。
 
 如果构建时 QQ 下载报 `curl: (22) ... error: 403`，说明官方 CDN 拒绝了自动化下载，此时用任意可达地址替代即可（内网镜像、对象存储，或本机临时 HTTP 服务）：
 
@@ -476,13 +480,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.76 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:intel-quicksync .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.76.tar wechat-selkies:1.76
+docker save -o wechat-selkies-intel-quicksync.tar wechat-selkies:intel-quicksync
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。
