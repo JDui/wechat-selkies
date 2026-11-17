@@ -235,6 +235,44 @@ check("cancellation and remounted assist do not inherit a prior confirmed prefix
   assert.deepStrictEqual(delivered(remounted), ["新输入"]);
 });
 
+for (const cleanupFirst of [false, true]) {
+  for (const previous of ["", "前句"]) {
+    check("distinct candidate after compositionend survives (" + previous + ", cleanup=" + cleanupFirst + ")", () => {
+      const f = fixture();
+      f.event("compositionstart");
+      f.state.assist.value = previous;
+      f.event("compositionend", { data: previous });
+      if (cleanupFirst) f.tick();
+      f.input("新选字", { isComposing: false, inputType: "insertFromComposition", data: "新选字" });
+      assert.deepStrictEqual(delivered(f), previous ? [previous, "新选字"] : ["新选字"]);
+    });
+  }
+}
+
+check("new preedit without a repeated compositionstart survives old cleanup", () => {
+  const f = fixture();
+  f.event("compositionstart");
+  f.state.assist.value = "前句";
+  f.event("compositionend", { data: "前句" });
+  // A changed composing input is new preedit, never the prior commit's echo.
+  f.input("xin", { isComposing: true, inputType: "insertCompositionText", data: "xin" });
+  f.tick();
+  assert.strictEqual(f.state.assist.value, "xin");
+  assert.deepStrictEqual(delivered(f), ["前句"]);
+  f.state.assist.value = "新句";
+  f.event("compositionend", { data: "新句" });
+  assert.deepStrictEqual(delivered(f), ["前句", "新句"]);
+});
+
+check("delayed input uses its confirmed payload after field cleanup", () => {
+  const f = fixture();
+  f.event("compositionstart");
+  f.event("compositionend", { data: "" });
+  f.tick();
+  f.input("", { isComposing: false, inputType: "insertFromComposition", data: "已选中文" });
+  assert.deepStrictEqual(delivered(f), ["已选中文"]);
+});
+
 if (failures.length) {
   console.error("\n" + failures.length + " failed; " + passed + " passed");
   process.exitCode = 1;

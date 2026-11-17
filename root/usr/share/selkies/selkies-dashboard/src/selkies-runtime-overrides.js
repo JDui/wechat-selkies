@@ -8706,12 +8706,13 @@
       // Snapshot synchronously: compositionend.data is the committed word,
       // even if the DOM is empty or a new composition starts before a timer.
       var text = typeof event.data === "string" ? event.data : event.target.value;
+      var endText = text;
       // Some IMEs confirm a prefix before ending the remaining composition.
       // Recover it only when both an explicit non-composing insertion and the
       // final DOM agree. Stale preedit must never be guessed from the field.
       if (confirmed && event.target.value === confirmed + text) text = confirmed + text;
       traceAssistInput("commit", event, text);
-      var commit = { target: event.target, text: text, cleared: false };
+      var commit = { target: event.target, text: text, endText: endText, cleared: false };
       assistCompositionCommit = commit;
       queueAssistText(text);
       flushAssistInput();
@@ -8747,19 +8748,40 @@
       var value = event.target.value;
       var commit = assistCompositionCommit;
       var compositionInput = event.isComposing || /Composition/.test(event.inputType || "");
+      // A composition input is not necessarily an echo: some keyboards deliver
+      // the selected candidate only after an empty compositionend. Match both
+      // the end payload and the merged commit so split confirmations still work.
+      var compositionEcho = commit && compositionInput &&
+        (typeof event.data === "string"
+          ? (event.data === commit.endText || event.data === commit.text)
+          : (value === commit.endText || value === commit.text)) &&
+        (!value || value === commit.text || value === commit.endText);
       var legacyEcho = commit && !event.inputType && (event.data === commit.text || value === commit.text || !value);
-      if (commit && commit.target === event.target && (compositionInput || legacyEcho ||
+      if (commit && commit.target === event.target && (compositionEcho || legacyEcho ||
           (!commit.cleared && event.inputType === "insertText" && event.data === commit.text &&
            (value === commit.text || !value)))) {
         clearAssistCompositionCommit(true);
         flushAssistInput();
         return;
       }
-      if (event.isComposing) return;
+      if (event.isComposing) {
+        // A non-matching composing input belongs to fresh preedit, even if
+        // its compositionstart was omitted. Retire the old cleanup timer
+        // without clearing the live field or sending unconfirmed text.
+        clearAssistCompositionCommit(false);
+        return;
+      }
       // An ordinary input without an intervening keydown can append to the
       // just-committed value. Queue only the newly inserted suffix.
       if (commit && commit.target === event.target && !commit.cleared && commit.text && value.indexOf(commit.text) === 0) {
         value = value.slice(commit.text.length);
+      }
+      // Native insertion data remains authoritative if an earlier cleanup
+      // already emptied the assist. Never recover deletion or preedit data.
+      if (!value && !event.target.value && event.isComposing === false &&
+          /^(?:insertText|insertFromComposition|insertReplacementText)$/.test(event.inputType || "") &&
+          typeof event.data === "string") {
+        value = event.data;
       }
       clearAssistCompositionCommit(false);
       event.target.value = "";

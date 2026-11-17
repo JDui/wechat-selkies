@@ -41,7 +41,8 @@ async function setup(browser, appleTouch = false) {
     window.setActivityTask = () => {}; window.completeActivityTask = () => {};
     window.eval("var imeCompositionActive = false;\n" + guard + "\ninstallAssistInputGuard();");
   }, source.slice(guardStart, guardEnd));
-  await page.addScriptTag({ content: bundle.slice(0, prefixEnd) + "\nwindow.__InputClass = iu;" });
+  await page.addScriptTag({ type: "module", content: bundle.slice(0, prefixEnd) + "\nwindow.__InputClass = iu;" });
+  await page.waitForFunction(() => typeof window.__InputClass === "function");
   await page.evaluate(() => {
     const inst = new window.__InputClass(document.getElementById("overlayInput"), msg => window.sent.push(msg));
     inst.attach_context(); window.webrtcInput = inst;
