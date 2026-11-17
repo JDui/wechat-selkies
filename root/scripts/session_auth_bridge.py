@@ -562,6 +562,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/discovery":
+            # Discovery must work before login and while the desktop and its
+            # notification bridge are frozen. Reuse the broadcaster's schema.
+            from lan_discovery_common import build_identity_payload, read_discovery_state
+            state_path = Path(os.environ.get(
+                "NOTIFICATION_BRIDGE_MODE_PATH", "/config/state/notification-bridge.json"))
+            self.send_json(HTTPStatus.OK, build_identity_payload(read_discovery_state(state_path)))
+            return
         if path.startswith("/dock-download/"):
             if not request_has_valid_session(self):
                 self.send_json(401, {"ok": False, "error": "session-expired"})

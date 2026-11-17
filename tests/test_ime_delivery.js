@@ -2,6 +2,25 @@
 const assert = require("assert");
 const { fixture } = require("./helpers/ime_fixture");
 
+// A Ctrl pressed before the IME opens must not get stuck when composition
+// consumes its keyup. Model the bundle's own key ledger/reset implementation.
+for (const boundary of ["compositionstart", "focusout", "blur"]) {
+  const f = fixture();
+  const held = new Map([["ControlLeft", 65507], ["KeyV", 118]]);
+  f.window.webrtcInput = { resetKeyboard() {
+    for (const keysym of held.values()) f.socket.send("ku," + keysym);
+    held.clear();
+  } };
+  f.event(boundary);
+  assert.deepStrictEqual(f.sent, ["ku,65507", "ku,118"], boundary);
+  assert.strictEqual(held.size, 0);
+  if (boundary === "compositionstart") {
+    f.event("keyup", { key: "Control", code: "ControlLeft" });
+    f.event("compositionend", { data: "输入文字" });
+    assert.deepStrictEqual(f.sent, ["ku,65507", "ku,118", "co,end,输入文字"]);
+  }
+}
+
 // Preedit never leaves the browser; candidate Enter keeps its native default.
 {
   const f = fixture();

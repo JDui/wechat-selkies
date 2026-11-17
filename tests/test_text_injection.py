@@ -11,6 +11,50 @@ SOURCE = Path(__file__).resolve().parents[1] / "root/lsiopy/lib/python3.12/site-
 
 
 class TextInjectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fast_enter_waits_for_editor_after_paste_receipt(self):
+        # Model a toolkit that acknowledges the clipboard immediately but
+        # inserts it into the editor on a later GUI callback (the reported
+        # failure leaves the suffix in the editor after sending the prefix).
+        handler, _ = self.handler(None, sleep=asyncio.sleep)
+        loop = asyncio.get_running_loop()
+        editor, sent, handles, keys = [""], [], [], []
+
+        async def paste(text):
+            handles.append(loop.call_later(.08, lambda: editor.__setitem__(0, editor[0] + text)))
+
+        async def key(keysym, down):
+            keys.append((keysym, down))
+            if down and keysym in (0xFF0D, 0xFF8D):
+                sent.append(editor[0])
+                editor[0] = ""
+
+        client = SimpleNamespace(is_wayland=False, _paste_committed_text=paste,
+            MODIFIER_KEYSYMS=set(), active_modifiers=set(), atomically_typed_keys=set(),
+            send_x11_keypress=key)
+        try:
+            for enter in (0xFF0D, 0xFF8D):
+                editor[0] = "前半句"
+                await handler(client, "co,end,和最后几个字")
+                await handler(client, f"kd,{enter}")
+                await handler(client, f"ku,{enter}")
+            self.assertEqual(sent, ["前半句和最后几个字"] * 2)
+            self.assertEqual(editor[0], "")
+            self.assertEqual(keys, [(0xFF0D, True), (0xFF0D, False), (0xFF8D, True), (0xFF8D, False)])
+        finally:
+            for handle in handles:
+                handle.cancel()
+
+    async def test_enter_without_recent_text_has_no_extra_wait(self):
+        sleep = AsyncMock()
+        handler, _ = self.handler(None, sleep=sleep)
+        client = SimpleNamespace(MODIFIER_KEYSYMS=set(), active_modifiers=set(),
+                                 send_x11_keypress=AsyncMock())
+        await handler(client, "kd,65293")
+        client._text_input_completed_at = asyncio.get_running_loop().time() - 1
+        await handler(client, "kd,65293")
+        sleep.assert_not_awaited()
+        self.assertEqual(client.send_x11_keypress.await_count, 2)
+
     def handler(self, process, wait_for=None, create_subprocess_exec=None, loop=None, sleep=None):
         tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and

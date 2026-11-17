@@ -46,6 +46,7 @@ LOG_PREFIX = "[container-sleep]"
 PROTECTED_CMD_PATTERNS = (
     "container_sleep_manager.py",
     "session_auth_bridge.py",
+    "lan_discovery_service.py",
     "nginx",
     "s6-",
     "/init",
@@ -429,7 +430,7 @@ def enter_sleep(reason="idle"):
         if state.get("sleeping"):
             return True
         # Ordinary idle keeps messaging online. Explicit/timed sleep freezes
-        # the desktop workload, leaving only login/auth/wakeup infrastructure.
+        # the desktop workload, leaving login/auth/wakeup and LAN discovery.
         pids = list_freezable_pids()
         frozen = []
         for pid in pids:

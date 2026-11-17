@@ -19,9 +19,27 @@ from lan_discovery_common import (  # noqa: E402
     sanitize_broadcast_name,
 )
 import notification_bridge  # noqa: E402
+import session_auth_bridge  # noqa: E402
 
 
 class LanDiscoveryTests(unittest.TestCase):
+    def test_identity_is_available_without_auth_or_waking_sleeping_desktop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state = Path(temp_dir) / "discovery.json"
+            state.write_text(json.dumps({"lan_discovery_enabled": True,
+                                         "lan_broadcast_name": "SLEEPING-BOX"}))
+            handler = session_auth_bridge.Handler.__new__(session_auth_bridge.Handler)
+            handler.path = "/discovery"
+            handler.send_json = mock.Mock()
+            with mock.patch.dict(os.environ, {"NOTIFICATION_BRIDGE_MODE_PATH": str(state)}), \
+                 mock.patch.object(session_auth_bridge.urllib.request, "urlopen", side_effect=AssertionError("desktop is asleep")), \
+                 mock.patch.object(session_auth_bridge, "request_has_valid_session", side_effect=AssertionError("discovery is public")):
+                handler.do_GET()
+            status, payload = handler.send_json.call_args.args
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["enabled"])
+            self.assertEqual(payload["name"], "SLEEPING-BOX")
+
     def test_broadcast_name_is_uppercase_and_constrained(self):
         self.assertEqual(sanitize_broadcast_name(" axisnsbox-123 "), "AXISNSBOX-123")
         self.assertTrue(is_valid_broadcast_name("BOX_01"))
@@ -108,6 +126,8 @@ class LanDiscoveryTests(unittest.TestCase):
         self.assertIn('data-debug-toggle="lan-discovery"', frontend)
         self.assertIn('data-debug-input="lan-broadcast-name"', frontend)
         self.assertEqual(nginx.count("location = SUBFOLDER.well-known/axisnsbox"), 2)
+        self.assertEqual(nginx.count("http://127.0.0.1:CAUTH/discovery;"), 2)
+        self.assertNotIn("CNOTIFY/discovery", nginx)
 
 
 if __name__ == "__main__":

@@ -8637,6 +8637,7 @@
   }
 
   function abandonAssistComposition() {
+    releaseAssistRemoteKeys();
     // An element can lose focus without window.blur or compositionend (iPad).
     // Discard only preedit; a later compositionend still supplies committed data.
     if (assistComposing && assistCompositionTarget) assistCompositionTarget.value = "";
@@ -8644,6 +8645,14 @@
     assistCompositionTarget = null;
     assistConfirmedCompositionText = "";
     assistCompositionKeys = Object.create(null);
+  }
+
+  function releaseAssistRemoteKeys() {
+    // The composition guard consumes keyup events. Release keys which the
+    // legacy handler sent before composition/focus loss, using its own ledger
+    // so both local and remote state agree (especially Ctrl/Meta after paste).
+    var input = window.webrtcInput;
+    if (input && typeof input.resetKeyboard === "function") input.resetKeyboard();
   }
 
   function useNativeAssistText(event) {
@@ -8710,6 +8719,7 @@
     window.addEventListener("compositionstart", function (event) {
       if (!isAssist(event)) return;
       traceAssistInput("compositionstart", event);
+      releaseAssistRemoteKeys();
       clearAssistCompositionCommit(true);
       assistComposing = imeCompositionActive = true;
       assistCompositionTarget = event.target;

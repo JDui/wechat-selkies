@@ -88,6 +88,17 @@ class SleepTimingTests(unittest.TestCase):
                 mock.call(201, self.manager.signal.SIGCONT), mock.call(200, self.manager.signal.SIGCONT)])
             self.assertFalse(self.manager.read_state()["sleeping"])
 
+    def test_sleep_keeps_discovery_and_auth_but_freezes_desktop(self):
+        commands = {200: "python3 /scripts/lan_discovery_service.py",
+                    201: "python3 /scripts/session_auth_bridge.py",
+                    202: "/opt/wechat/wechat", 203: "python3 /scripts/notification_bridge.py"}
+        with mock.patch.object(self.manager, "current_ancestor_pids", return_value={1}), \
+             mock.patch.object(self.manager.Path, "iterdir", return_value=[Path(str(pid)) for pid in commands]), \
+             mock.patch.object(self.manager, "proc_cmdline", side_effect=commands.get), \
+             mock.patch.object(self.manager, "proc_comm", return_value="python3"), \
+             mock.patch.object(self.manager, "proc_state", return_value="S"):
+            self.assertEqual(self.manager.list_freezable_pids(), [203, 202])
+
     def test_manual_sleep_survives_disabled_automatic_timer(self):
         self.manager.ENABLED = True
         self.manager.REQUIRE_PIN = False
