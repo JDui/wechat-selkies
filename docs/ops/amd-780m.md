@@ -1,6 +1,6 @@
 # AMD H255 / Radeon 780M
 
-2026-11-17：切换前工作区已提交并推送，`_intel` 保存完整 Intel 基线。新改动继续在 `AXiVer`；开发镜像标签为 `wechat-selkies:1.84-amd-dev`，与已发布的 Intel 1.84 区分。当前未构建、导出或部署该镜像。
+2026-11-17：切换前工作区已提交并推送，`_intel` 保存完整 Intel 基线。新改动继续在 `AXiVer`；镜像标签为 `wechat-selkies:1.85`，与 Intel 1.84 区分。780M 真机编码与部署尚待验收。
 
 ## 本次适配
 
