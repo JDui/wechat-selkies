@@ -64,6 +64,8 @@ DYNAMIC_PREFERENCE_RANGES = {
     "dynamic_low_latency_h264_crf": (5, 60),
     "dynamic_low_latency_sample_percent": (10, 100),
 }
+VIDEO_PREFERENCE_RANGES = {"framerate": (1, 240), "h264_crf": (5, 50), "h264_paintover_crf": (5, 50)}
+VIDEO_PREFERENCE_TOGGLES = {"use_paint_over_quality", "h264_streaming_mode", "h264_fullcolor", "use_cpu"}
 
 
 def read_preferences():
@@ -77,7 +79,25 @@ def read_preferences():
 def update_preferences(patch):
     clean = {}
     for key, value in patch.items():
-        if key in DYNAMIC_PREFERENCE_RANGES:
+        video_key = key.removesuffix("_display2")
+        if video_key == "encoder":
+            if value not in ("x264enc", "x264enc-striped", "jpeg", "h265enc"):
+                raise ValueError("Invalid video encoder")
+            clean[key] = value
+        elif video_key in VIDEO_PREFERENCE_TOGGLES:
+            if not isinstance(value, bool) and value not in ("true", "false"):
+                raise ValueError("Invalid video toggle")
+            clean[key] = value is True or value == "true"
+        elif video_key in VIDEO_PREFERENCE_RANGES:
+            try:
+                number = int(str(value))
+            except (TypeError, ValueError):
+                raise ValueError("Invalid video number")
+            minimum, maximum = VIDEO_PREFERENCE_RANGES[video_key]
+            if not minimum <= number <= maximum:
+                raise ValueError("Video value out of range")
+            clean[key] = number
+        elif key in DYNAMIC_PREFERENCE_RANGES:
             try:
                 number = int(str(value))
             except (TypeError, ValueError):

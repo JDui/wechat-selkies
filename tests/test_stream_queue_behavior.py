@@ -43,12 +43,13 @@ class StreamQueueTests(unittest.IsolatedAsyncioTestCase):
     async def test_h264_order_preserved_in_active_idle_and_high_load_modes(self):
         server = queue_server()
         queue = server.video_chunk_queues["primary"]
-        for key in ("active", "dynamic_low_latency_active", "high_load_active"):
-            server.display_clients["primary"] = {"encoder": "x264enc", key: True}
-            for frame in (1, 2, 3):
-                queue.put_nowait(frame)
-            server._prune_video_queue_for_display("primary")
-            self.assertEqual([queue.get_nowait() for _ in range(queue.qsize())], [1, 2, 3])
+        for encoder in ("x264enc", "h265enc"):
+            for key in ("active", "dynamic_low_latency_active", "high_load_active"):
+                server.display_clients["primary"] = {"encoder": encoder, key: True}
+                for frame in (1, 2, 3):
+                    queue.put_nowait(frame)
+                server._prune_video_queue_for_display("primary")
+                self.assertEqual([queue.get_nowait() for _ in range(queue.qsize())], [1, 2, 3])
 
     async def test_jpeg_still_discards_stale_independent_frames(self):
         server = queue_server()

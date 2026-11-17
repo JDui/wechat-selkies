@@ -132,6 +132,22 @@ class PreferencesTests(unittest.TestCase):
         self.assertEqual(restarted.read_preferences()["download_favorites:/files/:/config"], [])
         self.assertEqual(restarted.read_preferences()["bottom_action_dock_position"], "top")
 
+    def test_video_panel_survives_restart_and_rejects_invalid_patch_atomically(self):
+        settings = {"encoder": "h265enc", "framerate": 45, "h264_crf": 24,
+                    "h264_paintover_crf": 16, "use_paint_over_quality": True,
+                    "h264_streaming_mode": False, "h264_fullcolor": False, "use_cpu": False,
+                    "encoder_display2": "x264enc", "framerate_display2": 30}
+        self.bridge.update_preferences(settings)
+        restarted = load("session_auth_bridge")
+        restarted.PREFERENCES_PATH = self.bridge.PREFERENCES_PATH
+        self.assertEqual(restarted.read_preferences(), settings)
+        for key, value in (("encoder", "unknown"), ("framerate", True),
+                           ("framerate", 241), ("h264_crf", 51), ("h264_streaming_mode", 1),
+                           ("h264_paintover_crf", 4), ("encoder_display2", "hevc")):
+            with self.assertRaises(ValueError):
+                restarted.update_preferences({"use_paint_over_quality": False, key: value})
+            self.assertEqual(restarted.read_preferences(), settings)
+
     def test_concurrent_partial_updates_do_not_lose_other_settings(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(self.bridge.update_preferences, [

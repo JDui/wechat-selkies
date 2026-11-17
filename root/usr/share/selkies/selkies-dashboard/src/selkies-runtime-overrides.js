@@ -8,7 +8,7 @@
   var toolPreferencesReady = false;
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
   var CPU_ONLY_ENCODERS = new Set(["jpeg", "x264enc-striped"]);
-  var STABLE_ENCODERS = new Set(["x264enc", "x264enc-striped", "jpeg"]);
+  var STABLE_ENCODERS = new Set(["x264enc", "x264enc-striped", "jpeg", "h265enc"]);
   var FALLBACK_ENCODER = "x264enc";
   var badgeRefreshTimer = null;
   var lastServerUseCpu = null;
@@ -238,7 +238,6 @@
   var debugWechatAudioTimeout = null;
   var debugWechatAudioInterval = null;
   var nativeSelkiesControlGuardTimer = null;
-  var nativePaintOverToggleClickAt = 0;
   var modifierGestureState = {
     remoteToClient: { down: false, chorded: false, lastTapAt: 0, lastTriggerAt: 0, holdTimer: null }
   };
@@ -555,7 +554,7 @@
   }
 
   function isForcedSelkiesOffKey(name) {
-    return /(^|_)(use_paint_over_quality|gamepad_enabled|isGamepadEnabled|ui_sidebar_show_gamepads)(_display2)?$/.test(String(name || ""));
+    return /(^|_)(gamepad_enabled|isGamepadEnabled|ui_sidebar_show_gamepads)(_display2)?$/.test(String(name || ""));
   }
 
   function nativeSelkiesStoragePrefix() {
@@ -573,16 +572,15 @@
   }
 
   function primeNativeSelkiesForcedDefaults() {
-    ["use_paint_over_quality", "gamepad_enabled", "isGamepadEnabled", "ui_sidebar_show_gamepads"].forEach(function (name) {
+    ["gamepad_enabled", "isGamepadEnabled", "ui_sidebar_show_gamepads"].forEach(function (name) {
       setForcedSelkiesOffValue(name, false);
     });
-    setForcedSelkiesOffValue("use_paint_over_quality", true);
   }
 
   function sanitizeSettingsPayload(settings) {
     if (!settings || typeof settings !== "object") return settings;
     var safe = Object.assign({}, settings);
-    safe.use_paint_over_quality = false;
+    safe.hevc_supported = !!(window.selkiesHevc && window.selkiesHevc.supported());
     safe.gamepad_enabled = false;
     safe.isGamepadEnabled = false;
     safe.ui_sidebar_show_gamepads = false;
@@ -592,7 +590,7 @@
   function sanitizeServerSettingDefinitions(payload) {
     if (!payload || typeof payload !== "object") return payload;
     var safe = Object.assign({}, payload);
-    ["use_paint_over_quality", "gamepad_enabled", "ui_sidebar_show_gamepads"].forEach(function (name) {
+    ["gamepad_enabled", "ui_sidebar_show_gamepads"].forEach(function (name) {
       if (safe[name] && typeof safe[name] === "object") {
         safe[name] = Object.assign({}, safe[name], { value: false, default: false });
       }
@@ -1670,7 +1668,7 @@
     }
     if (type === 1) {
       lastAudioPacketAt = Date.now();
-    } else if (type === 0 || type === 3 || type === 4) {
+    } else if (type === 0 || type === 3 || type === 4 || type === 5) {
       lastVideoPacketAt = Date.now();
     }
   }
@@ -3748,7 +3746,7 @@
     if (VAAPI_ENCODER_HINTS.has(name) && sanitizeBool(runtime.driAvailable, false)) {
       return "VAAPI";
     }
-    if (name === "x264enc" && sanitizeBool(runtime.driAvailable, false) && !useCpu) {
+    if ((name === "x264enc" || name === "h265enc") && sanitizeBool(runtime.driAvailable, false) && !useCpu) {
       return "VAAPI";
     }
     return "CPU";
@@ -3842,7 +3840,7 @@
     if (getStoredValue(migrationKey) !== null) return;
     var encoder = String(getStoredValue("encoder") || preferredEncoder()).toLowerCase();
     if (encoder === "x264enc" && sanitizeBool(runtime.driAvailable, false)) {
-      setStoredValue("use_cpu", sanitizeBool(runtime.defaultUseCpu, false));
+      setStoredDefault("use_cpu", sanitizeBool(runtime.defaultUseCpu, false));
     }
     setStoredValue(migrationKey, "1");
   }
@@ -3851,7 +3849,7 @@
     primeNativeSelkiesForcedDefaults();
     var paintMigrationKey = "static_area_optimization_default_off_v1";
     if (getStoredValue(paintMigrationKey) === null) {
-      setStoredValue("use_paint_over_quality", false);
+      setStoredDefault("use_paint_over_quality", false);
       setStoredValue(paintMigrationKey, "1");
     }
 
@@ -3880,7 +3878,7 @@
   function migrateStreamAndDisplayDefaultsOnce() {
     var framerateMigrationKey = "default_framerate_30_v1";
     if (getStoredValue(framerateMigrationKey) === null) {
-      setStoredValue("framerate", 30);
+      setStoredDefault("framerate", 30);
       setStoredValue(framerateMigrationKey, "1");
     }
 
@@ -4184,7 +4182,7 @@
       setUseCpuFlag(false);
       return;
     }
-    if (value === "x264enc") {
+    if (value === "x264enc" || value === "h265enc") {
       setUseCpuFlag(readUseCpuHint(sanitizeBool(runtime.defaultUseCpu, false)));
     }
   }
@@ -6123,52 +6121,10 @@
     }
   }
 
-  function isToggleElementOn(node) {
-    if (!node) return false;
-    if ("checked" in node && node.checked === true) return true;
-    var ariaPressed = node.getAttribute("aria-pressed");
-    var ariaChecked = node.getAttribute("aria-checked");
-    var dataState = node.getAttribute("data-state");
-    return ariaPressed === "true" || ariaChecked === "true" || dataState === "checked" || dataState === "on";
-  }
-
-  function reflectToggleElementOff(node) {
-    if (!node) return;
-    if ("checked" in node) {
-      try {
-        node.checked = false;
-      } catch (_checkedErr) {}
-    }
-    node.setAttribute("aria-pressed", "false");
-    node.setAttribute("aria-checked", "false");
-    if (node.getAttribute("data-state") === "checked" || node.getAttribute("data-state") === "on") {
-      node.setAttribute("data-state", "off");
-    }
-    if (node.classList) {
-      node.classList.remove("active", "checked", "enabled", "on");
-    }
-  }
-
-  function forceNativePaintOverQualityToggleOff() {
-    primeNativeSelkiesForcedDefaults();
-    var toggle = document.getElementById("usePaintOverQualityToggle");
-    if (!toggle) return;
-    var active = isToggleElementOn(toggle);
-    reflectToggleElementOff(toggle);
-    if (!active || typeof toggle.click !== "function") return;
-    var now = Date.now();
-    if (now - nativePaintOverToggleClickAt < 1500) return;
-    nativePaintOverToggleClickAt = now;
-    try {
-      toggle.click();
-    } catch (_clickErr) {}
-  }
-
   function enforceNativeSelkiesControls() {
     installForcedSelkiesDefaultsGuard();
     primeNativeSelkiesForcedDefaults();
     hideNativeSelkiesGamepadControls();
-    forceNativePaintOverQualityToggleOff();
   }
 
   function startNativeSelkiesControlGuard() {
@@ -6434,6 +6390,10 @@
   function runEncoderResetSequence() {
     clearEncoderResetTimers();
     var encoder = currentEncoderName();
+    if (encoder === "h265enc") {
+      sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+      return;
+    }
     var canToggleVaapi = encoder === "x264enc" && sanitizeBool(runtime.driAvailable, false);
     if (canToggleVaapi) {
       postPrimarySettings({ encoder: encoder, use_cpu: true });

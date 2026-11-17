@@ -206,7 +206,7 @@ ENV QQ_WATCHDOG_X11_PING="true"
 ENV QQ_WATCHDOG_X11_TIMEOUT="2"
 ENV SELKIES_ENABLE_BINARY_CLIPBOARD="true"
 ENV SELKIES_PASTE_IMAGE="true"
-ENV SELKIES_ENCODER="x264enc,x264enc-striped,jpeg"
+ENV SELKIES_ENCODER="x264enc,h265enc,x264enc-striped,jpeg"
 ENV SELKIES_DEFAULT_FRAMERATE="30"
 ENV SELKIES_DISABLE_GAMEPAD="true"
 ENV SELKIES_DEFAULT_BINARY_CLIPBOARD="true"
@@ -271,6 +271,7 @@ FROM ${RUNTIME_BASE} AS runtime
 ARG TARGETPLATFORM=linux/amd64
 ENV DRI_NODE="auto"
 ENV LIBVA_DRIVER_NAME="radeonsi"
+ENV SELKIES_ENCODER="x264enc,h265enc,x264enc-striped,jpeg"
 LABEL org.opencontainers.image.title="WeChat Selkies AMD Radeon"
 LABEL org.opencontainers.image.description="WeChat Linux desktop with AMD Radeon H.264 via Mesa VA-API"
 # Radeon 780M uses the existing pixelflux VA-API pipeline with Mesa radeonsi.
@@ -285,6 +286,11 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
     fi
 
 LABEL org.opencontainers.image.version="1.85"
+# Keep the stable legacy H.264 ABI. Load the upstream H.265 runtime by its
+# private path instead of upgrading the pixelflux package used by that pipeline.
+ARG HEVC_PIP_INDEX_URL=https://pypi.org/simple
+RUN /lsiopy/bin/pip install --no-cache-dir --no-deps --only-binary=:all: \
+      --index-url "$HEVC_PIP_INDEX_URL" --target /opt/selkies-hevc pixelflux==2.2.3
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 

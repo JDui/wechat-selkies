@@ -58,13 +58,32 @@ docker logs wechat-selkies 2>&1 | grep -E 'amd-gpu|Mode: H264|VAAPI'
 
 将示例 `renderD128` 换成状态文件实际选择的节点。期望看到 `backend: amd-vaapi`、`driver: radeonsi`；连接浏览器、选择全帧 H.264 并关闭 CPU 编码后，应有正常画面和 `Mode: H264 (VAAPI) FullFrame` 日志，再确认一次休眠唤醒。
 
-本地已完成 8 项设备选择 / 探测 / 回退定向测试，`docker compose config --quiet` 通过。本机 Docker Linux 引擎未运行，尚未构建镜像，也未验证 Mesa 安装、780M 实际编码、浏览器画面或功耗。
+AMD 初始化阶段已完成 8 项设备选择 / 探测 / 回退定向测试。后续已构建 H.265 开发镜像并在本地无 GPU 容器完成浏览器联调；780M 实际硬编、NAS 部署和功耗仍未验收。
 
-## H.265 可行性与收益
+## H.265 前后端支持
 
-可作为后续可选编码器，当前没有启用。上游新版 [Selkies / pixelflux](https://docs.selkies.io/latest/components/pixelflux/) 已有全帧 H.265 与 AMD VA-API 编码路径，[上游配置说明](https://linuxserver-playground.github.io/site/docs/selkies/configuration/#video-encoders) 也提供 `h265enc`。应复用该实现；具体到这台 NAS，仍要以 `vainfo` 的 HEVC 编码 profile 和真实出帧确认驱动能力。
+2026-11-17：`AXiVer` 已加入可选 `h265enc`，默认仍为 H.264。复用上游 [pixelflux 2.2.3](https://github.com/selkies-project/pixelflux/tree/2.2.3)，固定安装到 `/opt/selkies-hevc`，避免替换旧 H.264 采集库的 ABI。无需新增独立 FFmpeg 推流进程。
 
-当前仓库仍使用旧接口：`selkies.py` 仅列出 `jpeg/x264enc/x264enc-striped`，采集配置使用 `h264_*`；前端包的解码和视频模式识别也按 H.264 处理。只向 `SELKIES_ENCODER` 添加 `h265enc`，或只更换动态库，不能得到端到端 H.265 支持。需要匹配版本的 pixelflux、后端配置与帧协议、浏览器解码配置以及 H.264 回退一起迁移，保留现有输入法、音频与休眠修复。
+- 后端提供 X11 全帧 HEVC Main、8-bit、4:2:0；继续使用原有视频队列、ACK、背压、空闲节流与恢复逻辑。HEVC Annex-B 帧使用独立类型 5，与 H.264 类型 4 区分。
+- 浏览器先用 WebCodecs 探测 HEVC，再根据首个关键帧 SPS 的真实 profile / level 配置解码器。不按浏览器名称猜测能力。
+- 关闭“CPU 编码”时检查所选渲染节点的 HEVC 编码能力，并验证实际首帧后的编码器状态；硬编失败回退 H.264。仅在明确选中 CPU 编码时允许软件 H.265。无 GPU 环境原有 CPU 锁定策略仍生效。
+- 浏览器不支持或解码失败时，在页面内切回 H.264，提示原因类别并保留其他画质设置，不触发重新登录。
+- 共享观看复用主控码流，不为每个观看者单独转码；不支持 HEVC 的观看者会提示主控切换 H.264，不改写主控偏好。
+- H.265 下禁用“全彩 4:4:4”，H.264 的全彩偏好仍保留。当前不提供 HEVC 10-bit、4:4:4 或 Wayland 支持。
+
+视频面板的编码器、帧率、视频 CRF、静态区域 CRF、静态区域优化开关、Turbo、全彩和 CPU 编码均保存到 `/config/state/ui-preferences.json`，浏览器同时保留路径稳定的缓存；主屏和副屏分别保存。加载服务器偏好完成后再初始化面板和码流，换浏览器或登录参数也能恢复。服务器锁定值和支持范围仍优先。移除了旧代码定时强制关闭静态区域优化的行为，并合并连续快速操作产生的设置更新，避免防抖丢失前一项修改。
+
+构建示例（开发标签，不代表发布或已部署）：
+
+```bash
+docker build --build-arg RUNTIME_BASE=wechat-selkies:1.85 -t wechat-selkies:hevc-dev .
+```
+
+如访问 PyPI 困难，可添加 `--build-arg HEVC_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。在 NAS 选择 `h265enc`、关闭 CPU 编码，并检查容器日志中的实际编码器状态及浏览器画面；如果回退，先查看该节点是否提供 HEVC Main 编码能力。
+
+本地已验证：真实软件 H.265 出帧 → WebSocket → Chrome WebCodecs 解码；45 FPS / CRF 24 / 静态优化开启 / Turbo 关闭在刷新并重新登录后恢复；不支持 HEVC 的客户端回退 H.264 且不丢设置。另有持久化重启、参数校验、协商字段解析、GPU 缺少编码器与队列顺序的定向测试。没有用无 GPU 容器的结果替代 780M 硬编验收。
+
+## 画质、带宽和性能
 
 收益判断：
 
@@ -79,4 +98,4 @@ docker logs wechat-selkies 2>&1 | grep -E 'amd-gpu|Mode: H264|VAAPI'
 
 [MDN 编码说明](https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Formats/Video_codecs#hevc_h.265) 说明了 HEVC 的压缩优势及 Main profile 色度限制。[W3C HEVC WebCodecs 注册](https://www.w3.org/TR/webcodecs-hevc-codec-registration/) 明确不要求浏览器实现 HEVC；应使用 `VideoDecoder.isConfigSupported()` 并实际解码，不能按浏览器名字硬编码支持。
 
-建议下一阶段采用可选 H.265、默认保留 H.264：先迁移匹配的上游多编码器接口，再加入服务器硬编能力与客户端解码能力协商，禁用静默的软件 H.265 回退；只对固定的一组聊天滚动 / 图片场景比较带宽、文字质量、端到端延迟和两端负载，再决定是否改默认值。
+当前保留 H.264 默认值。下一步在 780M 上用同一组聊天滚动 / 图片场景比较带宽、文字质量、端到端延迟和两端负载，再决定是否改默认值。
