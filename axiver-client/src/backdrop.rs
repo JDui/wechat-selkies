@@ -17,9 +17,9 @@ pub fn start(app: tauri::AppHandle) {
             };
             let expanded = ui.is_expanded();
             std::thread::sleep(std::time::Duration::from_millis(if expanded {
-                250
+                167
             } else {
-                850
+                500
             }));
             let Some(host) = app.get_window(MAIN_LABEL) else {
                 break;

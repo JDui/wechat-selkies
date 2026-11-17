@@ -6,10 +6,7 @@
 //! HTTPS port). The identity read is therefore not a hard gate here, exactly
 //! as in the old client — this is not cryptographic authentication.
 
-use super::{
-    CancelToken, Endpoint, TargetKind, PROBE_TIMEOUT, SERVICE_ID, SERVICE_TYPE,
-    identity::fetch_lan_identity,
-};
+use super::{CancelToken, Endpoint, PROBE_TIMEOUT, SERVICE_ID, SERVICE_TYPE, TargetKind};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use std::{
     net::{IpAddr, SocketAddr, TcpStream},
@@ -130,12 +127,11 @@ pub fn discover_lan(
                         continue;
                     }
 
-                    // The HTTP identity endpoint is preferred when exposed. Some
-                    // deployments publish only the advertised HTTPS port; in
-                    // that case the service/name TXT identity plus a successful
-                    // target-port probe is sufficient to continue (legacy).
-                    let _identity =
-                        fetch_lan_identity(address, http_port, path, expected_name, PROBE_TIMEOUT);
+                    // TXT service/name plus target reachability is the existing
+                    // acceptance rule. An ignored HTTP read only delayed it.
+                    if cancel.is_stale(current_generation) {
+                        break;
+                    }
                     let normalized_path = if path.starts_with('/') {
                         path.to_string()
                     } else {
@@ -149,6 +145,7 @@ pub fn discover_lan(
                         url,
                         socket: target_socket,
                         kind: TargetKind::Lan,
+                        identity_port: Some(http_port),
                     });
                     break;
                 }
@@ -169,8 +166,7 @@ pub fn discover_lan(
         Ok(LanOutcome::Found(endpoint))
     } else if matched_broadcast {
         Ok(LanOutcome::MatchedButFailed(
-            rejection_reason
-                .unwrap_or_else(|| "已发现广播，但没有可用的 IPv4 地址".to_string()),
+            rejection_reason.unwrap_or_else(|| "已发现广播，但没有可用的 IPv4 地址".to_string()),
         ))
     } else {
         Ok(LanOutcome::NotFound)
@@ -201,11 +197,19 @@ mod tests {
     fn stale_generation_cancels_before_browsing() {
         let daemon = ServiceDaemon::new().unwrap();
         let cancel = CancelToken {
+            stopped: None,
             my_generation: 4,
             live: None,
         };
-        let outcome = discover_lan(&daemon, "AXISNSBOX-000", Duration::from_millis(50), &cancel, 5, |_| {})
-            .unwrap();
+        let outcome = discover_lan(
+            &daemon,
+            "AXISNSBOX-000",
+            Duration::from_millis(50),
+            &cancel,
+            5,
+            |_| {},
+        )
+        .unwrap();
         assert!(matches!(outcome, LanOutcome::Cancelled));
         let _ = daemon.shutdown();
     }

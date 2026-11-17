@@ -14,6 +14,7 @@ pub mod app_state;
 pub mod commands;
 pub mod config;
 pub mod connection;
+pub mod connection_log;
 pub mod discovery;
 pub mod platform_windows;
 pub mod protocol;
@@ -24,3 +25,4 @@ pub use protocol::{ConnectionPhase, ConnectionSnapshotV1};
 
 pub mod backdrop;
 pub mod downloads;
+pub mod outside_click;

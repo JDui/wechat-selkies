@@ -150,7 +150,7 @@ pub fn build_remote(
 }
 
 pub fn build_shell(host: &Window, data_directory: PathBuf) -> tauri::Result<Webview> {
-    host.add_child(
+    let shell = host.add_child(
         WebviewBuilder::new(SHELL_LABEL, WebviewUrl::App("shell.html".into()))
             .data_directory(data_directory)
             .enable_clipboard_access()
@@ -162,7 +162,8 @@ pub fn build_shell(host: &Window, data_directory: PathBuf) -> tauri::Result<Webv
             }),
         tauri::LogicalPosition::new(12, 12),
         tauri::LogicalSize::new(128, 26),
-    )
+    )?;
+    Ok(shell)
 }
 
 /// Legacy uploader window.open requests stay inside the host. The current

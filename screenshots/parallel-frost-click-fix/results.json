@@ -1,0 +1,70 @@
+{
+  "scope": "disposable native WebView2; actual inside/outside presses and focus-only retention; no real user profile",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-frost-check-F7olq7",
+  "selected": {
+    "at": "2026-11-17T11:07:02Z",
+    "detail": "wan",
+    "elapsedMs": 325,
+    "event": "target_selected"
+  },
+  "timing": [
+    {
+      "at": "2026-11-17T11:07:02Z",
+      "detail": "parallel_lan_wan",
+      "elapsedMs": 0,
+      "event": "attempt_start"
+    },
+    {
+      "at": "2026-11-17T11:07:02Z",
+      "detail": "wan:reachable",
+      "elapsedMs": 0,
+      "event": "probe_finished"
+    },
+    {
+      "at": "2026-11-17T11:07:02Z",
+      "detail": "wan",
+      "elapsedMs": 325,
+      "event": "target_selected"
+    },
+    {
+      "at": "2026-11-17T11:07:02Z",
+      "detail": "remote",
+      "elapsedMs": 327,
+      "event": "navigation_started"
+    },
+    {
+      "at": "2026-11-17T11:07:03Z",
+      "detail": "current_origin",
+      "elapsedMs": 429,
+      "event": "page_loaded"
+    }
+  ],
+  "dot": null,
+  "panel": null,
+  "processing": {
+    "sampleWidth": 105,
+    "sampleHeight": 106,
+    "processingMs": 4.100000023841858
+  },
+  "native": {
+    "VisibleNativeWindows": 1,
+    "InfrastructureWindows": 1,
+    "Windows": [
+      {
+        "Handle": 987618,
+        "Title": "127.0.0.1:9797",
+        "Class": "Tauri Window",
+        "Width": 1296,
+        "Height": 859
+      },
+      {
+        "Handle": 18287706,
+        "Title": "",
+        "Class": "Tao Thread Event Target",
+        "Width": 16,
+        "Height": 16
+      }
+    ]
+  },
+  "nativeFocus": "790864"
+}

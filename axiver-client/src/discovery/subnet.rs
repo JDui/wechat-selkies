@@ -38,7 +38,9 @@ pub fn subnet_scan_candidates() -> Vec<Ipv4Addr> {
             continue;
         }
         let scan_prefix = address.prefixlen.max(24);
-        let mask = u32::MAX.checked_shl(u32::from(32 - scan_prefix)).unwrap_or(0);
+        let mask = u32::MAX
+            .checked_shl(u32::from(32 - scan_prefix))
+            .unwrap_or(0);
         let ip = u32::from(address.ip);
         networks.insert((ip & mask, scan_prefix, ip));
     }
@@ -60,10 +62,24 @@ pub fn subnet_scan_candidates() -> Vec<Ipv4Addr> {
 }
 
 pub fn probe_subnet_address(address: Ipv4Addr, expected_name: &str) -> Option<Endpoint> {
-    let identity = fetch_lan_identity(
+    probe_identity_address(
         address,
         super::identity::default_http_port(),
         "/",
+        expected_name,
+    )
+}
+
+pub fn probe_identity_address(
+    address: Ipv4Addr,
+    http_port: u16,
+    path: &str,
+    expected_name: &str,
+) -> Option<Endpoint> {
+    let identity = fetch_lan_identity(
+        address,
+        http_port,
+        path,
         expected_name,
         SUBNET_PROBE_TIMEOUT,
     )?;
@@ -91,6 +107,7 @@ pub fn probe_subnet_address(address: Ipv4Addr, expected_name: &str) -> Option<En
         url,
         socket,
         kind: TargetKind::Lan,
+        identity_port: Some(http_port),
     })
 }
 
@@ -156,8 +173,8 @@ pub fn scan_lan_subnets(
         }
     };
     stop.store(true, Ordering::Relaxed);
-    for worker in workers {
-        let _ = worker.join();
-    }
+    // Workers own all their data and stop after the bounded in-flight probe.
+    // Do not hold the winning endpoint behind up to 31 unrelated timeouts.
+    drop(workers);
     (result, cancel.is_stale(current_generation))
 }

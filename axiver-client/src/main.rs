@@ -92,6 +92,7 @@ fn main() {
                 downloads,
             }));
             ui.apply()?;
+            axiver_client::outside_click::start(ui.clone());
             build_tray(
                 app.handle(),
                 manager.clone(),
@@ -111,7 +112,6 @@ fn main() {
             commands::client_get_connection,
             commands::client_get_diagnostics,
             commands::client_reconnect,
-            commands::client_connect_wan,
             commands::client_refresh_remote,
             commands::client_open_settings,
             commands::client_hide_settings,

@@ -47,6 +47,20 @@ pub struct Placement {
     pub panel_height: f64,
 }
 
+fn inside_controls(layout: &Placement, pill_width: f64, x: f64, y: f64) -> bool {
+    let inside = |left: f64, top: f64, width: f64, height: f64| {
+        x >= left && x < left + width && y >= top && y < top + height
+    };
+    inside(layout.x, layout.y, pill_width, PILL_HEIGHT)
+        || (layout.expanded
+            && inside(
+                layout.view_x + layout.panel_x,
+                layout.view_y + layout.panel_y,
+                layout.panel_width,
+                layout.panel_height,
+            ))
+}
+
 fn placement(state: &mut UiState, width: f64, height: f64) -> Placement {
     let pill_width = state.pill_width.unwrap_or(PILL_WIDTH);
     let edge = if state.returning { 2.0 } else { MARGIN };
@@ -243,6 +257,44 @@ impl UiController {
         Ok(result)
     }
 
+    /// Outside dismissal never steals focus back from the clicked view/app.
+    pub fn dismiss(&self) -> tauri::Result<Placement> {
+        self.state.lock().unwrap().expanded = false;
+        self.apply()
+    }
+
+    pub fn on_pointer_down(self: &Arc<Self>, screen_x: i32, screen_y: i32) {
+        let ui = self.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            let Some(host) = ui.app.get_window(MAIN_LABEL) else {
+                return;
+            };
+            let (Ok(origin), Ok(scale), Ok(size)) = (
+                host.inner_position(),
+                host.scale_factor(),
+                host.inner_size(),
+            ) else {
+                return;
+            };
+            let x = f64::from(screen_x - origin.x) / scale;
+            let y = f64::from(screen_y - origin.y) / scale;
+            let size = size.to_logical::<f64>(scale);
+            let mut state = ui.state.lock().unwrap();
+            if !state.expanded || state.drag_origin.is_some() {
+                return;
+            }
+            let width = state.pill_width.unwrap_or(PILL_WIDTH);
+            let layout = placement(&mut state, size.width, size.height);
+            drop(state);
+            if inside_controls(&layout, width, x, y) {
+                return;
+            }
+            if let Some(shell) = ui.app.get_webview(SHELL_LABEL) {
+                let _ = shell.eval("window.__AXIVER_SHELL__?.onOutside();");
+            }
+        });
+    }
+
     pub fn toggle(&self) -> tauri::Result<Placement> {
         let expanded = !self.state.lock().unwrap().expanded;
         self.set_expanded(expanded)
@@ -254,8 +306,7 @@ impl UiController {
     }
 
     pub fn set_pill_width(&self, width: f64) -> tauri::Result<Placement> {
-        // The Shell docks the pill (auto-collapsed to just the dot) plus an
-        // optional WAN chip; the dock can be as narrow as the bare dot.
+        // The dock can be as narrow as the bare dot.
         self.state.lock().unwrap().pill_width = Some(width.ceil().clamp(24.0, 380.0));
         self.apply()
     }
@@ -379,6 +430,45 @@ impl UiController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn outside_press_excludes_panel_and_pill_in_every_placement() {
+        for (width, height, x, y) in [
+            (1280.0, 820.0, 12.0, 12.0),
+            (1280.0, 820.0, 600.0, 380.0),
+            (820.0, 560.0, 400.0, 260.0),
+        ] {
+            let mut state = UiState {
+                expanded: true,
+                x,
+                y,
+                pill_width: Some(128.0),
+                ..Default::default()
+            };
+            let layout = placement(&mut state, width, height);
+            let px = layout.view_x + layout.panel_x;
+            let py = layout.view_y + layout.panel_y;
+            assert!(inside_controls(&layout, 128.0, px + 1.0, py + 1.0));
+            assert!(inside_controls(
+                &layout,
+                128.0,
+                px + layout.panel_width - 1.0,
+                py + layout.panel_height - 1.0
+            ));
+            assert!(inside_controls(
+                &layout,
+                128.0,
+                layout.x + 13.0,
+                layout.y + 13.0
+            ));
+            assert!(!inside_controls(&layout, 128.0, width - 1.0, height - 1.0));
+            assert!(!inside_controls(
+                &layout,
+                128.0,
+                px - 1.0,
+                py + layout.panel_height / 2.0
+            ));
+        }
+    }
     #[test]
     fn floating_controls_remain_inside_small_and_large_windows() {
         for (w, h) in [(820.0, 560.0), (1280.0, 820.0)] {

@@ -1,0 +1,76 @@
+{
+  "scope": "disposable native WebView2; outside DOM pointer and actual Win32 remote focus; no real user profile",
+  "root": "C:\\Users\\MUXINZ~1\\AppData\\Local\\Temp\\axiver-frost-check-XNDzW3",
+  "selected": {
+    "at": "2026-11-17T10:55:58Z",
+    "detail": "wan",
+    "elapsedMs": 277,
+    "event": "target_selected"
+  },
+  "timing": [
+    {
+      "at": "2026-11-17T10:55:58Z",
+      "detail": "parallel_lan_wan",
+      "elapsedMs": 0,
+      "event": "attempt_start"
+    },
+    {
+      "at": "2026-11-17T10:55:58Z",
+      "detail": "wan:reachable",
+      "elapsedMs": 0,
+      "event": "probe_finished"
+    },
+    {
+      "at": "2026-11-17T10:55:58Z",
+      "detail": "wan",
+      "elapsedMs": 277,
+      "event": "target_selected"
+    },
+    {
+      "at": "2026-11-17T10:55:58Z",
+      "detail": "remote",
+      "elapsedMs": 282,
+      "event": "navigation_started"
+    },
+    {
+      "at": "2026-11-17T10:55:58Z",
+      "detail": "current_origin",
+      "elapsedMs": 384,
+      "event": "page_loaded"
+    }
+  ],
+  "dot": {
+    "count": 3,
+    "fps": 1.996007984031936
+  },
+  "panel": {
+    "count": 11,
+    "fps": 5.917509911495155
+  },
+  "processing": {
+    "sampleWidth": 105,
+    "sampleHeight": 106,
+    "processingMs": 3.200000047683716
+  },
+  "native": {
+    "VisibleNativeWindows": 1,
+    "InfrastructureWindows": 1,
+    "Windows": [
+      {
+        "Handle": 2035876,
+        "Title": "127.0.0.1:10121",
+        "Class": "Tauri Window",
+        "Width": 1296,
+        "Height": 859
+      },
+      {
+        "Handle": 2101816,
+        "Title": "",
+        "Class": "Tao Thread Event Target",
+        "Width": 16,
+        "Height": 16
+      }
+    ]
+  },
+  "nativeFocus": "594044"
+}

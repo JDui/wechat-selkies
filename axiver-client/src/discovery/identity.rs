@@ -117,11 +117,28 @@ pub fn fetch_lan_identity(
     if stream.write_all(request.as_bytes()).is_err() {
         return None;
     }
-    let mut response = String::new();
-    if stream.read_to_string(&mut response).is_err() {
-        return None;
+    let started = std::time::Instant::now();
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 4096];
+    while response.len() < 64 * 1024 {
+        let remaining = timeout.checked_sub(started.elapsed())?;
+        if remaining.is_zero() {
+            return None;
+        }
+        let _ = stream.set_read_timeout(Some(remaining));
+        let count = stream.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        response.extend_from_slice(&buffer[..count]);
+        // Do not wait for connection close after a complete identity JSON.
+        if let Ok(text) = std::str::from_utf8(&response) {
+            if let Some(identity) = parse_identity_response(text, expected_name) {
+                return Some(identity);
+            }
+        }
     }
-    parse_identity_response(&response, expected_name)
+    parse_identity_response(std::str::from_utf8(&response).ok()?, expected_name)
 }
 
 #[cfg(test)]

@@ -126,7 +126,7 @@ try {
   const initialPill=await pillMetrics();
   uiResults.initialPill=initialPill;
   uiResults.compactPill=initialPill.width<128&&initialPill.height===26&&Math.abs(initialPill.width-initialPill.expected)<1&&Math.abs(initialPill.viewWidth-Math.ceil(initialPill.width))<1;
-  uiResults.pillBlurReducedTwentyPercent=await evaluate('getComputedStyle(document.getElementById("pill"),"::before").filter.includes("blur(7.2px)")');
+  uiResults.pillUsesPreblurredMip=await evaluate('getComputedStyle(document.getElementById("pill"),"::before").filter === "none" && Boolean(window.__AXIVER_SHELL__.backdropStats)');
   await waitFor(()=>evaluate('document.documentElement.classList.contains("has-backdrop")'));
   await click('#pill');await waitFor(()=>evaluate('!document.getElementById("panel").hidden'));
   uiResults.frostFilter=await evaluate('getComputedStyle(document.getElementById("panel"),"::before").filter');

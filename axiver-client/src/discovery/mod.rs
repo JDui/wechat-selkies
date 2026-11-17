@@ -4,6 +4,7 @@
 
 pub mod identity;
 pub mod mdns;
+pub mod race;
 pub mod subnet;
 
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use std::{
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -39,6 +40,7 @@ pub struct Endpoint {
     pub url: Url,
     pub socket: SocketAddr,
     pub kind: TargetKind,
+    pub identity_port: Option<u16>,
 }
 
 /// Token used by every discovery stage to drop stale work when a newer
@@ -51,10 +53,18 @@ pub struct Endpoint {
 pub struct CancelToken {
     pub my_generation: u64,
     pub live: Option<Arc<AtomicU64>>,
+    pub stopped: Option<Arc<AtomicBool>>,
 }
 
 impl CancelToken {
     pub fn is_stale(&self, current_generation: u64) -> bool {
+        if self
+            .stopped
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            return true;
+        }
         match &self.live {
             Some(live) => live.load(Ordering::SeqCst) != self.my_generation,
             None => current_generation != self.my_generation,
@@ -88,6 +98,7 @@ pub fn resolve_wan(value: &str) -> Result<Endpoint, WanError> {
             url,
             socket,
             kind: TargetKind::Wan,
+            identity_port: None,
         })
         .ok_or(WanError::TcpUnreachable)
 }

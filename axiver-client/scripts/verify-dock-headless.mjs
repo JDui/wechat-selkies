@@ -53,25 +53,23 @@ try {
     });
     await page.route('http://axiver.test/**', async route => {
       const name = new URL(route.request().url()).pathname.slice(1) || 'shell.html';
-      assert(['shell.html', 'shell.css', 'shell.js'].includes(name));
+      assert(['shell.html', 'shell.css', 'shell.js', 'frost.js'].includes(name));
       await route.fulfill({ body: await readFile(resolve(project, 'ui', name)),
         contentType: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html' });
     });
     await page.goto('http://axiver.test/shell.html');
-    await page.waitForFunction(() => window.__AXIVER_SHELL__?.layout && !document.getElementById('pill-wan').hidden);
+    await page.waitForFunction(() => window.__AXIVER_SHELL__?.layout);
     await page.waitForTimeout(100);
     const geometry = () => page.evaluate(() => {
       const pill = document.getElementById('pill').getBoundingClientRect();
       const dot = document.getElementById('pill-dot').getBoundingClientRect();
-      const chip = document.getElementById('pill-wan').getBoundingClientRect();
       return { width: pill.width, height: pill.height,
         dotX: dot.x + dot.width / 2 - pill.x, dotY: dot.y + dot.height / 2 - pill.y,
-        gap: chip.x - pill.right, busy: document.getElementById('pill').classList.contains('animating') };
+        busy: document.getElementById('pill').classList.contains('animating') };
     });
     const centered = (sample, circle = false) => {
       assert(Math.abs(sample.dotX - 13) < .02, JSON.stringify(sample));
       assert(Math.abs(sample.dotY - 13) < .02, JSON.stringify(sample));
-      assert(Math.abs(sample.gap - 6) < .02, JSON.stringify(sample));
       if (circle) assert.equal(sample.width, sample.height);
     };
     centered(await geometry(), true);
@@ -97,7 +95,7 @@ try {
     await page.screenshot({ path: resolve(artifacts, `expanded-${scale}.png`), clip: { x: 0, y: 0, width: 290, height: 50 } });
     const offset = await page.evaluate(() => {
       const layout = window.__AXIVER_SHELL__.layout;
-      const chip = document.getElementById('pill-wan');
+      const chip = document.getElementById('pill');
       return { actual: parseFloat(chip.style.getPropertyValue('--sample-x')),
         expected: -(layout.viewX + chip.getBoundingClientRect().left + chip.clientLeft) + 18 };
     });
@@ -118,7 +116,7 @@ try {
     await page.waitForTimeout(600);
     centered(await geometry());
     assert.equal((await geometry()).busy, false);
-    assert.equal(await page.locator('#pill-wan').getAttribute('data-mode'), 'lan');
+    assert.equal(await page.locator('#pill-wan').count(), 0);
     // Panel animation remains alive through duplicate layouts.
     await page.locator('#pill').click(); await page.waitForTimeout(350);
     assert.equal(await page.locator('#panel').isVisible(), true);

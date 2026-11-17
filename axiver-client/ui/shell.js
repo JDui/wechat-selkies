@@ -83,14 +83,14 @@
   }
   function materialOffsets(layout) {
     if (!layout || !backdrop) return;
-    for (const id of ["pill", "panel", "pill-wan"]) {
+    for (const id of ["pill", "panel"]) {
       const surface = $(id);
       if (surface.hidden) continue;
       const rect = surface.getBoundingClientRect();
       // Each surface samples the remote pixels directly beneath itself,
       // including the chip as it follows the changing pill width.
-      const x = layout.viewX + rect.left + surface.clientLeft;
-      const y = layout.viewY + rect.top + surface.clientTop;
+      const x = layout.viewX + rect.left + surface.clientLeft - (backdrop.x || 0);
+      const y = layout.viewY + rect.top + surface.clientTop - (backdrop.y || 0);
       surface.style.setProperty("--sample-x", (-x+18)+"px");
       surface.style.setProperty("--sample-y", (-y+18)+"px");
     }
@@ -100,8 +100,14 @@
     const image=new Image(); image.src=frame.src;
     try { await image.decode(); } catch { return; }
     if (sequence!==frameSequence) return;
+    const layout = window.__AXIVER_SHELL__.layout;
+    if (!layout) return;
+    frame = window.__AXIVER_FROST__.render(image, frame, layout);
+    if (!frame) return;
     backdrop=frame;
+    window.__AXIVER_SHELL__.backdropStats = {sampleWidth: frame.sampleWidth, sampleHeight: frame.sampleHeight, processingMs: frame.processingMs};
     const root=document.documentElement;
+    root.style.setProperty("--pill-backdrop", `url("${frame.pillSrc}")`);
     root.style.setProperty("--backdrop", `url("${frame.src}")`);
     root.style.setProperty("--backdrop-size", `${frame.width}px ${frame.height}px`);
     root.classList.add("has-backdrop");
@@ -192,13 +198,6 @@
   });
   const pill = $("pill");
   const dock = $("dock");
-  const wanBtn = $("pill-wan");
-  const wanLabelNode = document.createTextNode("");
-  const wanArrow = document.createElement("span");
-  wanArrow.className = "wan-arrow";
-  wanArrow.setAttribute("aria-hidden", "true");
-  wanArrow.textContent = "↗";
-  wanBtn.append(wanLabelNode, wanArrow);
   let measuredPillWidth = 0;
   let requestedPillWidth = 0;
   let pillWidthRequests = Promise.resolve();
@@ -239,36 +238,11 @@
   // the pill expanded.
   const PILL_COLLAPSE_MS = 500;
   let pillAttention = false;
+  let dismissedNotice = false;
   let pillCollapseTimer = null;
   function schedulePillCollapse(delay) {
     clearTimeout(pillCollapseTimer);
     pillCollapseTimer = setTimeout(() => { pillAttention = false; syncPill(); }, delay);
-  }
-  const LAN_ATTEMPT_PHASES = new Set(["discovering_lan", "scanning_subnet", "connecting_lan"]);
-  function renderWanChip() {
-    const snapshot = lastSnapshot;
-    let mode = "";
-    if (snapshot && !downloadNotice) {
-      // Trying (or freshly failed on) LAN -> offer the WAN jump;
-      // trying WAN -> offer a LAN retry. Hidden once actually connected.
-      if (LAN_ATTEMPT_PHASES.has(snapshot.phase) || snapshot.phase === "disconnected") mode = "wan";
-      else if (snapshot.phase === "connecting_wan") mode = "lan";
-    }
-    if (!mode) {
-      wanBtn.hidden = true;
-      wanBtn.removeAttribute("data-mode");
-      return;
-    }
-    wanBtn.hidden = false;
-    wanBtn.dataset.mode = mode;
-    wanLabelNode.nodeValue = mode === "wan" ? "切外网" : "转内网";
-    if (mode === "wan") {
-      const wide = (config?.wideUrl || "").trim();
-      wanBtn.title = wide ? "正在尝试局域网，点击切外网直连" : "正在尝试局域网，点击去设置外网地址";
-    } else {
-      wanBtn.title = "正在尝试外网地址，点击转内网重新嗅探局域网";
-    }
-    wanBtn.setAttribute("aria-label", wanBtn.title);
   }
   function naturalDockWidths() {
     // 2px border + 16px padding + 8px dot + 6px gap. scrollWidth
@@ -289,10 +263,9 @@
     pill.style.width = fromWidth + "px";
     pill.classList.remove("collapsed");
     pill.classList.add("animating");
-    const chipExtra = wanBtn.hidden ? 0 : Math.ceil(wanBtn.getBoundingClientRect().width) + 6;
     // Reserve native bounds before revealing pixels. A clip-path on a wide
     // button cuts away its right border instead of drawing a smaller capsule.
-    await sendPillWidth(Math.max(Math.ceil(Math.max(fromWidth, we) + chipExtra + 4), measuredPillWidth));
+    await sendPillWidth(Math.max(Math.ceil(Math.max(fromWidth, we) + 4), measuredPillWidth));
     if (generation !== pillAnimationGeneration) return;
     const keyframes = expanded
       ? [{width: fromWidth + "px"}, {width: (we + 3) + "px", offset: .72}, {width: we + "px"}]
@@ -326,8 +299,7 @@
     }).catch(() => {/* superseded by a newer toggle */});
   }
   function syncPill(options = {}) {
-    renderWanChip();
-    const collapsed = $("panel").hidden && !pillAttention && !drag && document.activeElement !== pill && !downloadNotice;
+    const collapsed = $("panel").hidden && !pillAttention && !drag && document.activeElement !== pill && (!downloadNotice || dismissedNotice);
     const targetWidth = collapsed ? 26 : naturalDockWidths().we;
     // Compare the desired state, not the temporary animation classes:
     // echoed layout reports must not restart a closing animation forever.
@@ -350,9 +322,9 @@
     }
     materialOffsets(window.__AXIVER_SHELL__?.layout);
   }
-  pill.addEventListener("mouseenter", () => { pillAttention = true; clearTimeout(pillCollapseTimer); syncPill(); });
+  pill.addEventListener("mouseenter", () => { pillAttention = true; dismissedNotice = false; clearTimeout(pillCollapseTimer); syncPill(); });
   pill.addEventListener("mouseleave", () => schedulePillCollapse(PILL_COLLAPSE_MS));
-  pill.addEventListener("focus", () => { pillAttention = true; clearTimeout(pillCollapseTimer); syncPill(); });
+  pill.addEventListener("focus", () => { pillAttention = true; dismissedNotice = false; clearTimeout(pillCollapseTimer); syncPill(); });
   pill.addEventListener("blur", () => schedulePillCollapse(PILL_COLLAPSE_MS));
 
   function selectTab(name, focus = false) {
@@ -390,6 +362,12 @@
     pill.setAttribute("aria-expanded", String(layout.expanded));
     const panel = $("panel");
     panel.hidden = !layout.expanded;
+    if (wasExpanded && !layout.expanded) {
+      document.activeElement?.blur();
+      dismissedNotice = true;
+      pillAttention = true;
+      schedulePillCollapse(PILL_COLLAPSE_MS);
+    }
     if(layout.expanded&&!wasExpanded)animate(panel,[{opacity:0,transform:"translateY(-7px) scale(.97)"},{opacity:1,transform:"translateY(0) scale(1)"}],{duration:300});
     panel.style.left = layout.panelX + "px";
     panel.style.top = layout.panelY + "px";
@@ -401,8 +379,8 @@
   }
 
   async function ui(action, values = {}) {
-    if(action==="close"&&closeAnimation)return null;
-    if(action==="close"&&!$("panel").hidden&&!closeAnimation&&!motion.matches){
+    if((action==="close"||action==="dismiss")&&closeAnimation)return null;
+    if((action==="close"||action==="dismiss")&&!$("panel").hidden&&!closeAnimation&&!motion.matches){
       closeAnimation=true;
       await animate($("panel"),[{opacity:1,transform:"scale(1)"},{opacity:0,transform:"translateY(-5px) scale(.98)"}],{duration:160})?.finished.catch(()=>{});
       closeAnimation=false;
@@ -485,33 +463,14 @@
   $("btn-reset").addEventListener("click", () => ui("reset"));
   $("btn-return").addEventListener("click", () => ui("close_tool"));
 
-  // Attempt-only breathing chip. While LAN is being tried (or has just
-  // failed): jump straight to the configured WAN address — or to the
-  // wide-URL setting when none exists yet. While WAN is being tried:
-  // restart the LAN-first discovery pipeline.
-  wanBtn.addEventListener("click", async event => {
-    event.stopPropagation();
-    const mode = wanBtn.dataset.mode;
-    if (mode === "lan") {
-      const result = await call("client_reconnect", undefined, null);
-      opStatus.textContent = result?.ok ? "" : `重试局域网失败：${result?.error?.message || "未知错误"}`;
-      return;
-    }
-    if (mode !== "wan") return;
-    const wide = (config?.wideUrl || "").trim();
-    if (!wide) {
-      await ui("open");
-      selectTab("settings", true);
-      $("connection-settings").open = true;
-      saveStatus.textContent = "尚未设置外网地址：填写广域地址并保存后即可切换";
-      saveStatus.className = "inline-hint";
-      wideInput.scrollIntoView({block: "center"});
-      wideInput.focus();
-      return;
-    }
-    const result = await call("client_connect_wan", undefined, null);
-    opStatus.textContent = result?.ok ? "" : `切换外网失败：${result?.error?.message || "未知错误"}`;
-  });
+  function dismissOutside() {
+    if (!$("panel").hidden && !drag) ui("dismiss");
+  }
+  // DOM presses cover the transparent gutter; the native observer checks
+  // actual outside presses across child views. Focus changes never dismiss.
+  document.addEventListener("pointerdown", event => {
+    if (!event.target.closest("#panel, #dock")) dismissOutside();
+  }, true);
 
   const phaseClass = {
     connected: "dot-ok",
@@ -601,7 +560,6 @@
   function renderConfig(next) {
     if (!next) return;
     config = next;
-    renderWanChip();
     // Never clobber what the user is editing (legacy drawer behaviour kept).
     if (editingDirty || document.activeElement === broadcastInput || document.activeElement === wideInput) {
       return;
@@ -723,6 +681,7 @@
   window.__AXIVER_SHELL__ = {
     onLayout: applyLayout,
     onBackdrop: renderBackdrop,
+    onOutside: dismissOutside,
     onDownloads: renderDownloads,
     onStatus(snapshot) {
       renderStatus(snapshot);

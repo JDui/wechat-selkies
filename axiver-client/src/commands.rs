@@ -148,25 +148,6 @@ pub fn client_reconnect(
 }
 
 #[tauri::command]
-pub fn client_connect_wan(
-    webview: Webview,
-    state: State<'_, Arc<CoreState>>,
-) -> CommandResult<AcceptAck> {
-    if crate::app_state::ensure_trusted_caller(&webview).is_err() {
-        return forbidden();
-    }
-    // Server-side guard: the Shell routes to settings when unset, but never
-    // trust the UI to have checked.
-    if current_config(&state).wide_url.trim().is_empty() {
-        return CommandResult::err(error_code::INVALID_WIDE_URL, "尚未设置广域地址", false);
-    }
-    state.manager.force_wan();
-    CommandResult::ok(AcceptAck {
-        revision: state.manager.snapshot().revision,
-    })
-}
-
-#[tauri::command]
 pub fn client_refresh_remote(
     webview: Webview,
     state: State<'_, Arc<CoreState>>,
@@ -317,6 +298,7 @@ pub fn client_ui_layout(
         }
         "open" => state.ui.set_expanded(true),
         "close" => state.ui.set_expanded(false),
+        "dismiss" => state.ui.dismiss(),
         "toggle" => state.ui.toggle(),
         "height" => state.ui.set_panel_height(input.height.unwrap_or(390.0)),
         "pill_width" => state.ui.set_pill_width(input.width.unwrap_or(128.0)),
