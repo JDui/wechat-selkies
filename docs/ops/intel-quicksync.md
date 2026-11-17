@@ -1,5 +1,7 @@
 # Intel Quick Sync（N355）
 
+> 历史说明：2026-11-17 起，Intel 版本保存在 `_intel` 分支；`AXiVer` 继续推进 [AMD H255 / 780M 适配](amd-780m.md)。下文是 Intel 阶段的实现、部署与验证记录。
+
 `AXiVer` 以 Intel Quick Sync 版本继续维护，起点为 AXiVer 1.76 工作区。`_AMDGPU` 保存改造前代码和当时未提交的输入法修复；首轮 Intel 改造从 `codex/intel-quicksync` 快进合入 `AXiVer`。AMD 分支与原有发布镜像不随本次改造修改。
 
 ## 实现

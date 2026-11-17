@@ -3,13 +3,13 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:1.84
+    image: wechat-selkies:1.84-amd-dev
     container_name: wechat-selkies
     init: true
     volumes:
       - ./config:/config
     devices:
-      - /dev/dri:/dev/dri # Intel Quick Sync; remove on CPU-only hosts
+      - /dev/dri:/dev/dri # AMD Radeon VA-API; remove on CPU-only hosts
     ports:
       - "${SELKIES_HTTP_PORT:-3000}:3000"       # http port
       - "${SELKIES_HTTPS_PORT:-3001}:3001"       # https port
@@ -90,7 +90,6 @@ services:
       - QQ_WATCHDOG_X11_PING=true
       - QQ_WATCHDOG_X11_TIMEOUT=2
       - DRI_NODE=${DRI_NODE:-auto}
-      - INTEL_VAAPI_DRIVER=${INTEL_VAAPI_DRIVER:-iHD}
       - SELKIES_ENABLE_BINARY_CLIPBOARD=true
       - SELKIES_PASTE_IMAGE=true
       - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
