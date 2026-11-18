@@ -159,11 +159,14 @@ class PreferencesTests(unittest.TestCase):
     def test_av1_video_preferences_survive_restart_for_each_display(self):
         settings = {"encoder": "av1enc", "use_cpu": False, "h264_fullcolor": False,
                     "encoder_display2": "av1enc", "framerate_display2": 45,
-                    "use_cpu_display2": False}
+                    "use_cpu_display2": False, "live_paint_mode": "inherit", "frame_feedback_mode": "true",
+                    "live_paint_mode_display2": "false", "frame_feedback_mode_display2": "observe"}
         self.bridge.update_preferences(settings)
         restarted = load("session_auth_bridge")
         restarted.PREFERENCES_PATH = self.bridge.PREFERENCES_PATH
         self.assertEqual(restarted.read_preferences(), settings)
+        with self.assertRaises(ValueError):
+            restarted.update_preferences({"live_paint_mode": "observe"})
 
     def test_invalid_favorites_do_not_overwrite_settings(self):
         self.bridge.update_preferences({"notification_center_enabled": True})

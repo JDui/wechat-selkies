@@ -3,6 +3,8 @@
   // Hydrate before the module bundle reads its React/transport initial state.
   var names = ["encoder", "framerate", "h264_crf", "h264_paintover_crf",
     "use_paint_over_quality", "h264_streaming_mode", "h264_fullcolor", "use_cpu"];
+  var liveModes = { frame_feedback_mode: ["false", "observe", "true"], live_paint_mode: ["inherit", "false", "true"] };
+  names = names.concat(Object.keys(liveModes));
   var prefix = location.href.split("#")[0].replace(/[^a-zA-Z0-9.-_]/g, "_") + "_";
   var base = new URL("../", document.currentScript.src).pathname;
   var keys = names.concat(names.map(function (name) { return name + "_display2"; }));
@@ -31,6 +33,18 @@
     return result;
   };
   window.selkiesVideoPreferences = {
+    rememberLive: function (displayId, name, value) {
+      if (!liveModes[name]?.includes(value)) return;
+      localStorage.setItem(prefix + name + (displayId === "primary" ? "" : "_display2"), value);
+    },
+    liveSettings: function (displayId) {
+      var result = {};
+      Object.keys(liveModes).forEach(function (name) {
+        var value = localStorage.getItem(cacheKey(name + (displayId === "primary" ? "" : "_display2")));
+        if (liveModes[name].includes(value)) result[name] = value;
+      });
+      return result;
+    },
     ready: (async function () {
       try {
         var preferences = await window.selkiesPreferences.load();

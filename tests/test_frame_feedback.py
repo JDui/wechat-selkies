@@ -17,6 +17,19 @@ spec.loader.exec_module(feedback_api)
 
 
 class FrameFeedbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_restore_saved_modes_only_during_controller_handshake(self):
+        server, _ = settings_server()
+        server.client_settings_received = asyncio.Event()
+        owner = object()
+        state = server.display_clients['primary']
+        state['ws'] = owner
+        settings = server._parse_settings_payload('{"displayId":"primary","encoder":"x264enc","frame_feedback_mode":"observe","live_paint_mode":"false"}')
+        await server._apply_client_settings(owner, settings, True)
+        self.assertEqual((state['frame_feedback_mode'], state['live_paint_mode']), ('observe', 'false'))
+        await server._apply_client_settings(owner, dict(settings, live_paint_mode='true'), False)
+        self.assertEqual(state['live_paint_mode'], 'false')
+        self.assertNotIn('live_paint_mode', server._parse_settings_payload('{"live_paint_mode":"observe"}'))
+
     def attach(self):
         server = clocked_server(100)
         owner = server.display_clients['primary']['ws']

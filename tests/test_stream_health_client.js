@@ -14,7 +14,7 @@ function fixture(autoStart = true) {
   vm.runInNewContext(source, { window, document, ArrayBuffer, DataView, Map, Set, Number, Date, Object, Math });
   const health = window.__selkiesStreamHealth;
   if (autoStart) health.start();
-  return { health, document, intervals,
+  return { health, document, intervals, window,
     advance(ms) {
       const end = now + ms;
       while (true) {
@@ -384,6 +384,22 @@ test('paint can switch with feedback off, only after the current server advertis
   f.health.modeStatus(socket, status + ',paint_failed,true,1');
   assert(f.health.feedbackControl().paint.failed);
   f.health.setRole(socket, 'viewer'); assert(!f.health.requestPaint('false'));
+});
+
+test('only confirmed manual choices are saved; unsolicited status and rejected changes are not', () => {
+  const f = fixture(), ws = f.connect('display2'), saved = [], token = 'c'.repeat(32);
+  f.window.selkiesVideoPreferences = {rememberLive: (...args) => saved.push(args)};
+  ws.readyState = 1;
+  const status = (suffix) => f.health.modeStatus(ws, 'VIDEO_QOE_MODE,display2,' + token + suffix);
+  status('.1,false,1,,inherit,0');
+  assert(f.health.requestMode('observe'));
+  status('.2,observe,1,,inherit,0');
+  assert(f.health.requestPaint('true'));
+  status('.2,observe,1,paint_failed,inherit,0');
+  assert(f.health.requestPaint('false'));
+  status('.2,observe,1,,false,0');
+  status('.2,observe,1,,false,0');
+  assert.deepEqual(saved, [['display2','frame_feedback_mode','observe'],['display2','live_paint_mode','false']]);
 });
 
 console.log('Stream health: ' + checks + ' behavior groups passed.');

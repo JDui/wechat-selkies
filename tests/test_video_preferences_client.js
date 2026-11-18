@@ -36,6 +36,8 @@ const source = fs.readFileSync(path.join(__dirname,
   localStorage.setItem(prefix + "encoder", "av1enc");
   assert.equal(localStorage.getItem("selkies.videoPreferences:/box/:encoder"), "av1enc");
   assert.deepEqual(saves, [["h264_crf", 26], ["framerate_display2", 60], ["encoder", "av1enc"]]);
+  window.selkiesVideoPreferences.rememberLive("primary", "frame_feedback_mode", "observe");
+  window.selkiesVideoPreferences.rememberLive("display2", "live_paint_mode", "false");
   const bundle = fs.readFileSync(path.join(__dirname,
     "../root/usr/share/selkies/selkies-dashboard/assets/index-CzFxBFXa.js"), "utf8");
   const helper = bundle.split("\n").find(line => line.startsWith("const axiDebounceSettings="));
@@ -67,6 +69,8 @@ const source = fs.readFileSync(path.join(__dirname,
   vm.runInNewContext(source, { Storage, localStorage: reloadStorage, window: reloadWindow, location: reloadLocation, URL,
     document: { currentScript: { src: "https://example.test/box/src/selkies-video-preferences.js" } } });
   await reloadWindow.selkiesVideoPreferences.ready;
+  assert.deepEqual({ ...reloadWindow.selkiesVideoPreferences.liveSettings("primary") }, { frame_feedback_mode: "observe" });
+  assert.deepEqual({ ...reloadWindow.selkiesVideoPreferences.liveSettings("display2") }, { live_paint_mode: "false" });
   assert.equal(reloadStorage.getItem(reloadPrefix + "encoder_display2"), "x264enc");
   assert.equal(reloadStorage.getItem(reloadPrefix + "framerate_display2"), "60");
   console.log("Video preferences: HEVC/AV1 persistence, persisted fallback across fresh login, secondary display and hydration passed");

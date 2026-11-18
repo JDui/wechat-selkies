@@ -276,9 +276,20 @@
         !/^[a-f0-9]{32}\.\d{1,10}$/.test(parts[2]) || !["false","observe","true"].includes(parts[3]) ||
         !["0","1"].includes(parts[4])) return;
     if (parts[3] === "false" || (state.feedback && state.feedback.token !== parts[2])) state.feedback = null;
-    state.feedbackControl = {token: parts[2], mode: parts[3], adaptive: parts[4] === "1", failed: parts[5] === "restore_failed"};
+    var previous = state.feedbackControl;
+    var control = state.feedbackControl = {token: parts[2], mode: parts[3], adaptive: parts[4] === "1", failed: parts[5] === "restore_failed"};
     if (["inherit","true","false"].includes(parts[6]) && ["0","1"].includes(parts[7])) {
       state.feedbackControl.paint = {mode: parts[6], enabled: parts[7] === "1", failed: parts[5] === "paint_failed"};
+    }
+    if (state.role === "controller" && previous && previous.token.split(".")[0] === parts[2].split(".")[0]) {
+      var prefs = window.selkiesVideoPreferences;
+      if (previous.pendingMode === control.mode && !control.failed) {
+        prefs?.rememberLive?.(state.displayId, "frame_feedback_mode", control.mode);
+      } else if (previous.token === control.token && !control.failed) control.pendingMode = previous.pendingMode;
+      if (previous.token === control.token && control.paint && !control.paint.failed) {
+        if (previous.pendingPaint === control.paint.mode) prefs?.rememberLive?.(state.displayId, "live_paint_mode", control.paint.mode);
+        else control.pendingPaint = previous.pendingPaint;
+      }
     }
   }
   function feedbackControl() {
@@ -289,13 +300,13 @@
     var state = displayState(), control = feedbackControl();
     if (!control || state.socket.readyState !== 1 || !["true","false","observe"].includes(mode) ||
         (mode === "true" && !control.adaptive)) return false;
-    try { state.socket.send(["SET_QOE_MODE", state.displayId, control.token, mode].join(",")); return true; }
+    try { state.socket.send(["SET_QOE_MODE", state.displayId, control.token, mode].join(",")); control.pendingMode = mode; return true; }
     catch (_error) { return false; }
   }
   function requestPaint(mode) {
     var state = displayState(), control = feedbackControl();
     if (!control?.paint || state.socket.readyState !== 1 || !["inherit","true","false"].includes(mode)) return false;
-    try { state.socket.send(["SET_PAINT_OVER", state.displayId, control.token, mode].join(",")); return true; }
+    try { state.socket.send(["SET_PAINT_OVER", state.displayId, control.token, mode].join(",")); control.pendingPaint = mode; return true; }
     catch (_error) { return false; }
   }
   function receipt(socket, id, decoder) {

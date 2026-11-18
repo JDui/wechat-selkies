@@ -66,6 +66,7 @@ DYNAMIC_PREFERENCE_RANGES = {
 }
 VIDEO_PREFERENCE_RANGES = {"framerate": (1, 240), "h264_crf": (5, 50), "h264_paintover_crf": (5, 50)}
 VIDEO_PREFERENCE_TOGGLES = {"use_paint_over_quality", "h264_streaming_mode", "h264_fullcolor", "use_cpu"}
+LIVE_VIDEO_MODES = {"frame_feedback_mode": ("false", "observe", "true"), "live_paint_mode": ("inherit", "false", "true")}
 
 
 def read_preferences():
@@ -83,6 +84,10 @@ def update_preferences(patch):
         if video_key == "encoder":
             if value not in ("x264enc", "x264enc-striped", "jpeg", "h265enc", "av1enc"):
                 raise ValueError("Invalid video encoder")
+            clean[key] = value
+        elif video_key in LIVE_VIDEO_MODES:
+            if value not in LIVE_VIDEO_MODES[video_key]:
+                raise ValueError("Invalid live video mode")
             clean[key] = value
         elif video_key in VIDEO_PREFERENCE_TOGGLES:
             if not isinstance(value, bool) and value not in ("true", "false"):

@@ -622,7 +622,8 @@
     if (typeof data !== "string" || data.indexOf("SETTINGS,") !== 0) return data;
     try {
       var payload = JSON.parse(data.slice("SETTINGS,".length));
-      return "SETTINGS," + JSON.stringify(sanitizeSettingsPayload(payload));
+      var saved = window.selkiesVideoPreferences?.liveSettings?.(payload.displayId || "primary");
+      return "SETTINGS," + JSON.stringify(Object.assign(sanitizeSettingsPayload(payload), saved));
     } catch (_err) {
       return data;
     }
@@ -6772,9 +6773,9 @@
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-dll-grid">' +
-      '<label class="selkies-dll-field">视频帧反馈（当前连接）<select class="selkies-dll-select" data-dll="feedback" disabled><option value="">当前不可用</option><option value="false">关闭</option><option value="observe">仅观测</option><option value="true">自适应帧率</option></select></label>' +
+      '<label class="selkies-dll-field">视频帧反馈<select class="selkies-dll-select" data-dll="feedback" disabled><option value="">当前不可用</option><option value="false">关闭</option><option value="observe">仅观测</option><option value="true">自适应帧率</option></select></label>' +
       '<span class="selkies-dll-value" role="status" data-dll-value="feedback"></span>' +
-      '<label class="selkies-dll-field">静态画质补绘（Paint-over）<select class="selkies-dll-select" data-dll="paint" disabled><option value="" disabled>当前不可用</option><option value="inherit">跟随视频设置</option><option value="true">本次连接开启</option><option value="false">本次连接关闭</option></select></label>' +
+      '<label class="selkies-dll-field">静态画质补绘（Paint-over）<select class="selkies-dll-select" data-dll="paint" disabled><option value="" disabled>当前不可用</option><option value="inherit">跟随视频设置</option><option value="true">开启</option><option value="false">关闭</option></select></label>' +
       '<span class="selkies-dll-value" role="status" data-dll-value="paint"></span>' +
       '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u52a8\u6001\u8282\u6d41</span><input type="checkbox" data-dll="enabled"></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8282\u6d41\u6a21\u5f0f</span></div><select class="selkies-dll-select" data-dll="mode"><option value="idle-low-bandwidth">\u95f2\u7f6e\u4f4e\u5e26\u5bbd</option><option value="idle-low-framerate">\u95f2\u7f6e\u4f4e\u5e27\u7387</option><option value="idle-low-occupancy">\u95f2\u7f6e\u4f4e\u5360\u7528</option></select></div>' +
