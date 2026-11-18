@@ -2,6 +2,7 @@ import ast
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
 import struct
 import sys
@@ -229,7 +230,7 @@ def server_methods(names, **extra):
     metrics_spec = importlib.util.spec_from_file_location("av1_metrics_tests", BACKEND / "video_diagnostics.py")
     metrics_module = importlib.util.module_from_spec(metrics_spec)
     metrics_spec.loader.exec_module(metrics_module)
-    namespace = {"asyncio": asyncio, "json": json, "data_logger": Mock(),
+    namespace = {"asyncio": asyncio, "json": json, "os": os, "data_logger": Mock(),
                  "websockets": SimpleNamespace(ConnectionClosed=ConnectionError), "IS_WAYLAND": False,
                  "av1_available": lambda: True, "hevc_available": lambda: True, "CURSOR_SIZE": 0,
                  "SETTING_DEFINITIONS": [], "VideoSessionMetrics": metrics_module.VideoSessionMetrics}

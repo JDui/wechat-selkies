@@ -273,6 +273,53 @@ check("delayed input uses its confirmed payload after field cleanup", () => {
   assert.deepStrictEqual(delivered(f), ["已选中文"]);
 });
 
+for (const [inputType, isComposing] of [
+  ["insertReplacementText", false],
+  ["insertFromComposition", true],
+  ["insertFromComposition", false]
+]) {
+  check("candidate confirmed before empty end: " + inputType + "/" + isComposing, () => {
+    const f = fixture();
+    f.event("compositionstart");
+    f.input("kaihui", { inputType: "insertCompositionText", isComposing: true, data: "kaihui" });
+    f.input("开会", { inputType, isComposing, data: "开会" });
+    if (inputType === "insertFromComposition" && !isComposing) f.state.assist.value = "";
+    f.event("compositionend", { data: "" });
+    f.tick();
+    assert.deepStrictEqual(delivered(f), ["开会"]);
+    f.input("开会", { inputType: "insertFromComposition", isComposing: false, data: "开会" });
+    assert.deepStrictEqual(delivered(f), ["开会"]);
+  });
+}
+
+check("final candidate after empty end survives a lingering composing flag", () => {
+  const f = fixture();
+  f.event("compositionstart");
+  f.event("compositionend", { data: "" });
+  f.tick();
+  f.input("开会", { inputType: "insertFromComposition", isComposing: true, data: "开会" });
+  assert.deepStrictEqual(delivered(f), ["开会"]);
+});
+
+check("replacement candidate sharing the previous word's prefix is sent whole", () => {
+  const f = fixture();
+  f.event("compositionstart");
+  f.state.assist.value = "开";
+  f.event("compositionend", { data: "开" });
+  f.input("开会", { inputType: "insertReplacementText", isComposing: false, data: "开会" });
+  assert.deepStrictEqual(delivered(f), ["开", "开会"]);
+});
+
+check("untyped final input retains its nonempty payload after empty end and field cleanup", () => {
+  const f = fixture();
+  f.event("compositionstart");
+  f.input("huiyi", { data: "huiyi", inputType: "insertCompositionText", isComposing: true });
+  f.event("compositionend", { data: "" });
+  f.tick();
+  f.input("", { data: "会议", inputType: "", isComposing: false });
+  assert.deepStrictEqual(delivered(f), ["会议"]);
+});
+
 if (failures.length) {
   console.error("\n" + failures.length + " failed; " + passed + " passed");
   process.exitCode = 1;

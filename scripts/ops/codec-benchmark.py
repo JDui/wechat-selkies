@@ -74,6 +74,19 @@ def cpu_usage_usec(root=Path("/sys/fs/cgroup")):
             return None
 
 
+def host_cpu_times():
+    try:
+        with open('/proc/stat') as counters:
+            fields = counters.readline().split()
+        if fields[0] != 'cpu' or len(fields) < 6:
+            return None
+        ticks = [int(value) for value in fields[1:9]]
+        unit = os.sysconf('SC_CLK_TCK')
+        return (sum(ticks) - sum(ticks[3:5])) / unit, sum(ticks) / unit
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
 def parse_fdinfo(text):
     values = dict(line.split(":", 1) for line in text.splitlines() if ":" in line)
     identifier = values.get("drm-client-id", "").strip()
@@ -158,12 +171,27 @@ def summarize(rows, args):
     hardware_status = "verified" if hardware and all(value is True for value in hardware) else (
         "software" if any(value is False for value in hardware) else "unknown")
     bandwidth = None
+    native_timing = client_rates = None
     if len(streams) > 1:
         first, last = streams[0], streams[-1]
         try:
             duration = last["updated_at"] - first["updated_at"]
             byte_delta = last["bytes"] - first["bytes"]
             frame_delta = last["frames"] - first["frames"]
+            if duration > 0 and first.get('session_id') == last.get('session_id') and not problems:
+                begin, end = first.get('native_stats') or {}, last.get('native_stats') or {}
+                count = end.get('frames', 0) - begin.get('frames', 0)
+                if count > 0 and 'frames' in begin and 'frames' in end:
+                    native_timing = {key.replace('_ns', '_mean_ms'): ((end[key] - begin[key]) / count / 1e6
+                                     if key in end and key in begin and end[key] > begin[key] else None)
+                                     for key in ('encode_ns', 'pipeline_ns')}
+                    native_timing.update(frames=count, generated_fps=count / duration)
+                begin, end = first.get('frame_feedback') or {}, last.get('frame_feedback') or {}
+                if (begin.get('age_ms', 3000) <= 2000 and end.get('age_ms', 3000) <= 2000
+                        and begin.get('generation') is not None and begin['generation'] == end.get('generation')) and all(
+                        key in begin and key in end for key in ('received_total', 'decoded_total', 'drawn_total')):
+                    client_rates = {key + '_fps': (end[key + '_total'] - begin[key + '_total']) / duration
+                                    for key in ('received', 'decoded', 'drawn')}
             if duration > 0 and byte_delta > 0 and frame_delta > 0:
                 bandwidth = {"duration_seconds": duration, "wire_bytes": byte_delta,
                              "frames": frame_delta, "average_bitrate_bps": 8 * byte_delta / duration,
@@ -177,6 +205,11 @@ def summarize(rows, args):
             "hardware_evidence": hardware_status,
             "hardware_comparison_ready": not problems and hardware_status == "verified",
             "sample_count": len(measured),
+            "container_cpu_seconds": (sum(row['cpu_seconds'] for row in measured) if measured and
+                                      all(row.get('cpu_seconds') is not None for row in measured) else None),
+            "proc_host_cpu_busy_seconds": (sum(row['host_busy_seconds'] for row in measured) if measured and
+                                          all(row.get('host_busy_seconds') is not None for row in measured) else None),
+            "native_timing": native_timing, "reported_client_rates": client_rates,
             "cpu_average_one_core_percent": sum(cpu) / len(cpu) if cpu else None,
             "cpu_peak_one_core_percent": max(cpu) if cpu else None,
             "wire_video": bandwidth}
@@ -232,8 +265,8 @@ def run_workload(args):
         f"#{(x * 5 + y * 3) % 256:02x}{(x * 2 + y * 7) % 256:02x}{(x ^ y) % 256:02x}"
         for x in range(256)) + "}" for y in range(144)))
     image = image.zoom(2, 2)
-    metadata = {"workload_version": WORKLOAD_VERSION, "generated_at": datetime.now(timezone.utc).isoformat(),
-                "requested_codec": args.codec, "width": args.width, "height": args.height,
+    metadata = {"workload_version": WORKLOAD_VERSION, "variant": args.variant, "generated_at": datetime.now(timezone.utc).isoformat(),
+                "requested_codec": args.codec, "width": args.width, "height": args.height, "input_marker": args.input_marker,
                 "target_fps": args.fps, "warmup_seconds": args.warmup_seconds,
                 "segment_seconds": args.segment_seconds, "phases": list(PHASES),
                 "font": font, "chinese_text": bool(cjk), "session_id": session_id,
@@ -243,6 +276,7 @@ def run_workload(args):
     rows = []
     started = time.monotonic()
     previous_cpu, previous_gpu = cpu_usage_usec(), gpu_snapshot()
+    previous_host = host_cpu_times()
     previous_sample = started
     previous_phase, previous_frame, scroll_offset = None, None, 0
     draw_updates = {phase: 0 for phase in PHASES}
@@ -255,6 +289,15 @@ def run_workload(args):
         root.quit()
     root.bind("<Escape>", lambda _event: stop())
     root.protocol("WM_DELETE_WINDOW", stop)
+    if args.input_marker:
+        marker_on = False
+        def mark_input(_event):
+            nonlocal marker_on
+            marker_on = not marker_on
+            canvas.delete('probe-marker')
+            canvas.create_rectangle(4, 4, 22, 22, fill='white' if marker_on else 'black', tags='probe-marker')
+        root.bind('<KeyPress>', mark_input, add='+')
+        root.bind('<ButtonPress-1>', mark_input, add='+')
 
     def draw_phase(phase):
         nonlocal scroll_offset
@@ -285,7 +328,7 @@ def run_workload(args):
                                font=(font, 28), fill="#243441")
 
     def tick():
-        nonlocal previous_sample, previous_cpu, previous_gpu, previous_phase, previous_frame, scroll_offset
+        nonlocal previous_sample, previous_cpu, previous_gpu, previous_host, previous_phase, previous_frame, scroll_offset
         now = time.monotonic()
         elapsed = now - started
         phase, local_time = phase_at(elapsed, args.warmup_seconds, args.segment_seconds)
@@ -303,6 +346,13 @@ def run_workload(args):
         previous_frame = frame
         if now - previous_sample >= 1:
             current_cpu, current_gpu = cpu_usage_usec(), gpu_snapshot()
+            current_host = host_cpu_times()
+            host_busy = host_percent = None
+            if current_host and previous_host:
+                busy, total_cpu = (current - prior for current, prior in zip(current_host, previous_host))
+                if total_cpu > 0 and 0 <= busy <= total_cpu:
+                    host_busy, host_percent = busy, busy / total_cpu * 100
+            previous_host = current_host
             seconds = now - previous_sample
             cpu = (current_cpu - previous_cpu) / seconds / 10000 if current_cpu is not None and previous_cpu is not None else None
             current_state, read_error = read_stream(args.stream_state)
@@ -311,6 +361,8 @@ def run_workload(args):
                 issues.append("cpu_counter_reset")
                 cpu = None
             rows.append({"elapsed_seconds": round(elapsed, 3), "phase": phase,
+                         "host_busy_seconds": host_busy, "host_cpu_percent": host_percent,
+                         "cpu_seconds": cpu * seconds / 100 if cpu is not None else None,
                          "cpu_one_core_percent": round(cpu, 3) if cpu is not None else None,
                          "gpu_engine_percent": gpu_delta(previous_gpu, current_gpu, seconds),
                          "stream": current_state, "problems": issues})
@@ -341,6 +393,8 @@ def run_workload(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codec", required=True, choices=CODECS)
+    parser.add_argument("--variant", choices=('baseline', 'off', 'observe', 'adaptive'), default='baseline')
+    parser.add_argument("--input-marker", action='store_true', help='Toggle a small marker on synthetic-window input for separate latency runs')
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--fps", type=int, default=30)

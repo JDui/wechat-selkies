@@ -330,4 +330,44 @@ test('JPEG draw batches clear controller frame IDs and viewer anonymous stripes 
   }
 });
 
+test('feedback separates receipt, decoder output and canvas draw, and retires stale tickets', () => {
+  const f = fixture(), socket = f.connect(), reports = [], token = 'a'.repeat(32) + '.1';
+  socket.readyState = 1; socket.send = value => reports.push(value.split(','));
+  f.health.offer(socket, 'VIDEO_QOE,primary,' + token);
+  const decoder = {decodeQueueSize: 4};
+  f.health.inputSent(socket);
+  const first = f.health.receipt(socket, 65535, decoder);
+  f.health.receipt(socket, 0, decoder); f.advance(250);
+  assert.deepEqual(reports[0].slice(3), ['0','-1','-1','2','0','4','-1','-1','0','2','0']);
+  f.health.progress(first, 'decoded', decoder); f.advance(250);
+  assert.deepEqual(reports[1].slice(3,8), ['0','65535','-1','1','1']);
+  f.health.progress(first, 'drawn'); f.advance(250);
+  assert.deepEqual(reports[2].slice(9), ['500','500','1','0','0']);
+  f.advance(5000); assert.equal(reports.length, 3);
+  const old = f.health.receipt(socket, 1, decoder); f.hide(true); f.hide(false);
+  f.health.progress(old, 'drawn'); f.advance(250); assert.equal(reports.length, 3);
+  socket.bufferedAmount = 65536; f.health.receipt(socket, 2, decoder); f.advance(250);
+  socket.bufferedAmount = 0; f.advance(250); assert.equal(reports.length, 3);
+  f.health.setRole(socket, 'viewer'); f.health.offer(socket, 'VIDEO_QOE,primary,' + token);
+  assert.equal(f.health.receipt(socket, 2, decoder), null);
+  f.connect(); assert.equal(f.health.receipt(socket, 3, decoder), null);
+});
+
+test('mode changes wait for the current controller acknowledgement; off retires old tickets', () => {
+  const f = fixture(), socket = f.connect(), sent = [], token = 'a'.repeat(32) + '.1';
+  socket.readyState = 1; socket.send = value => sent.push(value);
+  assert(!f.health.requestMode('true'));
+  f.health.modeStatus(socket, 'VIDEO_QOE_MODE,primary,' + token + ',false,1');
+  assert(f.health.requestMode('true')); assert.equal(f.health.feedbackControl().mode, 'false');
+  assert.equal(sent.pop(), 'SET_QOE_MODE,primary,' + token + ',true');
+  f.health.modeStatus(socket, 'VIDEO_QOE_MODE,primary,' + token + ',true,1');
+  f.health.offer(socket, 'VIDEO_QOE,primary,' + token);
+  const ticket = f.health.receipt(socket, 12, null);
+  f.health.modeStatus(socket, 'VIDEO_QOE_MODE,primary,' + token + ',false,0');
+  f.health.progress(ticket, 'decoded'); f.advance(500);
+  assert.equal(sent.length, 0); assert(!f.health.requestMode('true'));
+  f.health.setRole(socket, 'viewer'); assert(!f.health.requestMode('observe'));
+  f.connect(); assert(!f.health.feedbackControl());
+});
+
 console.log('Stream health: ' + checks + ' behavior groups passed.');

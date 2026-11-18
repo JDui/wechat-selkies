@@ -454,6 +454,7 @@
         rateFrames += 1;
         if (firstFrameMs === null) firstFrameMs = at - startedAt;
         lastOutput = { width: packet.width, height: packet.height };
+        if (packet.ticket) window.__selkiesStreamHealth.progress(packet.ticket, "decoded", decoder);
         if (options.output) options.output(frame, packet);
         else frame.close();
       } catch (error) { frame.close(); fail(error); }
@@ -463,7 +464,7 @@
       // Keep only output geometry after handing the compressed bytes to the
       // decoder, but include its outstanding bytes in the same queue budget.
       inFlight.set(timestamp, { key: packet.key, frameId: packet.frameId, y: packet.y,
-        width: packet.width, height: packet.height, byteLength: packet.data.byteLength });
+        width: packet.width, height: packet.height, byteLength: packet.data.byteLength, ticket: packet.ticket });
       inFlightBytes += packet.data.byteLength;
       recordQueue();
       expectFrame();
@@ -498,6 +499,8 @@
         if (!support.supported) throw failure(capabilityCode(support.reason), reasonText(support.reason));
         var packet = data && data.data instanceof Uint8Array ? validatePacket(data) : parsePacket(data);
         recordReceived(packet);
+        var ticket = options.receipt && options.receipt(packet.frameId, decoder);
+        if (ticket) packet = Object.assign({}, packet, { ticket: ticket });
         if (packet.key) {
           var parsed = parseSequence(packet.data);
           if (!parsed.hasKeyframe) throw failure("CLIENT_INVALID_BITSTREAM", "AV1 keyframe has no frame header");

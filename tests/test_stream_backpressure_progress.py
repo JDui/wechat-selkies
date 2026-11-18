@@ -22,11 +22,24 @@ def clocked_server(now=100.0):
 
 
 async def pressure_step(server):
+    completed = asyncio.Event()
+    started = False
+
+    async def step_sleep(delay):
+        nonlocal started
+        if started:
+            completed.set()
+            await asyncio.Future()
+        started = True
+
+    namespace = server._run_frame_backpressure_logic.__func__.__globals__
+    namespace['asyncio'] = SimpleNamespace(**{**vars(asyncio), 'sleep': step_sleep})
     task = asyncio.create_task(server._run_frame_backpressure_logic("primary"))
     try:
-        await asyncio.sleep(0.006)
+        await asyncio.wait_for(completed.wait(), 2)
         return server.display_clients["primary"]["backpressure_enabled"]
     finally:
+        namespace['asyncio'] = asyncio
         task.cancel()
         await task
 

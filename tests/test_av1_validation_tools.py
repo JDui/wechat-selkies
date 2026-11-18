@@ -119,6 +119,16 @@ class BenchmarkTests(unittest.TestCase):
         self.assertFalse(result["hardware_comparison_ready"])
         self.assertEqual(result["wire_video"]["average_bitrate_bps"], 800000)
         self.assertEqual(result["wire_video"]["average_fps"], 30)
+        for index, row in enumerate(rows):
+            row['stream'].update(native_stats=dict(frames=10 * index, encode_ns=0, pipeline_ns=20_000_000 * index),
+                                 frame_feedback=dict(generation=1, age_ms=10, received_total=20 * index,
+                                                     decoded_total=19 * index, drawn_total=18 * index))
+        result = benchmark.summarize(rows, self.args)
+        self.assertEqual(result['reported_client_rates']['drawn_fps'], 18)
+        self.assertIsNone(result['native_timing']['encode_mean_ms'])
+        self.assertEqual(result['native_timing']['pipeline_mean_ms'], 2)
+        rows[-1]['stream']['frame_feedback']['age_ms'] = 3000
+        self.assertIsNone(benchmark.summarize(rows, self.args)['reported_client_rates'])
         rows[-1]["problems"] = ["stream_session_changed"]
         self.assertFalse(benchmark.summarize(rows, self.args)["valid_run"])
 

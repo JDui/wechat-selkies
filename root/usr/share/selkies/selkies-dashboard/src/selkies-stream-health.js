@@ -44,6 +44,7 @@
   function visible() { return !document.hidden && !suspended; }
   function running(state) { return !!(state && state.opened && state.active && visible()); }
   function clearWork(state, at, quiet) {
+    if (state.feedback) state.feedback = feedbackWindow(state.feedback.token);
     state.pending = [];
     state.pendingSince = null;
     state.lastPacketAt = null;
@@ -154,6 +155,8 @@
     var unexpected = running(state) && state.packetsReceived > 0 &&
       !(event && NORMAL_CLOSE_CODES.has(event.code));
     state.opened = false;
+    state.feedbackControl = null;
+    state.feedback = null;
     clearWork(state, at, true);
     if (unexpected) pulse(state, "drop", "transport_closed", at);
     changed();
@@ -164,6 +167,7 @@
     if (!state || typeof active !== "boolean") return false;
     if (state.active === active) return true;
     state.active = active;
+    if (!active) state.feedbackControl = null;
     clearWork(state, now(), !active);
     changed();
     return true;
@@ -171,6 +175,8 @@
   function reset(socket) {
     var state = socketState(socket);
     if (!state) return false;
+    state.feedback = null;
+    state.feedbackControl = null;
     clearWork(state, now(), false);
     changed();
     return true;
@@ -179,6 +185,7 @@
     var state = socketState(socket);
     if (!state || !["unknown", "controller", "viewer"].includes(role)) return false;
     state.role = role;
+    if (role !== "controller") { state.feedback = null; state.feedbackControl = null; }
     changed();
     return true;
   }
@@ -253,11 +260,91 @@
     lastTick = at;
     changed();
   }
+  function feedbackWindow(token) {
+    return { token: token, received: 0, decoded: 0, drawn: 0, rxId: -1, decodedId: -1, drawnId: -1,
+      decoder: null, dirty: false, drawMs: -1, inputAt: null, inputMs: -1, draws: 0, arrivals: 0, outputs: 0 };
+  }
+  function offer(socket, message) {
+    var state = socketState(socket), parts = message.split(",");
+    if (!state || state.role === "viewer" || parts.length !== 3 || parts[1] !== state.displayId ||
+        !/^[a-f0-9]{32}\.\d{1,10}$/.test(parts[2])) return;
+    state.feedback = feedbackWindow(parts[2]);
+  }
+  function modeStatus(socket, message) {
+    var state = socketState(socket), parts = message.split(",");
+    if (!state || state.role === "viewer" || parts[1] !== state.displayId ||
+        !/^[a-f0-9]{32}\.\d{1,10}$/.test(parts[2]) || !["false","observe","true"].includes(parts[3]) ||
+        !["0","1"].includes(parts[4])) return;
+    if (parts[3] === "false" || (state.feedback && state.feedback.token !== parts[2])) state.feedback = null;
+    state.feedbackControl = {token: parts[2], mode: parts[3], adaptive: parts[4] === "1", failed: parts[5] === "restore_failed"};
+  }
+  function feedbackControl() {
+    var state = displayState();
+    return state && state.role === "controller" && running(state) ? state.feedbackControl : null;
+  }
+  function requestMode(mode) {
+    var state = displayState(), control = feedbackControl();
+    if (!control || state.socket.readyState !== 1 || !["true","false","observe"].includes(mode) ||
+        (mode === "true" && !control.adaptive)) return false;
+    try { state.socket.send(["SET_QOE_MODE", state.displayId, control.token, mode].join(",")); return true; }
+    catch (_error) { return false; }
+  }
+  function receipt(socket, id, decoder) {
+    var state = socketState(socket);
+    if (!state || !state.feedback || state.role !== "controller" || !running(state)) return null;
+    var flow = state.feedback;
+    flow.arrivals = Math.min(255, flow.arrivals + 1);
+    flow.rxId = id; flow.dirty = true; flow.decoder = decoder;
+    return { state: state, flow: flow, serial: ++flow.received, id: id, at: now() };
+  }
+  function progress(ticket, stage, decoder) {
+    if (!ticket || ticket.state.feedback !== ticket.flow || !running(ticket.state) ||
+        displays.get(ticket.state.displayId) !== ticket.state) return;
+    var flow = ticket.flow;
+    if (ticket.serial <= flow[stage]) return;
+    flow[stage] = ticket.serial; flow[stage + "Id"] = ticket.id; flow.dirty = true;
+    if (stage === "decoded") { flow.decoder = decoder; flow.outputs = Math.min(255, flow.outputs + 1); }
+    if (stage === "drawn") {
+      var at = now();
+      flow.drawMs = Math.min(60000, Math.round(at - ticket.at));
+      flow.draws = Math.min(255, flow.draws + 1);
+      if (flow.inputAt !== null && ticket.at >= flow.inputAt) {
+        flow.inputMs = at - flow.inputAt <= 2000 ? Math.round(at - flow.inputAt) : -1;
+        flow.inputAt = null;
+      }
+    }
+  }
+  function inputSent(socket) {
+    var state = socketState(socket);
+    if (state && state.feedback && state.role === "controller" && running(state)) {
+      var at = now();
+      if (state.feedback.inputAt === null || at - state.feedback.inputAt > 2000) state.feedback.inputAt = at;
+    }
+  }
+  function flush(state) {
+    var flow = state.feedback;
+    if (!flow || !flow.dirty || state.role !== "controller" || state.socket.readyState !== 1) return;
+    flow.dirty = false;
+    if (state.socket.bufferedAmount > 16384) {
+      flow.drawMs = flow.inputMs = -1; flow.draws = flow.arrivals = flow.outputs = 0;
+      return;
+    }
+    var depth = flow.decoder && flow.decoder.decodeQueueSize;
+    try {
+      state.socket.send(["CLIENT_QOE", state.displayId, flow.token, flow.rxId, flow.decodedId, flow.drawnId,
+        Math.min(255, flow.received - flow.decoded), Math.min(255, Math.max(0, flow.decoded - flow.drawn)),
+        Number.isInteger(depth) ? Math.min(255, depth) : -1, flow.drawMs, flow.inputMs, flow.draws,
+        flow.arrivals, flow.outputs].join(","));
+    } catch (_error) {}
+    flow.drawMs = flow.inputMs = -1; flow.draws = flow.arrivals = flow.outputs = 0;
+  }
   function tick() {
     var at = now(), previousTick = lastTick;
     lastTick = at;
     displays.forEach(function (state) {
       if (!running(state)) return;
+      if (previousTick === null || at - previousTick <= 1000) flush(state);
+      else if (state.feedback) state.feedback = feedbackWindow(state.feedback.token);
       var loopBlocked = previousTick !== null && at - previousTick - TICK_MS > 500 &&
         previousTick >= state.graceUntil && state.lastActivityAt !== null && previousTick - state.lastActivityAt < 3000;
       if (loopBlocked) {
@@ -282,6 +369,8 @@
   }
 
   var api = { connect: connect, opened: opened, closed: closed, packet: packet, pipeline: pipeline, reset: reset,
+    offer: offer, receipt: receipt, progress: progress, inputSent: inputSent,
+    modeStatus: modeStatus, feedbackControl: feedbackControl, requestMode: requestMode,
     serverEvent: serverEvent, frameRendered: frameRendered, report: report,
     stalledFor: function (displayId) { return waitTime(displayState(displayId), now()); },
     diagnostics: diagnostics, connection: connection, isCurrentSocket: isCurrentSocket,

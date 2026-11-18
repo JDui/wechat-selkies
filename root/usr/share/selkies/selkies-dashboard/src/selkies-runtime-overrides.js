@@ -1020,6 +1020,11 @@
           try {
             if (event.data.indexOf("AUTH_SUCCESS,") === 0 || event.data.indexOf("ROLE_UPDATE,") === 0) {
               health.setRole(ws, JSON.parse(event.data.slice(event.data.indexOf(",") + 1)).role);
+            } else if (event.data.indexOf("VIDEO_QOE,") === 0) {
+              health.offer(ws, event.data);
+            } else if (event.data.indexOf("VIDEO_QOE_MODE,") === 0) {
+              health.modeStatus(ws, event.data);
+              if (document.getElementById("selkies-dynamic-latency-section")) renderDynamicLatencySection();
             } else if (event.data.indexOf("STREAM_HEALTH,") === 0) {
               health.serverEvent(ws, JSON.parse(event.data.slice("STREAM_HEALTH,".length)));
             } else if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
@@ -5721,6 +5726,9 @@
     }
 
     window.WebSocket.prototype.send = function (payload) {
+      if (typeof payload === "string" && payload.startsWith("kd,")) {
+        window.__selkiesStreamHealth?.inputSent?.(this);
+      }
       var transportState = getSocketTransferState(this);
       if (!transportState) {
         return originalSend.call(this, payload);
@@ -6764,6 +6772,8 @@
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-dll-grid">' +
+      '<label class="selkies-dll-field">视频帧反馈（当前连接）<select class="selkies-dll-select" data-dll="feedback" disabled><option value="">当前不可用</option><option value="false">关闭</option><option value="observe">仅观测</option><option value="true">自适应帧率</option></select></label>' +
+      '<span class="selkies-dll-value" role="status" data-dll-value="feedback"></span>' +
       '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u52a8\u6001\u8282\u6d41</span><input type="checkbox" data-dll="enabled"></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8282\u6d41\u6a21\u5f0f</span></div><select class="selkies-dll-select" data-dll="mode"><option value="idle-low-bandwidth">\u95f2\u7f6e\u4f4e\u5e26\u5bbd</option><option value="idle-low-framerate">\u95f2\u7f6e\u4f4e\u5e27\u7387</option><option value="idle-low-occupancy">\u95f2\u7f6e\u4f4e\u5360\u7528</option></select></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8fdb\u5165\u95f2\u7f6e\u5ef6\u8fdf</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="30000" step="100" data-dll="hold"></div>' +
@@ -6802,7 +6812,9 @@
     // nodes and attributes, which schedules layout for the whole sidebar on
     // every tick — right next to the list the user is scrolling. Skip the tick
     // entirely when nothing changed so an idle sidebar is genuinely idle.
+    var feedback = window.__selkiesStreamHealth?.feedbackControl?.();
     var renderSignature = [
+      feedback?.mode, feedback?.adaptive, feedback?.failed,
       config.enabled ? "1" : "0",
       config.mode,
       config.holdMs,
@@ -6811,6 +6823,15 @@
     ].join("|");
     if (section.dataset.renderSignature === renderSignature) return;
     section.dataset.renderSignature = renderSignature;
+    var feedbackSelect = section.querySelector('[data-dll="feedback"]');
+    feedbackSelect.disabled = !feedback;
+    feedbackSelect.value = feedback ? feedback.mode : "";
+    feedbackSelect.options[0].disabled = true;
+    feedbackSelect.querySelector('[value="true"]').disabled = !feedback?.adaptive;
+    var feedbackNote = section.querySelector('[data-dll-value="feedback"]');
+    feedbackNote.textContent = feedback?.failed ? "恢复目标帧率失败，模式未更改" :
+      feedback && !feedback.adaptive ? "当前编码器仅支持观测" : "";
+    feedbackNote.hidden = !feedbackNote.textContent;
     section.querySelector('[data-dll="enabled"]').checked = config.enabled;
     section.querySelector('[data-dll="mode"]').value = config.mode;
     section.querySelector('[data-dll="hold"]').value = String(config.holdMs);
@@ -6859,6 +6880,12 @@
         var target = event.target;
         if (!target || !target.dataset) return;
         var key = target.dataset.dll;
+        if (key === "feedback") {
+          var health = window.__selkiesStreamHealth;
+          health?.requestMode?.(target.value);
+          target.value = health?.feedbackControl?.()?.mode || "";
+          return;
+        }
         if (key === "enabled") {
           setStoredValue("dynamic_low_latency_enabled", !!target.checked);
           syncDynamicLatencySettingsToBackend();
@@ -8967,9 +8994,11 @@
       var text = typeof event.data === "string" ? event.data : event.target.value;
       var endText = text;
       // Some IMEs confirm a prefix before ending the remaining composition.
-      // Recover it only when both an explicit non-composing insertion and the
-      // final DOM agree. Stale preedit must never be guessed from the field.
-      if (confirmed && event.target.value === confirmed + text) text = confirmed + text;
+      // A non-empty field must corroborate a split commit. If both end data
+      // and the field were cleared, keep only explicit insertion events.
+      if (confirmed && (event.target.value === confirmed + text || (!text && !event.target.value))) {
+        text = confirmed + text;
+      }
       traceAssistInput("commit", event, text);
       var commit = { target: event.target, text: text, endText: endText, cleared: false, transport: transport };
       assistCompositionCommit = commit;
@@ -8990,13 +9019,19 @@
       traceAssistInput("input", event);
       event.stopImmediatePropagation();
       noteAssistInput();
+      var commit = assistCompositionCommit;
+      // Older final input events can omit inputType after an empty end. The
+      // event still carries the confirmed word even after DOM cleanup.
+      var lateUntypedInsertion = commit && commit.target === event.target && !commit.text &&
+        !event.inputType && event.isComposing === false && typeof event.data === "string" && event.data.length > 0;
+      // insertFromComposition identifies a confirmed edit even when the IME
+      // still marks the event composing. Ordinary preedit uses insertCompositionText.
+      var finalInsertion = lateUntypedInsertion || event.inputType === "insertFromComposition" ||
+        (event.isComposing === false && (event.inputType === "insertText" || event.inputType === "insertReplacementText"));
+      var insertedText = finalInsertion && typeof event.data === "string" ? event.data : "";
       if (assistComposing) {
         if (event.target === assistCompositionTarget) {
-          if (event.isComposing === false &&
-              /^(?:insertText|insertFromComposition)$/.test(event.inputType || "") &&
-              typeof event.data === "string" && event.data) {
-            assistConfirmedCompositionText += event.data;
-          }
+          assistConfirmedCompositionText += insertedText;
           return;
         }
         // A replaced assist cannot inherit the removed element's preedit.
@@ -9005,12 +9040,11 @@
         assistConfirmedCompositionText = "";
       }
       var value = event.target.value;
-      var commit = assistCompositionCommit;
       var compositionInput = event.isComposing || /Composition/.test(event.inputType || "");
       var independentInput = !event.isComposing &&
         /^(?:insertFromPaste(?:AsQuotation)?|insertFromDrop|insertFromYank)$/.test(event.inputType || "");
       var transport = independentInput ? null : commit && commit.target === event.target &&
-        (compositionInput || (!commit.text && event.inputType === "insertText")) ? commit.transport :
+        (compositionInput || (!commit.text && finalInsertion)) ? commit.transport :
         (assistCompositionTransport && assistCompositionTransport.target === event.target ? assistCompositionTransport : null);
       // A composition input is not necessarily an echo: some keyboards deliver
       // the selected candidate only after an empty compositionend. Match both
@@ -9020,7 +9054,8 @@
           ? (event.data === commit.endText || event.data === commit.text)
           : (value === commit.endText || value === commit.text)) &&
         (!value || value === commit.text || value === commit.endText);
-      var legacyEcho = commit && !event.inputType && (event.data === commit.text || value === commit.text || !value);
+      var legacyEcho = commit && !event.inputType && !lateUntypedInsertion &&
+        (event.data === commit.text || value === commit.text || !value);
       if (commit && commit.target === event.target && (compositionEcho || legacyEcho ||
           (!commit.cleared && event.inputType === "insertText" && event.data === commit.text &&
            (value === commit.text || !value)))) {
@@ -9028,7 +9063,7 @@
         flushAssistInput();
         return;
       }
-      if (event.isComposing) {
+      if (event.isComposing && !finalInsertion) {
         // A non-matching composing input belongs to fresh preedit, even if
         // its compositionstart was omitted. Retire the old cleanup timer
         // without clearing the live field or sending unconfirmed text.
@@ -9038,17 +9073,12 @@
         }
         return;
       }
-      // An ordinary input without an intervening keydown can append to the
-      // just-committed value. Queue only the newly inserted suffix.
-      if (commit && commit.target === event.target && !commit.cleared && commit.text && value.indexOf(commit.text) === 0) {
+      // The insertion payload is the new text, even when it shares a prefix
+      // with the last word. Strip the old field prefix only for DOM fallback.
+      if (insertedText) {
+        value = insertedText;
+      } else if (commit && commit.target === event.target && !commit.cleared && commit.text && value.indexOf(commit.text) === 0) {
         value = value.slice(commit.text.length);
-      }
-      // Native insertion data remains authoritative if an earlier cleanup
-      // already emptied the assist. Never recover deletion or preedit data.
-      if (!value && !event.target.value && event.isComposing === false &&
-          /^(?:insertText|insertFromComposition|insertReplacementText)$/.test(event.inputType || "") &&
-          typeof event.data === "string") {
-        value = event.data;
       }
       // A menu paste/drop starts its own insertion without a keydown. Preserve
       // the interrupted composition's origin for its potentially delayed end.

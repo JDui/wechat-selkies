@@ -88,7 +88,8 @@ class TextReceiptTests(unittest.TestCase):
         owner.atom = atoms.__getitem__
         picture = {50: (50, 8, b"png")}
         owner._snapshot = lambda: picture
-        owner._event = lambda deadline: setattr(owner, "consumed", True)
+        owner._ping_window = lambda focus: None
+        owner._finish_paste = lambda window, deadline: None
         owner.display_name = ":test"
         with mock.patch.dict(namespace, {"os": os, "subprocess": SimpleNamespace(run=mock.Mock(), DEVNULL=-3)}):
             owner._commit("甲")
