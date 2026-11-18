@@ -1,0 +1,55 @@
+{
+  "description": "FFmpeg libaom-av1 samples. main8-delta carries the first key, one dependent delta and the next key. High-resolution and 10-bit cases carry complete sequence OBUs only; they test parsing, not decoding.",
+  "generator": "ffmpeg -nostdin -hide_banner -v error -y -f lavfi -i testsrc2=size=128x96:rate=5 -frames:v 8 -c:v libaom-av1 -cpu-used 8 -threads 2 -row-mt 1 -lag-in-frames 0 -g 4 -crf 32 -b:v 0 -pix_fmt yuv420p -f ivf main8-delta.ivf",
+  "variants": "main8-1080p/main8-1366: size=1920x1080/1366x768, frames=2; main8-still: size=128x96, frames=1, add -still-picture 1; main10-reject: size=128x96, frames=2, -pix_fmt yuv420p10le. Parse the IVF 32-byte file header and 12-byte frame headers; retain temporal-unit payloads. main8-delta retains source frames 0, 1 and 4. High-resolution and 10-bit entries retain only the complete sequence OBU from source frame 0.",
+  "samples": {
+    "main8-delta": {
+      "width": 128,
+      "height": 96,
+      "pixelFormat": "yuv420p",
+      "frames": [
+        {
+          "key": true,
+          "base64": "EgAKCgAAAAM3++bXyAIy0w0UACB4AAAgCCjdNQBpz+ILMX1GJyrceU4PZt17mRUwXOOx2wNmyItrFPpp7zsX2wRxXoBQhtAo7UvV2dCqTphuoYRkTUAqgpwUA7R+eZhL7B5eRxCO5SE3j3TQLfJs4ucUWPYJjLoefuPRfNvbMC+OXDZ0PouuZhwYrNvHsW6FdlTvdzI5XWu50yVzkaXI+firZw24tVZRLsAPFIZw6Xme5laO2DKP6a5hTU2LF0k/GGShF/y40DBlVV1L6OkteUVeR7OG/yTtSCSiQU/hJpbSLyPdDZRlz8YbyLZbj5dbS/eg8u8qsECi0UGcbvGhqDG2qBbvxmuKuxO44bgebdfYgWh4WNojVExjy6ZvQViyMLLoq3xTFZzQNI04oQLLLXaDeP8Qwk/YIaBwJ2G9we4yTFCaftkOzOxK1awkKe4G9mkJbJkXtYnhqti72Qm0rPfEt6zr5Ea1jmYa+4XRVr4njW4SsGMNJql5/YIhQJn753BOv9TiKRm3H8W+D/59FBx52u1q1Sd7UhLEUgvkJbHw25OYbYMNgXsHnJlwd63KeiXMcKMR94Hglf1bFgYXEDvQAgUbu4Q0Xn4H8dDTtSAU/8tPXT42scqrW3eMe2HZ7UeZQGKlV/0KEIVwVw3S/YI2x3f9pC4IqR2irU/hrqIHfJlyQrxS+OmcHXjVS/mTELxAFnfok+gMb6DuvC6Qpz8cGItFbSthBshDx/rF3WlKFBgjyvtMPYoU8s7shJAZsTw7Mo4N0T47DPrdoQEVvBrXMGWxin/hXrv0XCEx7dZgHD8CZqiOFL995fOa3BVigdK6xDtRiyCVifvQt9aifbUFwYPRvExN35+doI01HvcNg9w5rq3p08AWQBhy2xnLtokMTKgIdHsFzDjOFhnfKg4n+dVtOV3/PkKuqrlgEaBhZ8BCU1NSpKapeRL7EL40Bb8Zt7vowrVzwktIIVyjjFg+3G/fKVaCMt1WneEGHOubAMrfeE0Wf7Q0Ffo6o3TKEi1+X5q0g/JARXcSpvseHAtfXNNcqjM1ZX/F5oFKyXRBoV44sxLOplrUx1tzgwT2F2gw0w4eKsRo5wjawVSHzgiWtJels90XrqyHcIqNirwQB6oN1ll8uNY/FSLVcGWtjwU9tBz+Bz9ipy3ixdZn76W02L6yMZOIDCGQguDgic0rKp/M0Nmbil2deB60b66Cj2vdKDkpjRBoGG2+sgMagn7GWwSO+J4zhl2WD1/14qGhACGctZ0YA7kaxvxkDw+njJG4scVCNBxf+hS2f9K7a5EsLE767NsOIOPjvVmtZMmrzhIZBw+E5CTcf+DyxCt2J+fytkvsFFNfkWuCMS4RsaGVbeHEaH+DmDM/lZAFpHNz7lUW+ZygEKj6mHvzwFlypRfUv+Asa33mqKjdK229HeBnn3dxsJHaj6DU8VRvaRa9I9qgyzU70A/p7p0kzlsMKlHlWQdZLb/TX+7+DuVnqk2b/zrwInGcqLPM4bh9pxCxton89V0AVRJqLgcKzC7nQoiY9QgmQ6Gc+Yc3XAoz1X/zi0AH7V8U3R8245UBqr36w06GEfNu/C/YNR6tkDbVnSLDZvRfZDIZuVz59qFkMWb5qWnDj681zgmC9NO/FDEiEpgjwD0cw8CRkrFcnDKJWeXwGo2PCGNVEugk7i/oBab//KT4NC5E5jzIttPBiO+cEYXD/WimNvaufDCZaUZET0GUPQ200VM1X82UcWyjVdkbaU83Zbb39aOzu5hmIJGHhcgEIHCbRpWJvJvN0sDrrtf9VNuKz5M/DP4CZfpBbFYbp+uaAI9hzpSwd/XL56qPh3sQiaXphr6vv8rQhOpNCNMdLSOcWhlwOxvK9G6GpJCOGm+zzOX3DEUp3tXKSxyXbnp4tafsuvyLzhjvMKHml5IQGzaDc1kKf9HOsbgk/9Of/dBO1+8KVnAMtgYqK2BmwhvrEUGQ6NFSMnK0jNPUOu2fMYazrZSAnEP7HTGhvd0kDhKqdl6b6N/+ghdoOzRCoEqU+wUM/J6GeFcti2jUgQhXUa9I1hwkMBwiWYP0hAMOFCGFQKbnb+1Y52bYq/jJyFLl092/X26mZjH66PaxxrRFoNx+oZsDpKX1bf3TFEyGfKvcShelvLh6TkTW8PFsOI1eSLvqO8WXGS4DHeLgcVo1W7LidxjcZRqnWMbi/GUDAk8aJCJKjCKMaxO2We2lJezG4OMdcrrBRfrceWB40TKSD0tQ/4VQwtfucvjKUVo9Fyd7bGWcYOYyeMNxw4QZB5i4uBDGR7tSHO7IaPM+zxp3/kkaT4m4B3+Br2qeurrtCKehrJ01R9ZZaiEnwPYUivpA"
+        },
+        {
+          "key": false,
+          "base64": "EgAy8AUyAcBAAAAjRRAEEFFEoV111ADdxS6AIgvpEtcpLw4rBNh4Ij6E92BDfPl4ALcYjrfDr38l/or0oO/A2t/15fIlofcgqHSJ6a2iMoE2FKtgN2H8Ng968pj8F7V8zqx4fOpOSHMsHi2xqAnV0c9JDu+d23yPc2oO3IQWWTPw9aUIwLVQFpMZHoOtrScaU1FgV9iXTRSJDDE5WjE5xknKlD2SGPrdwvBbGqWEK5+iRBrm4n568HUpSmiN+PI0yfAIlUhu3haogvI2ZEmr8PQYg86hmBu6BYoVGxl0NGtgcSZLpzvSzX4I86lx3G8QMbmNjSPtChq18EXM2xdaXv6+4kXkSa0mtV9sUv5mxSHcMqaUbzfKyjVFZmrlrGpKYLtk+/CMff9S10tZPcnR8Vdw9SsBm7ySizy+beyuczT6tlPdFEKPBte1IQ8D+wdNJe+DL1SddOCe38sM37QZkkuZcq/e4bb0aypUVzGTZ5i2oNojyhpRWImde4I0bcXq9xSCBCWSVDbA0oJJappo4DPJSqTvnM+gGY3VjoX5Y3tcUSYav1RnsPKcehUsTfr30+JOFkrmGHA2bvRZB3xNpgl0rDIwwYsXb3QMN72HftrItK7zotiyO9YpjANTWeJh9duaY6MlC9Pml0t941iFzcOfovvcWVTnAtnuHTUrHASQZdSexZvDXtCpDmV67QaSbdlOgmRE1BTJ2C0FwIROeqnTxU0DMfsiXQ47vFftqLhS/ko2g/z5zvaBp2ct5vftNg5Mv/pkls7WElTeLrDry9Cy3QkTMWZzELtMXZCTJ5+h2A/jgMrKdQdQQLFKMYT40XIwYcjzB8YtrV8PtXvGHoIgRKGkWOlrZVNzQSjfFXhsGThtbXjioaJEyUyPT7sdmigdbaF0P49TagUipZNGpsafz1mFTLerOg3pdSsg1Md01EoCifk8Dq/TWi1Ib9eD19QhHhc0jxnoHjHxNd63cDTmdmyrqFcxlEv9tOD9i7XnNkVWgA=="
+        },
+        {
+          "key": true,
+          "base64": "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"
+        }
+      ]
+    },
+    "main8-still": {
+      "width": 128,
+      "height": 96,
+      "pixelFormat": "yuv420p",
+      "frames": [
+        {
+          "key": true,
+          "base64": "EgAKBhgZv99oAjKOB0SAAEEJRFAV0NtxpCzOMpMmgyiSU3Yl2sSZ+vmBVuFUcKz7Q6plzkGFjoMn4Dq+NNdq65jci5Jzjy9tvyQqx2hwOMR7NY4/FNgJmQclXm2vp5EproTAO/O4D1W7oV/GEn13Ea1Wnsat8LGDodHtA7nxur0tUz0/Ei1RBWswHrEetGdFfVC6qu5D9rKnTbk33iJ58qgM2pMziiTZ+6aJz77ziYnTt0oMW5VQEwQmkll1N7VxqkLfTHLnWiLpzGjIM3kMScjO79vwkMXiS7BtmZcVtmcamZkNcWnxjhRqBFWF0BFnA8XHkzz6iLTSA74jrTI2/8Bz7QVx/2nPvBiEL+6gHi/MEOMd2Z5hXjY8J0R0RlG7IknYRKvLcSQn40k6hDSNcuRnsjzkgrGeFLzFasjVmzbMyH+drqjSH1l2RgpBkhZnSeH2Gc1L0adNMuQtoaOHn9ClW5B/mR6aUpF1razHFyeOuHbMlKZ0B7KsTWSbxLEL/5w56sGIg5/pqkYSIAazdZCbUjD3FP5QV8BTBAFwJpN6smh6ztLVHvahqDNP6fIDr58zTs7Od3//g64IntKcgnvO/6/Ts8Mw5c8hVnRwKc1iruXa2UpEgE8EBBE1iN2txpvbDyc3UlfkAhoSKI6voUqedhNarsRLyVLR/uOvLtucTdeL6EbGBEaNK/MKekkyhLPXOqgctOsqHYxOKyrwFPtI8ndb+ehhlHVpO6WkKqadv1Piu/IdbBEJhLqSWQYUTYNiAoiRMw8B6F1x/pELAXp4YuNSlfVmD5AlErgRE4O86VnLhUTp2ZDJTTsVdEn8SNAH0R92OtJXQf6ZK7iiDYqJ9q6Yn9TcPRgx2rQiNARvgCBAqzi/B8jS+NaefozPI210TbOOvJQn63i84hXGzKom/5lr0JpIO8pd/Zie802LlyhiEgdDC/+wwD1TCFE7p69nTfmHS9WSThJCPmZrl88tIyuM2N85U/K5XNWuBVf0a2pgK1pAB/5fdxK5P6q8Ob/rYGDLxR0HVH9tC2ByJhj3S5hlgficF0xFwCXKJyY+vCYX1tYSB1qiG8cu2jHvYQofV5CojQ1EZPxVALz+IO899RLL/87z7oJTejFEu6TkI8cj4YA4Fgh8ja1K89Lr90roU9xUb0kiVi5M+0Cd62ssosgmsRbf3AYBKZyHs2ZqtTQaUigIag1bZfr00pTinKaR/eVvMsPu3nA="
+        }
+      ]
+    },
+    "main8-1080p": {
+      "width": 1920,
+      "height": 1080,
+      "pixelFormat": "yuv420p",
+      "sequenceObuBase64": "CgsAAABCq7/DcyvkAQ=="
+    },
+    "main8-1366": {
+      "width": 1366,
+      "height": 768,
+      "pixelFormat": "yuv420p",
+      "sequenceObuBase64": "CgsAAAAtTVW/zK+QBA=="
+    },
+    "main10-reject": {
+      "width": 128,
+      "height": 96,
+      "pixelFormat": "yuv420p10le",
+      "sequenceObuBase64": "CgoAAAADN/vm18oC"
+    }
+  }
+}

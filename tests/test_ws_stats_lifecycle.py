@@ -35,7 +35,7 @@ class WebSocket:
 
 
 def stats_server(gpus=True, probe_error=False, input_handler=None, input_queue_enabled=True,
-                 display_id=None):
+                 display_id=None, environment=None):
     # Exercise the actual connection handler without X11/PulseAudio/native dependencies.
     tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DataStreamingServer")
@@ -66,9 +66,9 @@ def stats_server(gpus=True, probe_error=False, input_handler=None, input_queue_e
 
     namespace = {
         "asyncio": asyncio, "json": json, "time": time, "urllib": urllib,
-        "os": SimpleNamespace(environ={}), "data_logger": logging.getLogger("stats-test"),
+        "os": SimpleNamespace(environ=environment or {}), "data_logger": logging.getLogger("stats-test"),
         "logger": logging.getLogger("stats-test"), "client_permissions": {},
-        "TARGET_FRAMERATE": 30, "GPU_ID_DEFAULT": 0, "SETTING_DEFINITIONS": [],
+        "TARGET_FRAMERATE": 30, "GPU_ID_DEFAULT": 0, "SETTING_DEFINITIONS": [], "IS_WAYLAND": False,
         "PULSEAUDIO_AVAILABLE": False, "upload_dir_path": None,
         "INPUT_QUEUE_ENABLED": input_queue_enabled, "INPUT_QUEUE_MAX": 256,
         "INPUT_QUEUE_HARD_MAX": 4096,
@@ -154,6 +154,59 @@ class StatsLifecycleTests(unittest.IsolatedAsyncioTestCase):
             new_ws.disconnect.set()
             await asyncio.gather(old_handler, new_handler)
         await self.assert_stopped(records, 8)
+
+    async def test_viewer_connection_and_disconnect_preserve_controller_and_rtt(self):
+        server, records = stats_server(gpus=False)
+        controller, viewer = WebSocket(1234), WebSocket(1235)
+        viewer.request.path = "/#shared"
+        controller_handler = asyncio.create_task(server.ws_handler(controller))
+        await asyncio.wait_for(controller.receiving.wait(), timeout=1)
+        server._sent_frame_timestamps[7] = 123.4
+        server._rtt_samples.extend([0.01, 0.02])
+        server._smoothed_rtt_ms = 12.5
+        server._client_acknowledged_frame_id = 6
+        server._backpressure_send_frames_enabled = False
+        viewer_handler = asyncio.create_task(server.ws_handler(viewer))
+        try:
+            await asyncio.wait_for(viewer.receiving.wait(), timeout=1)
+            self.assertEqual(server.clients, {controller, viewer})
+            self.assertIs(server.data_ws, controller)
+            controller.close.assert_not_awaited()
+            self.assertNotIn("FORCE_PIN_LOGIN", [call.args[0] for call in controller.send.call_args_list])
+            self.assertEqual(server._sent_frame_timestamps, {7: 123.4})
+            self.assertEqual(server._rtt_samples, [0.01, 0.02])
+            self.assertEqual(server._smoothed_rtt_ms, 12.5)
+            self.assertEqual(server._client_acknowledged_frame_id, 6)
+            self.assertFalse(server._backpressure_send_frames_enabled)
+            viewer.disconnect.set()
+            await viewer_handler
+            self.assertEqual(server.clients, {controller})
+            self.assertIs(server.data_ws, controller)
+            server.reconfigure_displays.assert_not_awaited()
+            self.assertTrue(all(not record["stopped"] for record in records[:3]))
+            await self.assert_stopped(records[3:], 3)
+        finally:
+            viewer.disconnect.set()
+            controller.disconnect.set()
+            await asyncio.gather(controller_handler, viewer_handler)
+        await self.assert_stopped(records, 6)
+
+    async def test_stale_pin_viewer_is_still_rejected_before_admission(self):
+        server, records = stats_server(environment={"PASSWORD": "test-password"})
+        controller, viewer = WebSocket(1234), WebSocket(1235)
+        viewer.request.path = "/#shared"
+        server.clients.add(controller)
+        server.data_ws = controller
+        server._sent_frame_timestamps[7] = 123.4
+        await server.ws_handler(viewer)
+        viewer.send.assert_awaited_once_with("FORCE_PIN_LOGIN")
+        viewer.close.assert_awaited_once_with(code=4003, reason="Stale session epoch")
+        controller.close.assert_not_awaited()
+        controller.send.assert_not_awaited()
+        self.assertEqual(server.clients, {controller})
+        self.assertIs(server.data_ws, controller)
+        self.assertEqual(server._sent_frame_timestamps, {7: 123.4})
+        self.assertEqual(records, [])
 
     async def test_gpu_probe_failure_cleans_already_started_system_task(self):
         server, records = stats_server(probe_error=True)

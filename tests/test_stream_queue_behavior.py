@@ -40,10 +40,10 @@ def queue_server():
 
 
 class StreamQueueTests(unittest.IsolatedAsyncioTestCase):
-    async def test_h264_order_preserved_in_active_idle_and_high_load_modes(self):
+    async def test_interframe_order_preserved_in_active_idle_and_high_load_modes(self):
         server = queue_server()
         queue = server.video_chunk_queues["primary"]
-        for encoder in ("x264enc", "h265enc"):
+        for encoder in ("x264enc", "h265enc", "av1enc"):
             for key in ("active", "dynamic_low_latency_active", "high_load_active"):
                 server.display_clients["primary"] = {"encoder": encoder, key: True}
                 for frame in (1, 2, 3):
@@ -80,28 +80,30 @@ class StreamQueueTests(unittest.IsolatedAsyncioTestCase):
         sender.cancel()
         await sender
 
-    async def test_primary_backpressure_pauses_then_resumes_h264_in_order(self):
-        server = queue_server()
-        state = server.display_clients["primary"]
-        state["backpressure_enabled"] = False
-        queue = server.video_chunk_queues["primary"]
-        frames = [b"key-frame", b"reference-frame", b"dependent-frame"]
-        for frame_id, data in enumerate(frames, 1):
-            queue.put_nowait({"data": data, "frame_id": frame_id})
-        sender = asyncio.create_task(server._video_chunk_sender("primary"))
-        try:
-            await asyncio.sleep(0.01)
-            self.assertEqual(server.broadcasts, [])
-            self.assertEqual(queue.qsize(), 3)
-            self.assertEqual(state["sent_timestamps"], {})
-            state["backpressure_enabled"] = True
-            await asyncio.wait_for(queue.join(), timeout=1)
-            self.assertEqual(server.broadcasts, frames)
-            self.assertEqual(state["last_sent_frame_id"], 3)
-            self.assertEqual(server._bytes_sent_in_interval, sum(map(len, frames)))
-        finally:
-            sender.cancel()
-            await sender
+    async def test_primary_backpressure_pauses_then_resumes_video_in_order(self):
+        for encoder in ("x264enc", "h265enc", "av1enc"):
+            with self.subTest(encoder=encoder):
+                server = queue_server()
+                state = server.display_clients["primary"]
+                state.update(encoder=encoder, backpressure_enabled=False)
+                queue = server.video_chunk_queues["primary"]
+                frames = [b"key-frame", b"reference-frame", b"dependent-frame"]
+                for frame_id, data in enumerate(frames, 1):
+                    queue.put_nowait({"data": data, "frame_id": frame_id})
+                sender = asyncio.create_task(server._video_chunk_sender("primary"))
+                try:
+                    await asyncio.sleep(0.01)
+                    self.assertEqual(server.broadcasts, [])
+                    self.assertEqual(queue.qsize(), 3)
+                    self.assertEqual(state["sent_timestamps"], {})
+                    state["backpressure_enabled"] = True
+                    await asyncio.wait_for(queue.join(), timeout=1)
+                    self.assertEqual(server.broadcasts, frames)
+                    self.assertEqual(state["last_sent_frame_id"], 3)
+                    self.assertEqual(server._bytes_sent_in_interval, sum(map(len, frames)))
+                finally:
+                    sender.cancel()
+                    await sender
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ const source = fs.readFileSync(path.join(__dirname,
   const localStorage = new Storage(), sessionStorage = new Storage(), saves = [];
   const preferences = { encoder: "h265enc", framerate: 45, h264_crf: 24, h264_paintover_crf: 16,
     use_paint_over_quality: true, h264_streaming_mode: false, h264_fullcolor: false, use_cpu: false,
-    encoder_display2: "x264enc", framerate_display2: 30 };
+    encoder_display2: "av1enc", framerate_display2: 30 };
   const location = { href: "https://example.test/box/?_pin=changed#display2" };
   const prefix = location.href.split("#")[0].replace(/[^a-zA-Z0-9.-_]/g, "_") + "_";
   localStorage.setItem(prefix + "framerate", 30);
@@ -32,7 +32,10 @@ const source = fs.readFileSync(path.join(__dirname,
   localStorage.setItem(prefix + "h264_crf", 26);
   sessionStorage.setItem(prefix + "h264_crf", 40);
   localStorage.setItem(prefix + "framerate_display2", 60);
-  assert.deepEqual(saves, [["h264_crf", 26], ["framerate_display2", 60]]);
+  localStorage.setItem(prefix + "encoder", "av1enc");
+  localStorage.setItem(prefix + "encoder", "av1enc");
+  assert.equal(localStorage.getItem("selkies.videoPreferences:/box/:encoder"), "av1enc");
+  assert.deepEqual(saves, [["h264_crf", 26], ["framerate_display2", 60], ["encoder", "av1enc"]]);
   const bundle = fs.readFileSync(path.join(__dirname,
     "../root/usr/share/selkies/selkies-dashboard/assets/index-CzFxBFXa.js"), "utf8");
   const helper = bundle.split("\n").find(line => line.startsWith("const axiDebounceSettings="));
@@ -43,5 +46,5 @@ const source = fs.readFileSync(path.join(__dirname,
   timer();
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), { framerate: 45, h264_crf: 24, use_paint_over_quality: true },
     "Rapid changes to different settings must merge instead of discarding all but the last change");
-  console.log("Video preferences: all eight settings, changed login query, secondary display and hydration passed");
+  console.log("Video preferences: all eight settings, HEVC/AV1 persistence, changed login query, secondary display and hydration passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

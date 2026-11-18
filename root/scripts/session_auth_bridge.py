@@ -81,7 +81,7 @@ def update_preferences(patch):
     for key, value in patch.items():
         video_key = key.removesuffix("_display2")
         if video_key == "encoder":
-            if value not in ("x264enc", "x264enc-striped", "jpeg", "h265enc"):
+            if value not in ("x264enc", "x264enc-striped", "jpeg", "h265enc", "av1enc"):
                 raise ValueError("Invalid video encoder")
             clean[key] = value
         elif video_key in VIDEO_PREFERENCE_TOGGLES:

@@ -156,6 +156,15 @@ class PreferencesTests(unittest.TestCase):
             ]))
         self.assertEqual(len(self.bridge.read_preferences()), 4)
 
+    def test_av1_video_preferences_survive_restart_for_each_display(self):
+        settings = {"encoder": "av1enc", "use_cpu": False, "h264_fullcolor": False,
+                    "encoder_display2": "av1enc", "framerate_display2": 45,
+                    "use_cpu_display2": False}
+        self.bridge.update_preferences(settings)
+        restarted = load("session_auth_bridge")
+        restarted.PREFERENCES_PATH = self.bridge.PREFERENCES_PATH
+        self.assertEqual(restarted.read_preferences(), settings)
+
     def test_invalid_favorites_do_not_overwrite_settings(self):
         self.bridge.update_preferences({"notification_center_enabled": True})
         for path in ("../ssl", "/etc", "a/../b", "a\\b", "a\x00b"):

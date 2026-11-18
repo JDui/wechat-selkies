@@ -306,11 +306,15 @@ if [ -z "$default_encoder" ] || [ "$default_encoder" = "auto" ]; then
   default_encoder="x264enc"
 fi
 
-# Keep stable, low-latency encoders only; unsupported injected options can black-screen.
+# Only implemented codecs are valid defaults; client and GPU probes still apply.
 case "$default_encoder" in
-  x264enc|x264enc-striped|jpeg) ;;
+  x264enc|h265enc|av1enc|x264enc-striped|jpeg) ;;
   *) default_encoder="x264enc" ;;
 esac
+
+if [ "$default_encoder" = "av1enc" ] && { [ "$default_use_cpu_js" = "true" ] || [ "$dri_available_js" != "true" ]; }; then
+  default_encoder="x264enc"
+fi
 
 if [ "$default_encoder" = "x264enc-striped" ] || [ "$default_encoder" = "jpeg" ]; then
   default_use_cpu_js="true"

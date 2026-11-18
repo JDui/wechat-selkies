@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AV1 WebCodecs 本机验收</title>
+<style>
+  body { max-width: 900px; margin: 32px auto; padding: 0 20px; color: #dce5ed; background: #111923; font: 16px/1.6 system-ui, sans-serif; }
+  h1 { font-size: 24px; }
+  code, pre { font-family: ui-monospace, monospace; }
+  pre { padding: 16px; border: 1px solid #334252; border-radius: 8px; background: #18232e; white-space: pre-wrap; overflow-wrap: anywhere; }
+  button { margin: 8px 8px 16px 0; padding: 10px 16px; font: inherit; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .55; }
+  canvas { width: 384px; max-width: 100%; height: auto; border: 1px solid #607080; background: #000; }
+</style>
+<h1>AV1 WebCodecs 本机验收</h1>
+<p>在仓库根目录运行 <code>python3 -m http.server 8080 --bind 127.0.0.1</code>，随后打开
+  <code>http://127.0.0.1:8080/tests/av1_browser_probe.html</code>。也可由已有 HTTPS 服务托管此仓库。</p>
+<p>此页面使用项目实际的 AV1 解码 helper 和真实 FFmpeg 测试码流，检查关键帧、依赖帧、still-picture、画布绘制及关闭后的会话状态。
+  <code>prefer-hardware</code> 是浏览器选择硬件的偏好；通过此测试不代表已验证 GPU 硬解。</p>
+<button id="run" disabled>运行解码与绘制检查</button><button id="stop" disabled>停止并关闭解码器</button>
+<div><canvas id="picture" width="128" height="96"></canvas></div>
+<pre id="result" role="status">正在检查 WebCodecs 支持…</pre>
+<script src="../root/usr/share/selkies/selkies-dashboard/src/selkies-av1.js"></script>
+<script>
+"use strict";
+const run = document.getElementById("run"), stop = document.getElementById("stop");
+const result = document.getElementById("result"), canvas = document.getElementById("picture");
+const context = canvas.getContext("2d");
+let cancel = null;
+let sequence = 0;
+
+function packet(frame, sample, index) {
+  const data = Uint8Array.from(atob(frame.base64), character => character.charCodeAt(0));
+  const bytes = new Uint8Array(10 + data.length), view = new DataView(bytes.buffer);
+  view.setUint8(0, 6);
+  view.setUint8(1, frame.key ? 1 : 0);
+  view.setUint16(2, index + 1);
+  view.setUint16(6, sample.width);
+  view.setUint16(8, sample.height);
+  bytes.set(data, 10);
+  return bytes.buffer;
+}
+
+function decode(name, sample) {
+  return new Promise((resolve, reject) => {
+    let received = 0, finished = false, session;
+    function finish(error) {
+      if (finished) return;
+      finished = true;
+      session.close();
+      cancel = null;
+      if (error) reject(error);
+      else resolve({ sample: name, framesDrawn: received, session: session.diagnostics() });
+    }
+    session = window.selkiesAv1.createDecoder({
+      error: finish,
+      output(frame, info) {
+        try {
+          if (frame.visibleRect.width !== sample.width || frame.visibleRect.height !== sample.height) {
+            throw new Error(name + ": unexpected visible dimensions");
+          }
+          canvas.width = info.width;
+          canvas.height = info.height;
+          context.drawImage(frame, 0, 0);
+          received += 1;
+          if (received === sample.frames.length) finish();
+        } catch (error) { finish(error); }
+        finally { frame.close(); }
+      }
+    });
+    cancel = () => finish(new Error("已停止，解码器已关闭"));
+    session.expectFrame();
+    sample.frames.forEach((frame, index) => {
+      if (!finished && !session.push(packet(frame, sample, index))) {
+        finish(new Error(name + ": packet was not accepted"));
+      }
+    });
+  });
+}
+
+stop.addEventListener("click", () => { if (cancel) cancel(); });
+run.addEventListener("click", async () => {
+  const current = ++sequence;
+  run.disabled = true;
+  stop.disabled = false;
+  result.textContent = "正在解码真实 AV1 码流…";
+  const cases = [];
+  try {
+    const response = await fetch("fixtures/av1_samples.json", { cache: "no-store" });
+    if (!response.ok) throw new Error("无法载入 fixture：HTTP " + response.status);
+    const fixtures = await response.json();
+    for (const name of ["main8-delta", "main8-still"]) {
+      cases.push(await decode(name, fixtures.samples[name]));
+    }
+    result.textContent = JSON.stringify({ passed: true, cases,
+      diagnostics: window.selkiesAv1.diagnostics(),
+      note: "已实际解码并绘制；是否使用 GPU 须结合系统 GPU 视频解码计数器确认。" }, null, 2);
+  } catch (error) {
+    result.textContent = JSON.stringify({ passed: false, error: error.message, cases,
+      diagnostics: window.selkiesAv1.diagnostics() }, null, 2);
+  } finally {
+    if (current === sequence) { run.disabled = false; stop.disabled = true; }
+  }
+});
+
+window.selkiesAv1.ready.then(() => {
+  result.textContent = JSON.stringify(window.selkiesAv1.diagnostics(), null, 2);
+  run.disabled = !window.selkiesAv1.supported();
+});
+window.addEventListener("pagehide", () => { if (cancel) cancel(); });
+</script>
+</html>

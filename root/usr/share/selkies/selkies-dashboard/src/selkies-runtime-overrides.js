@@ -8,7 +8,7 @@
   var toolPreferencesReady = false;
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
   var CPU_ONLY_ENCODERS = new Set(["jpeg", "x264enc-striped"]);
-  var STABLE_ENCODERS = new Set(["x264enc", "x264enc-striped", "jpeg", "h265enc"]);
+  var STABLE_ENCODERS = new Set(["x264enc", "x264enc-striped", "jpeg", "h265enc", "av1enc"]);
   var FALLBACK_ENCODER = "x264enc";
   var badgeRefreshTimer = null;
   var lastServerUseCpu = null;
@@ -581,6 +581,8 @@
     if (!settings || typeof settings !== "object") return settings;
     var safe = Object.assign({}, settings);
     safe.hevc_supported = !!(window.selkiesHevc && window.selkiesHevc.supported());
+    safe.av1_supported = !!(window.selkiesAv1 && window.selkiesAv1.supported());
+    if (safe.encoder === "av1enc") safe.use_cpu = false;
     safe.gamepad_enabled = false;
     safe.isGamepadEnabled = false;
     safe.ui_sidebar_show_gamepads = false;
@@ -3748,6 +3750,7 @@
     if (VAAPI_ENCODER_HINTS.has(name) && sanitizeBool(runtime.driAvailable, false)) {
       return "VAAPI";
     }
+    if (name === "av1enc") return "VAAPI";
     if ((name === "x264enc" || name === "h265enc") && sanitizeBool(runtime.driAvailable, false) && !useCpu) {
       return "VAAPI";
     }
@@ -4180,7 +4183,7 @@
       setUseCpuFlag(true);
       return;
     }
-    if (VAAPI_ENCODER_HINTS.has(value)) {
+    if (VAAPI_ENCODER_HINTS.has(value) || value === "av1enc") {
       setUseCpuFlag(false);
       return;
     }
@@ -6392,7 +6395,7 @@
   function runEncoderResetSequence() {
     clearEncoderResetTimers();
     var encoder = currentEncoderName();
-    if (encoder === "h265enc") {
+    if (encoder === "h265enc" || encoder === "av1enc") {
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
       return;
     }
