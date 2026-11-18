@@ -16,6 +16,7 @@ function clock() {
   let now = 0, nextId = 0;
   const timers = new Map();
   return {
+    now: () => now,
     setTimeout(fn, delay = 0) { const id = ++nextId; timers.set(id, { fn, at: now + delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     advance(amount) {
@@ -65,8 +66,9 @@ function fixture(options = {}) {
     Event: class Event { constructor(type) { this.type = type; } },
     Uint8Array, ArrayBuffer, DataView, Map, Set,
     VideoDecoder: Decoder, VideoFrame: Frame, EncodedVideoChunk: class Chunk { constructor(init) { Object.assign(this, init); } },
-    performance: { now: () => 1 }, setTimeout: time.setTimeout, clearTimeout: time.clearTimeout
+    performance: { now: time.now }, setTimeout: time.setTimeout, clearTimeout: time.clearTimeout
   });
+  window.location = scope.location;
   vm.runInContext(helper, scope);
   function output(decoder, index, width = 128, height = 96) {
     const frame = new Frame(null, { timestamp: decoder.chunks[index]?.timestamp || 1, codedWidth: width, codedHeight: height });
@@ -97,11 +99,15 @@ function wireTransport(f, shared = false) {
     j: 0, n: null, Gt: {}, Za: [], axiAv1Decoder: null, se: -1, zi: new Set(), E: null, Oe: "primary", oe: false,
     H: 128, J: 96, c: { width: 128, height: 96 }, h: { setTransform: noop, clearRect: noop },
     $n: noop, li: noop, ga: noop, Pt: noop, ji: noop, ve: async () => true,
+    axiServerSettings: null, Ji: () => ({}), Ua: noop, vn: noop,
     Ne: { classList: { remove: noop } }, clearInterval: noop,
     WebSocket: { OPEN: 1 }, f: { readyState: 1, send: noop, close() { this.readyState = 3; } }
   });
   f.scope.window.selkiesHevc = { config: () => ({ codec: "hev1.1.6.L120.B0" }), fallback: noop };
+  f.scope.Vn = patch => { if (patch.encoder) f.scope.Ae = patch.encoder; };
   const fragments = [
+    shipped("function axiApplyAv1Capabilities(", "function Ji("),
+    shipped("function Dl(", "async function wn("),
     shipped("function Pa(){", "function El("),
     shipped("function El(_){", "let Za=[];"),
     shipped("function axiClearStripeFrames(){", "function Ml("),
@@ -116,7 +122,8 @@ function wireTransport(f, shared = false) {
   const f = fixture(); await f.api.ready;
   for (const [name, codec, width, height] of [
     ["main8-delta", "av01.0.00M.08", 128, 96], ["main8-still", "av01.0.00M.08", 128, 96],
-    ["main8-1080p", "av01.0.08M.08", 1920, 1080], ["main8-1366", "av01.0.05M.08", 1366, 768]
+    ["main8-1080p", "av01.0.08M.08", 1920, 1080], ["main8-1366", "av01.0.05M.08", 1366, 768],
+    ["main8-1440p", "av01.0.12M.08", 2560, 1440]
   ]) {
     const source = samples[name].frames ? sample(name) : Uint8Array.from(Buffer.from(samples[name].sequenceObuBase64, "base64"));
     const parsed = f.api.parseSequence(source);
@@ -163,6 +170,67 @@ function wireTransport(f, shared = false) {
   assert.equal(cropped[0].frame.visibleRect.width, 126); assert.equal(cropped[0].frame.visibleRect.height, 94);
   assert.equal(cropped[0].frame.displayHeight, 94, "coded padding is cropped without rescaling source pixels");
   cropSession.close();
+
+  const timed = fixture(); await timed.api.ready;
+  const timedSession = timed.api.createDecoder({ output: frame => frame.close() });
+  timedSession.push(packet()); await settle(); timed.time.advance(250); timed.output(timed.decoders[0], 0);
+  timed.time.advance(500); timedSession.push(packet(delta, false, 2)); timed.output(timed.decoders[0], 1);
+  timed.time.advance(500); timedSession.push(packet(key, true, 3)); timed.output(timed.decoders[0], 2);
+  const measurements = timedSession.diagnostics();
+  assert.equal(measurements.firstFrameMs, 250);
+  assert.equal(measurements.decodeFps, 2);
+  assert.equal(measurements.receiveBitrateBps, (key.length + delta.length) * 8);
+  assert.equal(measurements.receivedBytes, key.length * 2 + delta.length);
+  assert.equal(measurements.lastKeyframeIntervalMs, 1250);
+  assert.equal(measurements.averageKeyframeIntervalMs, 1250);
+  assert.equal(measurements.peakDecodeFps, 2);
+  assert.equal(measurements.peakQueuedFrames, 1);
+  assert.equal(measurements.peakQueuedBytes, key.length);
+  timed.time.advance(1000); timedSession.close();
+  const finishedMeasurements = JSON.stringify(timedSession.diagnostics());
+  timed.time.advance(3000);
+  assert.equal(JSON.stringify(timedSession.diagnostics()), finishedMeasurements, "closed session rates remain stable for comparison");
+
+  // Exercise the shipped renderer and absolute pointer mapping with real
+  // sequence headers. The tiny frame body is synthetic because this fixture
+  // deliberately substitutes VideoDecoder; this is not a hardware decode test.
+  for (const name of ["main8-1080p", "main8-1440p", "main8-1366"]) {
+    const source = samples[name];
+    const sequence = Buffer.from(source.sequenceObuBase64, "base64");
+    const headerOnlyKey = Uint8Array.from([...sequence, 0x32, 0x01, 0x10]);
+    for (const sharedMode of [false, true]) {
+      const geometry = fixture(); await geometry.api.ready;
+      const receive = wireTransport(geometry, sharedMode);
+      receive(packet(headerOnlyKey, true, 1, source.width, source.height)); await settle();
+      geometry.output(geometry.decoders[0], 0, source.width, Math.ceil(source.height / 64) * 64);
+      const canvas = { width: 0, height: 0, style: {}, parentElement: { clientWidth: 1700, clientHeight: 1000 },
+        getBoundingClientRect() { return { left: parseFloat(this.style.left), top: parseFloat(this.style.top),
+          width: parseFloat(this.style.width), height: parseFloat(this.style.height) }; } };
+      const overlay = { style: {} }, drawn = [], positions = [];
+      geometry.scope.document.getElementById = id => id === "videoCanvas" ? canvas : id === "overlayInput" ? overlay : null;
+      geometry.scope.document.pointerLockElement = null;
+      Object.assign(geometry.scope.window, { devicePixelRatio: 2, is_manual_resolution_mode: !sharedMode });
+      Object.assign(geometry.scope, { c: canvas, h: { drawImage: (...args) => drawn.push(args) }, ft: false, Fi: true,
+        H: source.width, J: source.height, Ve: value => value - value % 2, tn() {}, requestAnimationFrame() {} });
+      vm.runInContext(shipped("function Pt(", "function Pi(") + shipped("function ae(){", "async function te(){"), geometry.scope);
+      geometry.scope.Pt(source.width, source.height, true); geometry.scope.ae();
+      assert.equal(canvas.width, source.width); assert.equal(canvas.height, source.height);
+      assert.equal(drawn[0][0].visibleRect.height, source.height);
+      assert.equal(drawn[0][0].displayHeight, source.height);
+      const inputStart = bundle.indexOf("_mouseButtonMovement(o){"), inputEnd = bundle.indexOf("_handlePointerDown(o){", inputStart);
+      vm.runInContext("class PointerGeometry {" + bundle.slice(inputStart, inputEnd) + "}; this.pointer = new PointerGeometry();", geometry.scope);
+      Object.assign(geometry.scope.pointer, { element: overlay, buttonMask: 0, inputAttached: false, useCssScaling: false,
+        isSharedMode: sharedMode, _trackpadMode: false, send: value => positions.push(value) });
+      const rect = canvas.getBoundingClientRect();
+      for (const [x, y] of [[0, 0], [source.width / 2, source.height / 2], [source.width - 1, source.height - 1]]) {
+        geometry.scope.pointer._mouseButtonMovement({ target: overlay, type: "pointermove",
+          clientX: rect.left + x / source.width * rect.width, clientY: rect.top + y / source.height * rect.height });
+        const sent = positions.at(-1).split(",").slice(1, 3).map(Number);
+        assert.deepEqual(sent, [x, y], name + " source coordinates must not include encoder padding");
+      }
+      geometry.scope.axiAv1Decoder.close();
+    }
+  }
 
   const bounded = fixture(); await bounded.api.ready;
   const limitErrors = [];
@@ -219,8 +287,59 @@ function wireTransport(f, shared = false) {
   const controller = fixture({ hash: "#display2" }); await controller.api.ready;
   controller.api.fallback("codec-unsupported", false);
   assert.deepEqual(controller.saves, [["encoder_display2", "x264enc"]]);
-  assert.equal(controller.messages[0].settings.displayId, "display2");
-  assert.deepEqual(Object.keys(controller.messages[0].settings).sort(), ["displayId", "encoder"]);
+  assert.equal(controller.messages[0].type, "av1ClientError");
+  assert.equal(controller.messages[0].code, "CLIENT_CODEC_UNSUPPORTED");
+  const controllerSettings = controller.messages.find(message => message.type === "settings").settings;
+  assert.equal(controllerSettings.displayId, "display2");
+  assert.deepEqual(Object.keys(controllerSettings).sort(), ["displayId", "encoder"]);
+
+  for (const code of ["FIRST_FRAME_TIMEOUT", "first_keyframe_timeout", "runtime_software_fallback"]) {
+    const serverFailure = fixture(); await serverFailure.api.ready;
+    serverFailure.api.fallback(JSON.stringify({ code, message: "Server AV1 fallback" }), false, "server");
+    assert.equal(serverFailure.api.diagnostics().lastFailure.code, code);
+    assert.equal(serverFailure.messages.some(message => message.type === "av1ClientError"), false, "server fallback must not echo as a client failure");
+  }
+
+  const enabledDefinitions = { encoder: { value: "x264enc", allowed: ["x264enc", "h265enc", "av1enc"] }, use_cpu: { value: false, locked: false } };
+  const menu = fixture(); await menu.api.ready;
+  assert.equal(menu.api.selectable(enabledDefinitions), false, "browser capability alone does not expose AV1");
+  menu.api.updateServerCapability({ available: true, reason_code: "available" });
+  assert.equal(menu.api.diagnostics().server.reason_code, "available");
+  assert.equal(menu.api.selectable(enabledDefinitions), true);
+  assert.equal(menu.api.selectable(undefined), false, "missing server settings never shows the fallback AV1 menu entry");
+  assert.equal(menu.api.selectable({ encoder: { allowed: ["x264enc"] } }), false);
+  assert.equal(menu.api.selectable({ ...enabledDefinitions, use_cpu: { value: true, locked: true } }), false);
+  menu.api.updateServerCapability({ available: false, reason_code: "GPU_ENCODER_UNAVAILABLE" });
+  assert.equal(menu.api.normalizeEncoder("av1enc", enabledDefinitions, false), "x264enc");
+  assert.equal(menu.api.diagnostics().lastFailure.code, "GPU_ENCODER_UNAVAILABLE");
+  const savedEncoder = [...menu.stored.values()][0];
+  const savesBeforeReconnect = menu.saves.length;
+  menu.time.advance(3000); menu.api.clearServerCapability();
+  assert.equal(menu.api.normalizeEncoder(savedEncoder, null, false), "x264enc");
+  assert.equal(menu.saves.length, savesBeforeReconnect, "the persisted fallback does not retry AV1 on reconnect");
+  assert.equal(insecure.api.normalizeEncoder("av1enc", null, false), "x264enc");
+  assert.equal(insecure.api.diagnostics().lastFailure.code, "CLIENT_INSECURE_CONTEXT");
+
+  const advertised = fixture(); await advertised.api.ready;
+  const receiveAdvertised = wireTransport(advertised);
+  receiveAdvertised(JSON.stringify({ type: "server_settings", settings: enabledDefinitions,
+    av1_capability: { available: false, reason_code: "device_permission_denied" } }));
+  assert.equal(advertised.scope.Ae, "x264enc", "the real server-settings handler applies the fallback immediately");
+  assert.equal(advertised.api.diagnostics().server.reason_code, "device_permission_denied");
+  assert.equal(advertised.api.diagnostics().lastFailure.code, "device_permission_denied");
+  assert.equal(advertised.messages.some(message => message.type === "av1ClientError"), false);
+  const shownDefinitions = advertised.messages.find(message => message.type === "serverSettings").payload;
+  assert.equal(shownDefinitions.encoder.allowed.includes("av1enc"), false);
+
+  const reporting = fixture(); await reporting.api.ready; wireTransport(reporting);
+  const reports = []; reporting.scope.f.send = value => reports.push(value);
+  reporting.scope.Dl({ origin: reporting.scope.location.origin, data: { type: "av1ClientError", code: "CLIENT_DECODE_FAILED" } });
+  reporting.scope.Dl({ origin: reporting.scope.location.origin, data: { type: "av1ClientError", code: "arbitrary private text" } });
+  reporting.scope.Dl({ origin: reporting.scope.location.origin, data: { type: "av1ClientError", code: "client_decode_failed" } });
+  reporting.scope.Dl({ origin: "https://other.test", data: { type: "av1ClientError", code: "CLIENT_DECODE_FAILED" } });
+  reporting.scope.A = true;
+  reporting.scope.Dl({ origin: reporting.scope.location.origin, data: { type: "av1ClientError", code: "CLIENT_DECODE_FAILED" } });
+  assert.deepEqual(reports, ["AV1_CLIENT_ERROR,CLIENT_DECODE_FAILED"], "only the local controller sends allowlisted reason codes");
 
   const primary = fixture(); await primary.api.ready;
   const receivePrimary = wireTransport(primary);

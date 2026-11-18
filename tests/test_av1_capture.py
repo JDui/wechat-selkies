@@ -23,7 +23,7 @@ av1 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(av1)
 
 
-def native_frame(frame_id=0, kind=1, width=1920, height=1080, payload=b"\x12\x00\x32\x01\x10"):
+def native_frame(frame_id=0, kind=1, width=1920, height=1080, payload=b"\x12\x00\x0a\x01\x00\x32\x01\x10"):
     return struct.pack("!BBHHHHH", 4, 0x40 | kind, frame_id, 0, width, height, frame_id) + payload
 
 
@@ -77,7 +77,7 @@ class Av1PacketTests(unittest.TestCase):
             data, frame_id = av1.packet(native_frame(65535, kind), 1920, 1080)
             self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (6, key, 65535, 0, 1920, 1080))
             self.assertEqual(frame_id, 65535)
-            self.assertEqual(data[10:], b"\x12\x00\x32\x01\x10")
+            self.assertEqual(data[10:], b"\x12\x00\x0a\x01\x00\x32\x01\x10")
         self.assertEqual(av1.packet(native_frame(0), 1920, 1080)[1], 0)
 
     def test_alignment_does_not_change_source_geometry(self):
@@ -103,6 +103,11 @@ class Av1PacketTests(unittest.TestCase):
 
 
 class Av1CaptureTests(unittest.TestCase):
+    def setUp(self):
+        device = patch.object(av1, "_probe_device", return_value=({"read_write": True}, None, None))
+        device.start()
+        self.addCleanup(device.stop)
+
     def test_hardware_session_waits_for_key_and_preserves_order(self):
         capture = NativeCapture([native_frame(65534, 0), native_frame(65535), native_frame(0, 0)])
         module = native_module(capture)
@@ -219,11 +224,15 @@ def server_methods(names, **extra):
     source = BACKEND / "selkies.py"
     tree = ast.parse(source.read_text(encoding="utf-8-sig"))
     cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DataStreamingServer")
+    names = set(names) | {"_av1_rejection", "_notify_av1_fallback", "_finish_video_metrics"}
     cls.body = [node for node in cls.body if getattr(node, "name", "") in names]
+    metrics_spec = importlib.util.spec_from_file_location("av1_metrics_tests", BACKEND / "video_diagnostics.py")
+    metrics_module = importlib.util.module_from_spec(metrics_spec)
+    metrics_spec.loader.exec_module(metrics_module)
     namespace = {"asyncio": asyncio, "json": json, "data_logger": Mock(),
                  "websockets": SimpleNamespace(ConnectionClosed=ConnectionError), "IS_WAYLAND": False,
                  "av1_available": lambda: True, "hevc_available": lambda: True, "CURSOR_SIZE": 0,
-                 "SETTING_DEFINITIONS": []}
+                 "SETTING_DEFINITIONS": [], "VideoSessionMetrics": metrics_module.VideoSessionMetrics}
     namespace.update(extra)
     exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), "exec"), namespace)
     return namespace["DataStreamingServer"](), namespace
@@ -245,6 +254,7 @@ def settings_server(**extra):
     server.app = SimpleNamespace(audio_bitrate=128000, encoder="x264enc")
     server.display_clients = {"primary": {"width": 1920, "height": 1080, "position": "right"}}
     server._initial_h264_crf = 24
+    server._av1_capability = {"available": True, "reason_code": "available"}
     server._refresh_low_latency_runtime_tuning = Mock()
     server.input_handler = None
     server.is_pcmflux_capturing = False
@@ -353,7 +363,11 @@ class Av1ServerTests(unittest.IsolatedAsyncioTestCase):
         viewer = SimpleNamespace(send=AsyncMock())
         await server._sync_shared_viewer(viewer)
         viewer.send.assert_awaited_once_with("PIPELINE_RESETTING primary")
-        server._fallback_av1_capture.assert_awaited_once_with("primary", capture, "device lost")
+        server._fallback_av1_capture.assert_awaited_once()
+        args = server._fallback_av1_capture.call_args.args
+        self.assertEqual(args[:2], ("primary", capture))
+        self.assertEqual(str(args[2]), "device lost")
+        self.assertEqual(args[3], "keyframe_request_failed")
 
     async def test_health_failure_resets_current_capture_but_ignores_stale_instance(self):
         server, namespace = server_methods({"_monitor_av1_capture", "_fallback_av1_capture"})
@@ -366,7 +380,8 @@ class Av1ServerTests(unittest.IsolatedAsyncioTestCase):
         server._restart_capture_for_display_settings = AsyncMock()
         await server._fallback_av1_capture("primary", object(), "stale")
         server._restart_capture_for_display_settings.assert_not_awaited()
-        namespace["asyncio"] = SimpleNamespace(sleep=AsyncMock(), CancelledError=asyncio.CancelledError)
+        namespace["asyncio"] = SimpleNamespace(sleep=AsyncMock(), CancelledError=asyncio.CancelledError,
+                                              wait_for=asyncio.wait_for)
         await server._monitor_av1_capture("primary", capture)
         self.assertEqual(server.display_clients["primary"]["encoder"], "x264enc")
         server._restart_capture_for_display_settings.assert_awaited_once_with("primary")

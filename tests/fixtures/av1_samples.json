@@ -1,7 +1,7 @@
 {
   "description": "FFmpeg libaom-av1 samples. main8-delta carries the first key, one dependent delta and the next key. High-resolution and 10-bit cases carry complete sequence OBUs only; they test parsing, not decoding.",
   "generator": "ffmpeg -nostdin -hide_banner -v error -y -f lavfi -i testsrc2=size=128x96:rate=5 -frames:v 8 -c:v libaom-av1 -cpu-used 8 -threads 2 -row-mt 1 -lag-in-frames 0 -g 4 -crf 32 -b:v 0 -pix_fmt yuv420p -f ivf main8-delta.ivf",
-  "variants": "main8-1080p/main8-1366: size=1920x1080/1366x768, frames=2; main8-still: size=128x96, frames=1, add -still-picture 1; main10-reject: size=128x96, frames=2, -pix_fmt yuv420p10le. Parse the IVF 32-byte file header and 12-byte frame headers; retain temporal-unit payloads. main8-delta retains source frames 0, 1 and 4. High-resolution and 10-bit entries retain only the complete sequence OBU from source frame 0.",
+  "variants": "main8-1080p/main8-1366: size=1920x1080/1366x768, frames=2; main8-still: size=128x96, frames=1, add -still-picture 1; main10-reject: size=128x96, frames=2, -pix_fmt yuv420p10le. Parse the IVF 32-byte file header and 12-byte frame headers; retain temporal-unit payloads. main8-delta retains source frames 0, 1 and 4. High-resolution and 10-bit entries retain only the complete sequence OBU from source frame 0. main8-1440p: size=2560x1440, frames=1, otherwise the same generator settings; retains only the complete sequence OBU.",
   "samples": {
     "main8-delta": {
       "width": 128,
@@ -50,6 +50,12 @@
       "height": 96,
       "pixelFormat": "yuv420p10le",
       "sequenceObuBase64": "CgoAAAADN/vm18oC"
+    },
+    "main8-1440p": {
+      "width": 2560,
+      "height": 1440,
+      "pixelFormat": "yuv420p",
+      "sequenceObuBase64": "CgwAAABi6n/s+5XyAIA="
     }
   }
 }

@@ -4,7 +4,7 @@
 
 当前维护分支：`AXiVer`，继续在本分支推进 AMD H255 / Radeon 780M 适配。2026-11-17 切换前的完整 Intel 版本（含输入法、剪贴板和休眠发现修复）已提交并推送到 `_intel`；更早的 `_AMDGPU` 备份保持不变。
 
-本分支面向 **AMD H255 / Radeon 780M**，使用 Mesa `radeonsi` 驱动，提供 H.264、H.265 和 AV1 推流。启动时自动选择 AMD 渲染节点，以桌面用户检查 H.264 编码能力；不可用时锁定 CPU 回退。AV1 另外核验选中 GPU 的实际编码能力，只开放 8-bit、4:2:0 全帧硬编，失败回退 H.264。源码版本及示例镜像标签为 `1.90`，780M 真机编码尚待验收。部署与 H.265 支持见 [AMD 780M 说明](docs/ops/amd-780m.md)，AV1 接入及小客户端硬解核查见 [1.90 说明](docs/ops/av1-1.90.md)。
+本分支面向 **AMD H255 / Radeon 780M**，使用 Mesa `radeonsi` 驱动，提供 H.264、H.265 和 AV1 推流。启动时自动选择 AMD 渲染节点，以桌面用户检查 H.264 编码能力；不可用时锁定 CPU 回退。AV1 另外核验选中 GPU 的实际编码能力，只开放 8-bit、4:2:0 全帧硬编，失败回退 H.264。源码版本及示例镜像标签为 `1.91`，780M 真机编码尚待验收。部署与 H.265 支持见 [AMD 780M 说明](docs/ops/amd-780m.md)，AV1 接入及小客户端硬解核查见 [1.90 说明](docs/ops/av1-1.90.md)。
 
 ## 界面截图
 
@@ -66,6 +66,14 @@
 - 周期 HTTP 请求限制单个在途并设置 5 秒超时；活动上报合并待发送更新。满额日志预留写入空间，低频事件及时落盘。
 - 上传会话空闲缓存回收；完成元数据保留 24 小时，未完成上传仍可续传。焦点命令超时清理整个进程组。
 - 微信进程监控与隔夜采集明确不检测账号登录态；缺少证据时原因保持 `unknown`。详情见 [稳定性加固说明](docs/ops/stability-hardening.md)。
+
+## 1.91 更新
+
+- 修正 Compose 显式编码器列表覆盖镜像默认值的问题；Dockerfile、Compose、README 示例与变量表统一包含 H.264、HEVC、AV1。默认仍为 H.264，并增加配置一致性回归。
+- AV1 选项同时要求服务端实际节点能力探测通过、配置允许和浏览器支持。启动日志记录设备权限、原生编码器及格式；失败按稳定原因码回退并保存 H.264，避免重连反复尝试已失败的偏好。
+- 核查固定 pixelflux 的强制关键帧路径，每次都会重新提交序列参数；新增实际关键帧序列头检查。补齐 1080 / 1440 / 768 高度的裁切与输入坐标回归。
+- 增加服务端会话快照和客户端解码统计，明确区分编码输出、传输字节与解码输出；H.264 旧运行库无法提供实际硬件状态时保持未知。
+- 新增容器内 Mesa / VA-API / 设备权限预检，以及固定三阶段 H.264 / HEVC / AV1 对照工具。完整审查结果见 [1.91 审查说明](docs/ops/av1-review-1.91.md)，实机命令和镜像回滚见 [验收流程](docs/ops/av1-validation.md)。目标机器上的硬编硬解与性能仍待实测。
 
 ## 1.90 更新
 
@@ -284,7 +292,7 @@
 当前 AMD 适配需要从源码构建，旧 Intel 离线包不包含这些改动。在仓库目录执行：
 
 ```bash
-docker build -t wechat-selkies:1.90 .
+docker build -t wechat-selkies:1.91 .
 ```
 
 启动：
@@ -299,7 +307,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:1.90
+  wechat-selkies:1.91
 ```
 
 访问：
@@ -322,7 +330,7 @@ docker compose up -d --build
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:1.90
+    image: wechat-selkies:1.91
     container_name: wechat-selkies
     init: true
     ports:
@@ -343,7 +351,7 @@ services:
       - CUSTOM_WS_PORT=8081
       - WATCHDOG_AUDIO=true
       - SELKIES_VIDEO_CORRUPTION_WATCHDOG=false
-      - SELKIES_ENCODER=x264enc,x264enc-striped,jpeg
+      - SELKIES_ENCODER=x264enc,h265enc,av1enc,x264enc-striped,jpeg
       - SELKIES_DEFAULT_ENCODER=x264enc
       - SELKIES_DISABLE_GAMEPAD=true
       - SELKIES_DYNAMIC_THROTTLE=true
@@ -398,7 +406,7 @@ services:
 | `WECHAT_PROXY_MODE` | `direct` | 微信启动时清除代理环境变量；`inherit` 保留环境代理，不控制 TUN/VPN/路由器 |
 | `SELKIES_INPUT_QUEUE` | `true` | 每连接一条有序队列处理按键、剪贴板和 IO 重置，接收循环继续处理帧确认，避免打字期间画面暂停；设为 `false` 恢复串行处理 |
 | `SELKIES_INPUT_QUEUE_MAX` | `256` | 输入积压告警水位（16–4096），超过后继续保序处理帧确认；合并相邻无按键鼠标移动，硬上限为 `max(4096, 水位×4)`，达到硬上限时关闭该过载连接，避免无限积压或静默丢弃按键 |
-| `SELKIES_ENCODER` | `x264enc,x264enc-striped,jpeg` | 可选编码器列表 |
+| `SELKIES_ENCODER` | `x264enc,h265enc,av1enc,x264enc-striped,jpeg` | 允许编码器列表；AV1 还须通过服务端 GPU 与客户端能力探测 |
 | `SELKIES_DEFAULT_ENCODER` | `x264enc` | 默认编码器；`x264enc` 优先 VAAPI，`x264enc-striped` 为 CPU 分片模式 |
 | `SELKIES_DEFAULT_FRAMERATE` | `30` | 默认推流帧率 |
 | `SELKIES_DEFAULT_USE_CPU` | `false` | 优先尝试硬件编码，失败时回退 CPU |
@@ -493,7 +501,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:1.90 \
+  wechat-selkies:1.91 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -556,14 +564,14 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:1.90 .
+docker build -t wechat-selkies:1.91 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
 
 - `TARGETPLATFORM` / `BUILDPLATFORM`：默认 `linux/amd64`。
 - `QQ_LOCAL_URL`：可选，指定 QQ `.deb` 的下载镜像地址，覆盖官方 CDN。
-- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有同架构的 `wechat-selkies:1.84` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.84 -t wechat-selkies:1.90 .` 复用微信 / QQ 安装层，安装 AMD Mesa 驱动并构建当前源码覆盖层和上传组件。
+- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有同架构的 `wechat-selkies:1.84` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.84 -t wechat-selkies:1.91 .` 复用微信 / QQ 安装层，安装 AMD Mesa 驱动并构建当前源码覆盖层和上传组件。
 
 如果构建时 QQ 下载报 `curl: (22) ... error: 403`，说明官方 CDN 拒绝了自动化下载，此时用任意可达地址替代即可（内网镜像、对象存储，或本机临时 HTTP 服务）：
 
@@ -576,13 +584,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.90 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:1.91 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-1.90.tar wechat-selkies:1.90
+docker save -o wechat-selkies-1.91.tar wechat-selkies:1.91
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。

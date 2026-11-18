@@ -4,6 +4,10 @@ set -e
 CONFIG_PATH="/usr/share/selkies/selkies-dashboard/src/selkies-paste-config.js"
 RUNTIME_CONFIG_PATH="/usr/share/selkies/selkies-dashboard/src/selkies-runtime-config.js"
 
+# The streaming service runs as abc; atomic diagnostics cannot replace files
+# directly in the root-owned /run directory.
+install -d -m 0750 -o abc -g abc /run/selkies-video
+
 ENABLED_RAW="${SELKIES_PASTE_IMAGE:-true}"
 MAX_BYTES_RAW="${SELKIES_PASTE_IMAGE_MAX_SIZE:-20971520}"
 AUTO_PASTE_RAW="${SELKIES_PASTE_IMAGE_AUTO_PASTE:-true}"

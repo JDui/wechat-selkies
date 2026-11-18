@@ -19,7 +19,7 @@ const source = fs.readFileSync(path.join(__dirname,
   const prefix = location.href.split("#")[0].replace(/[^a-zA-Z0-9.-_]/g, "_") + "_";
   localStorage.setItem(prefix + "framerate", 30);
   const window = { selkiesPreferences: { load: async () => preferences,
-    save: (key, value) => saves.push([key, value]) } };
+    save: (key, value) => { saves.push([key, value]); preferences[key] = value; } } };
   vm.runInNewContext(source, { Storage, localStorage, window, location, URL,
     document: { currentScript: { src: "https://example.test/box/src/selkies-video-preferences.js" } } });
   await window.selkiesVideoPreferences.ready;
@@ -46,5 +46,28 @@ const source = fs.readFileSync(path.join(__dirname,
   timer();
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), { framerate: 45, h264_crf: 24, use_paint_over_quality: true },
     "Rapid changes to different settings must merge instead of discarding all but the last change");
-  console.log("Video preferences: all eight settings, HEVC/AV1 persistence, changed login query, secondary display and hydration passed");
+  const av1 = fs.readFileSync(path.join(__dirname,
+    "../root/usr/share/selkies/selkies-dashboard/src/selkies-av1.js"), "utf8");
+  Object.assign(location, { hash: "#display2", origin: "https://example.test" });
+  Object.assign(window, { isSecureContext: false, postMessage() {}, dispatchEvent() {} });
+  const document = { body: { appendChild() {} }, createElement: () => ({ setAttribute() {}, style: {}, remove() {} }) };
+  vm.runInNewContext(av1, { window, location, document, localStorage,
+    console: { warn() {} }, performance: { now: () => 0 }, setTimeout() { return 1; }, clearTimeout() {},
+    Event: class Event { constructor(type) { this.type = type; } } });
+  await window.selkiesAv1.ready;
+  assert.equal(window.selkiesAv1.normalizeEncoder("av1enc", null, false), "x264enc");
+  assert.equal(localStorage.getItem(prefix + "encoder_display2"), "x264enc");
+  assert.equal(localStorage.getItem("selkies.videoPreferences:/box/:encoder_display2"), "x264enc");
+  assert.equal(preferences.encoder_display2, "x264enc");
+  assert.equal(localStorage.getItem(prefix + "framerate_display2"), "60", "fallback preserves other video preferences");
+  const reloadStorage = new Storage();
+  const reloadLocation = { href: "https://example.test/box/?_pin=next-login#display2" };
+  const reloadPrefix = reloadLocation.href.split("#")[0].replace(/[^a-zA-Z0-9.-_]/g, "_") + "_";
+  const reloadWindow = { selkiesPreferences: { load: async () => preferences, save() { assert.fail("rehydration must not re-save or retry AV1"); } } };
+  vm.runInNewContext(source, { Storage, localStorage: reloadStorage, window: reloadWindow, location: reloadLocation, URL,
+    document: { currentScript: { src: "https://example.test/box/src/selkies-video-preferences.js" } } });
+  await reloadWindow.selkiesVideoPreferences.ready;
+  assert.equal(reloadStorage.getItem(reloadPrefix + "encoder_display2"), "x264enc");
+  assert.equal(reloadStorage.getItem(reloadPrefix + "framerate_display2"), "60");
+  console.log("Video preferences: HEVC/AV1 persistence, persisted fallback across fresh login, secondary display and hydration passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

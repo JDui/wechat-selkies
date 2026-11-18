@@ -582,6 +582,7 @@
     var safe = Object.assign({}, settings);
     safe.hevc_supported = !!(window.selkiesHevc && window.selkiesHevc.supported());
     safe.av1_supported = !!(window.selkiesAv1 && window.selkiesAv1.supported());
+    if (safe.encoder === "av1enc" && !safe.av1_supported) safe.encoder = "x264enc";
     if (safe.encoder === "av1enc") safe.use_cpu = false;
     safe.gamepad_enabled = false;
     safe.isGamepadEnabled = false;
