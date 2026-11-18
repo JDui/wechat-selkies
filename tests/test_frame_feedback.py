@@ -130,6 +130,51 @@ class FrameFeedbackTests(unittest.IsolatedAsyncioTestCase):
             owner.hang_up()
             await handler
 
+    async def test_live_paint_is_independent_of_feedback_and_keeps_the_capture(self):
+        server, _ = stats_server(display_id='primary', gpus=False)
+        owner, module = ScriptedWebSocket(), Mock()
+        feedback = feedback_api.FrameFeedback('session', 'primary', owner, 30, True, 'false')
+        feedback.paint_mode = 'inherit'
+        feedback.announce()
+        server.cli_args = SimpleNamespace(use_paint_over_quality=(False, False))
+        server._initial_use_paint_over_quality = False
+        server._is_low_latency_mode_active = lambda state: state.get('idle')
+        state = {'ws': owner, 'use_paint_over_quality': False}
+        server.display_clients = {'primary': state}
+        capture = {'module': module, 'feedback': feedback}
+        server.capture_instances = {'primary': capture}
+        notices = []
+        namespace = server.ws_handler.__func__.__globals__
+        namespace['websockets'].broadcast = lambda sockets, notice: notices.append(notice)
+        namespace['live_call'] = feedback_api.live_call
+        handler = asyncio.create_task(server.ws_handler(owner))
+        async def switch(mode):
+            count = len(notices)
+            owner.feed(f'SET_PAINT_OVER,primary,{feedback.token},{mode}')
+            await asyncio.wait_for(_wait_until(lambda: len(notices) > count), 1)
+        try:
+            owner.feed('SET_PAINT_OVER,primary,stale,true')
+            await switch('true')
+            module.update_paint_over.assert_called_once_with(True)
+            self.assertTrue(notices[-1].endswith(',true,1'))
+            module.update_paint_over.side_effect = RuntimeError('refused')
+            await switch('false')
+            self.assertTrue(notices[-1].endswith(',paint_failed,true,1'))
+            self.assertEqual(state['live_paint_mode'], 'true')
+            module.update_paint_over.side_effect = None
+            await switch('inherit')
+            module.update_paint_over.assert_called_with(False)
+            state['idle'] = True
+            await switch('true')
+            self.assertTrue(notices[-1].endswith(',true,0'))
+            self.assertEqual(module.update_paint_over.call_count, 3)
+            self.assertEqual(feedback.mode, 'false')
+            self.assertIs(server.capture_instances['primary'], capture)
+            server.reconfigure_displays.assert_not_awaited()
+        finally:
+            owner.hang_up()
+            await handler
+
     async def test_failed_restore_retains_confirmed_mode_and_epoch(self):
         _, _, feedback, module = self.attach()
         epoch = feedback.token

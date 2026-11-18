@@ -277,6 +277,9 @@
         !["0","1"].includes(parts[4])) return;
     if (parts[3] === "false" || (state.feedback && state.feedback.token !== parts[2])) state.feedback = null;
     state.feedbackControl = {token: parts[2], mode: parts[3], adaptive: parts[4] === "1", failed: parts[5] === "restore_failed"};
+    if (["inherit","true","false"].includes(parts[6]) && ["0","1"].includes(parts[7])) {
+      state.feedbackControl.paint = {mode: parts[6], enabled: parts[7] === "1", failed: parts[5] === "paint_failed"};
+    }
   }
   function feedbackControl() {
     var state = displayState();
@@ -287,6 +290,12 @@
     if (!control || state.socket.readyState !== 1 || !["true","false","observe"].includes(mode) ||
         (mode === "true" && !control.adaptive)) return false;
     try { state.socket.send(["SET_QOE_MODE", state.displayId, control.token, mode].join(",")); return true; }
+    catch (_error) { return false; }
+  }
+  function requestPaint(mode) {
+    var state = displayState(), control = feedbackControl();
+    if (!control?.paint || state.socket.readyState !== 1 || !["inherit","true","false"].includes(mode)) return false;
+    try { state.socket.send(["SET_PAINT_OVER", state.displayId, control.token, mode].join(",")); return true; }
     catch (_error) { return false; }
   }
   function receipt(socket, id, decoder) {
@@ -370,7 +379,7 @@
 
   var api = { connect: connect, opened: opened, closed: closed, packet: packet, pipeline: pipeline, reset: reset,
     offer: offer, receipt: receipt, progress: progress, inputSent: inputSent,
-    modeStatus: modeStatus, feedbackControl: feedbackControl, requestMode: requestMode,
+    modeStatus: modeStatus, feedbackControl: feedbackControl, requestMode: requestMode, requestPaint: requestPaint,
     serverEvent: serverEvent, frameRendered: frameRendered, report: report,
     stalledFor: function (displayId) { return waitTime(displayState(displayId), now()); },
     diagnostics: diagnostics, connection: connection, isCurrentSocket: isCurrentSocket,

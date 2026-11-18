@@ -370,4 +370,20 @@ test('mode changes wait for the current controller acknowledgement; off retires 
   f.connect(); assert(!f.health.feedbackControl());
 });
 
+test('paint can switch with feedback off, only after the current server advertises it', () => {
+  const f = fixture(), socket = f.connect(), sent = [], token = 'b'.repeat(32) + '.2';
+  socket.readyState = 1; socket.send = value => sent.push(value);
+  const status = 'VIDEO_QOE_MODE,primary,' + token + ',false,1';
+  f.health.modeStatus(socket, status);
+  assert(!f.health.requestPaint('true'));
+  f.health.modeStatus(socket, status + ',,inherit,0');
+  assert(f.health.requestPaint('true')); assert.equal(sent.pop(), 'SET_PAINT_OVER,primary,' + token + ',true');
+  assert.equal(f.health.feedbackControl().paint.mode, 'inherit');
+  f.health.modeStatus(socket, status + ',,true,1');
+  assert(f.health.feedbackControl().paint.enabled);
+  f.health.modeStatus(socket, status + ',paint_failed,true,1');
+  assert(f.health.feedbackControl().paint.failed);
+  f.health.setRole(socket, 'viewer'); assert(!f.health.requestPaint('false'));
+});
+
 console.log('Stream health: ' + checks + ' behavior groups passed.');

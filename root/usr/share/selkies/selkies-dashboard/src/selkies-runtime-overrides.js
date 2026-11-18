@@ -6774,6 +6774,8 @@
       '<div class="selkies-dll-grid">' +
       '<label class="selkies-dll-field">视频帧反馈（当前连接）<select class="selkies-dll-select" data-dll="feedback" disabled><option value="">当前不可用</option><option value="false">关闭</option><option value="observe">仅观测</option><option value="true">自适应帧率</option></select></label>' +
       '<span class="selkies-dll-value" role="status" data-dll-value="feedback"></span>' +
+      '<label class="selkies-dll-field">静态画质补绘（Paint-over）<select class="selkies-dll-select" data-dll="paint" disabled><option value="" disabled>当前不可用</option><option value="inherit">跟随视频设置</option><option value="true">本次连接开启</option><option value="false">本次连接关闭</option></select></label>' +
+      '<span class="selkies-dll-value" role="status" data-dll-value="paint"></span>' +
       '<div class="selkies-dll-row selkies-dll-row-compact"><span>\u542f\u7528\u52a8\u6001\u8282\u6d41</span><input type="checkbox" data-dll="enabled"></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8282\u6d41\u6a21\u5f0f</span></div><select class="selkies-dll-select" data-dll="mode"><option value="idle-low-bandwidth">\u95f2\u7f6e\u4f4e\u5e26\u5bbd</option><option value="idle-low-framerate">\u95f2\u7f6e\u4f4e\u5e27\u7387</option><option value="idle-low-occupancy">\u95f2\u7f6e\u4f4e\u5360\u7528</option></select></div>' +
       '<div class="selkies-dll-field"><div class="selkies-dll-row"><span>\u8fdb\u5165\u95f2\u7f6e\u5ef6\u8fdf</span><div class="selkies-dll-value" data-dll-value="hold"></div></div><input type="range" min="300" max="30000" step="100" data-dll="hold"></div>' +
@@ -6815,6 +6817,7 @@
     var feedback = window.__selkiesStreamHealth?.feedbackControl?.();
     var renderSignature = [
       feedback?.mode, feedback?.adaptive, feedback?.failed,
+      feedback?.paint?.mode, feedback?.paint?.enabled, feedback?.paint?.failed,
       config.enabled ? "1" : "0",
       config.mode,
       config.holdMs,
@@ -6832,6 +6835,13 @@
     feedbackNote.textContent = feedback?.failed ? "恢复目标帧率失败，模式未更改" :
       feedback && !feedback.adaptive ? "当前编码器仅支持观测" : "";
     feedbackNote.hidden = !feedbackNote.textContent;
+    var paint = feedback?.paint;
+    var paintSelect = section.querySelector('[data-dll="paint"]');
+    paintSelect.disabled = !paint;
+    paintSelect.value = paint?.mode || "";
+    section.querySelector('[data-dll-value="paint"]').textContent = !paint ? "需可热调的 AV1 / H.265 主控连接" :
+      paint.failed ? "切换失败，保留原设置" : paint.enabled ? "当前已启用" :
+      paint.mode === "true" ? "低延迟策略暂时关闭补绘" : "当前已关闭";
     section.querySelector('[data-dll="enabled"]').checked = config.enabled;
     section.querySelector('[data-dll="mode"]').value = config.mode;
     section.querySelector('[data-dll="hold"]').value = String(config.holdMs);
@@ -6884,6 +6894,12 @@
           var health = window.__selkiesStreamHealth;
           health?.requestMode?.(target.value);
           target.value = health?.feedbackControl?.()?.mode || "";
+          return;
+        }
+        if (key === "paint") {
+          var paintHealth = window.__selkiesStreamHealth;
+          paintHealth?.requestPaint?.(target.value);
+          target.value = paintHealth?.feedbackControl?.()?.paint?.mode || "";
           return;
         }
         if (key === "enabled") {
