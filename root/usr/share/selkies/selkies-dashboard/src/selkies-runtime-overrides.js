@@ -6860,38 +6860,68 @@
 
     section = document.createElement("div");
     section.id = "selkies-debug-tools-section";
-    section.className = "selkies-link-sidebar";
+    section.className = "selkies-link-sidebar allow-native-input";
     section.innerHTML =
       '<details class="selkies-link-details">' +
       '<summary class="selkies-link-summary">' +
       '<span class="selkies-link-sidebar-title">\u5999\u5999\u5c0f\u5de5\u5177</span>' +
-      '<span class="selkies-link-summary-meta">\u901a\u77e5/\u526a\u677f/\u5e7f\u64ad/\u4e0a\u4f20</span>' +
+      '<span class="selkies-link-summary-meta">4 组设置</span>' +
       "</summary>" +
       '<div class="selkies-link-details-body">' +
       '<div class="selkies-repair-tools-body">' +
+      '<details class="selkies-tool-group" data-debug-group="interface" open>' +
+      '<summary class="selkies-tool-group-summary"><span>界面与操作</span><span class="selkies-tool-group-hint">常用</span></summary>' +
+      '<div class="selkies-tool-group-body">' +
+      '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
+      '<label class="selkies-tool-row"><span>网速与往返延迟</span><input type="checkbox" data-debug-toggle="dock-network-monitor"></label>' +
+      '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
+      '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
+      "</div></details>" +
+      '<details class="selkies-tool-group" data-debug-group="notifications">' +
+      '<summary class="selkies-tool-group-summary"><span>通知</span><span class="selkies-tool-group-hint">消息推送</span></summary>' +
+      '<div class="selkies-tool-group-body">' +
       '<label class="selkies-tool-row"><span>\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001</span><input type="checkbox" data-debug-toggle="notification-passthrough"></label>' +
       '<label class="selkies-tool-row"><span>\u5f00\u542f\u901a\u77e5\u4fa7\u8fb9\u680f</span><input type="checkbox" data-debug-toggle="right-notification-center"></label>' +
-      '<label class="selkies-tool-row"><span>网速与往返延迟</span><input type="checkbox" data-debug-toggle="dock-network-monitor"></label>' +
-      '<label class="selkies-tool-row"><span>\u81ea\u52a8\u5206\u5c4f</span><input type="checkbox" data-debug-toggle="auto-split"></label>' +
-      '<label class="selkies-tool-row"><span>\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177</span><input type="checkbox" data-debug-toggle="legacy-upload-fallback"></label>' +
+      '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
+      "</div></details>" +
+      '<details class="selkies-tool-group" data-debug-group="session">' +
+      '<summary class="selkies-tool-group-summary"><span>休眠与连接</span><span class="selkies-tool-group-hint">待机 · 广播</span></summary>' +
+      '<div class="selkies-tool-group-body">' +
       '<label class="selkies-tool-row"><span>\u81ea\u9002\u5e94\u4f11\u7720</span><input type="checkbox" data-debug-toggle="adaptive-sleep"></label>' +
       '<label class="selkies-tool-row" data-debug-row="adaptive-sleep-idle-seconds"><span>\u5f85\u673a\u65f6\u95f4</span><select data-debug-select="adaptive-sleep-idle-seconds"><option value="60">1\u5206\u949f</option><option value="900">15\u5206\u949f</option><option value="1800">30\u5206\u949f</option><option value="2700">45\u5206\u949f</option><option value="3600">60\u5206\u949f</option></select></label>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="sleep-now">进入休眠</button>' +
       '<div class="selkies-repair-note">立即休眠并返回登录页，输入 PIN 后唤醒。休眠期间微信和 QQ 暂停运行。</div>' +
+      '<hr class="selkies-tool-divider">' +
       '<label class="selkies-tool-row"><span>\u5c40\u57df\u7f51\u5e7f\u64ad</span><input type="checkbox" data-debug-toggle="lan-discovery"></label>' +
       '<label class="selkies-tool-row" data-debug-row="lan-broadcast-name"><span>\u5e7f\u64ad\u540d</span><input type="text" maxlength="32" spellcheck="false" autocomplete="off" placeholder="AXISNSBOX-000" data-debug-input="lan-broadcast-name"></label>' +
-      '<label class="selkies-tool-row"><span>\u5e95\u90e8\u680f\u526a\u677f\u6309\u94ae</span><input type="checkbox" data-debug-toggle="bottom-clipboard-buttons"></label>' +
-      '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
+      "</div></details>" +
+      '<details class="selkies-tool-group" data-debug-group="maintenance">' +
+      '<summary class="selkies-tool-group-summary"><span>输入与维护</span><span class="selkies-tool-group-hint">复制文字 · 检测</span></summary>' +
+      '<div class="selkies-tool-group-body">' +
+      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="copy-unsent-input">复制未发送文字</button>' +
       '<label class="selkies-tool-row selkies-tool-row-slider"><span>\u8f93\u5165\u91c7\u6837\u589e\u5e45</span><div class="selkies-tool-slider"><input type="range" min="50" max="200" step="10" data-debug-range="input-sampling-multiplier"><span class="selkies-tool-value" data-debug-value="input-sampling-multiplier"></span></div></label>' +
       '<div class="selkies-repair-note" data-debug-note="input-sampling"></div>' +
-      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="copy-unsent-input">复制未发送文字</button>' +
-      '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
-      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
-      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
-      '<div class="selkies-repair-note">\u4e24\u79cd\u68c0\u6d4b\u6309\u94ae\u90fd\u4f1a\u5728 5 \u79d2\u5012\u8ba1\u65f6\u540e\u89e6\u53d1\u3002</div>' +
+      '<label class="selkies-tool-row"><span>\u56de\u9000\u65e7\u7248\u4e0a\u4f20\u5de5\u5177</span><input type="checkbox" data-debug-toggle="legacy-upload-fallback"></label>' +
+      '<hr class="selkies-tool-divider">' +
+      '<div class="selkies-tool-actions">' +
+      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test" title="穿透式消息推送检测">推送测试</button>' +
+      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test" title="微信模拟消息提示音测试">提示音测试</button>' +
+      "</div>" +
+      '<div class="selkies-repair-note">测试会在 5 秒倒计时后触发。</div>' +
+      "</div></details>" +
       "</div>" +
       "</div>" +
       "</details>";
+    var groups = section.querySelectorAll("[data-debug-group]");
+    for (var i = 0; i < groups.length; i += 1) {
+      var group = groups[i];
+      var savedOpen = getStoredValue("toolbox_group_" + group.dataset.debugGroup + "_open");
+      if (savedOpen === "true" || savedOpen === "false") group.open = savedOpen === "true";
+      group.addEventListener("toggle", function (event) {
+        var current = event.currentTarget;
+        setStoredValue("toolbox_group_" + current.dataset.debugGroup + "_open", current.open);
+      });
+    }
     return section;
   }
 
@@ -6929,7 +6959,23 @@
       var style = document.createElement("style");
       style.id = "selkies-toolbox-style";
       style.textContent =
-        ".selkies-repair-tools-body{display:flex;flex-direction:column;gap:10px}" +
+        ".selkies-repair-tools-body{display:flex;flex-direction:column;gap:8px}" +
+        ".selkies-tool-group{min-width:0;border:1px solid rgba(51,65,85,.7);border-radius:9px;background:rgba(15,23,42,.35);overflow:hidden}" +
+        ".selkies-tool-group-summary{display:flex;align-items:center;gap:8px;padding:9px 10px;list-style:none;cursor:pointer;color:#e2e8f0;font-size:12px;font-weight:700}" +
+        ".selkies-tool-group-summary::-webkit-details-marker{display:none}" +
+        ".selkies-tool-group-summary::after{content:'+';flex-shrink:0;color:#93c5fd;font-size:14px;line-height:1}" +
+        ".selkies-tool-group[open]>.selkies-tool-group-summary::after{transform:rotate(45deg)}" +
+        ".selkies-tool-group-summary:focus-visible{outline:2px solid #38bdf8;outline-offset:-2px}" +
+        ".selkies-tool-group-hint{margin-left:auto;color:#94a3b8;font-size:10px;font-weight:400}" +
+        ".selkies-tool-group-body{display:flex;flex-direction:column;gap:8px;padding:0 10px 10px}" +
+        ".selkies-tool-group .selkies-tool-row{min-width:0;min-height:28px;gap:8px;line-height:1.5}" +
+        ".selkies-tool-group .selkies-tool-row>span{min-width:0}" +
+        ".selkies-tool-group .selkies-tool-row select,.selkies-tool-group .selkies-tool-row input[type='text']{min-width:80px;width:112px;max-width:54%;box-sizing:border-box;flex-shrink:0}" +
+        ".selkies-tool-group .selkies-tool-row input[type='checkbox']{flex-shrink:0}" +
+        ".selkies-tool-divider{width:100%;margin:2px 0;border:0;border-top:1px solid rgba(51,65,85,.7)}" +
+        ".selkies-tool-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}" +
+        ".selkies-tool-actions .selkies-repair-btn{min-width:0;padding:8px 6px}" +
+        ".selkies-tool-actions>.selkies-repair-btn:only-child{grid-column:1/-1}" +
         ".selkies-repair-btn{appearance:none;border:1px solid #166534;background:linear-gradient(180deg,#166534,#14532d);color:#ecfdf5;border-radius:10px;padding:9px 10px;font-size:12px;font-weight:800;cursor:pointer;text-align:center}" +
         ".selkies-repair-btn:hover{filter:brightness(1.06)}" +
         ".selkies-repair-btn:active{transform:translateY(1px)}" +
@@ -8480,7 +8526,7 @@
 
   function isFormLikeElement(target) {
     if (!target || !target.closest) return false;
-    return !!target.closest("input,textarea,select,button,[contenteditable='true'],#selkies-local-link-prompt,#selkies-link-history-section");
+    return !!target.closest("input,textarea,select,button,summary,[contenteditable='true'],#selkies-local-link-prompt,#selkies-link-history-section");
   }
 
   function normalizeKeyboardAssist() {
