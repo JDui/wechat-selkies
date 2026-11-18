@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import json
 import logging
 import time
 import unittest
@@ -18,11 +19,17 @@ def queue_server():
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DataStreamingServer")
     names = {"_is_h264_display_state", "_should_preserve_encoded_frame_order", "_is_low_latency_mode_active",
              "_prune_video_queue_for_display", "_get_effective_send_interval_seconds",
-             "_recover_video_queue_overflow", "_video_chunk_sender"}
+             "_recover_video_queue_overflow", "_video_chunk_sender", "_notify_stream_health",
+             "_record_frame_ack", "_run_frame_backpressure_logic", "_recover_stalled_video",
+             "_force_recover_display", "_stop_capture_for_display", "_restart_capture_for_display_settings",
+             "_restart_capture_for_display_settings_locked", "reconfigure_displays",
+             "_fallback_av1_capture", "_sync_shared_viewer"}
     original.body = [node for node in original.body if getattr(node, "name", "") in names]
     broadcasts = []
-    namespace = {"asyncio": asyncio, "time": time, "data_logger": logging.getLogger("queue-test"),
+    namespace = {"asyncio": asyncio, "time": time, "json": json, "data_logger": logging.getLogger("queue-test"),
                  "LOW_LATENCY_QUEUE_KEEP_LATEST": 1, "TARGET_FRAMERATE": 30,
+                 "MAX_UINT16_FRAME_ID": 65535, "STALLED_CLIENT_TIMEOUT_SECONDS": 4,
+                 "STALLED_CLIENT_RECOVERY_SECONDS": 8, "STALLED_CLIENT_RECOVERY_COOLDOWN_SECONDS": 30,
                  "SENT_FRAME_TIMESTAMP_HISTORY_SIZE": 1000, "DEFAULT_STREAM_LOAD_SEND_FPS": 18,
                  "websockets": SimpleNamespace(broadcast=lambda clients, data: broadcasts.append(data), ConnectionClosed=ConnectionError)}
     exec(compile(ast.Module(body=[original], type_ignores=[]), str(SOURCE), "exec"), namespace)
@@ -36,6 +43,12 @@ def queue_server():
     server.backpressure_check_interval_s = 0.001
     server._bytes_sent_in_interval = 0
     server._reconfigure_lock = asyncio.Lock()
+    server.capture_instances = {"primary": {"module": object()}}
+    server.client_settings_received = None
+    server.allowed_desync_ms = 2000
+    server.latency_threshold_for_adjustment_ms = 50
+    server._adaptive_sleeping = False
+    server._stream_sleep_requested = lambda: False
     return server
 
 
@@ -62,11 +75,11 @@ class StreamQueueTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stale_overflow_cannot_restart_a_replacement_capture(self):
         server = queue_server()
-        server._restart_capture_for_display_settings = AsyncMock()
+        server._restart_capture_for_display_settings_locked = AsyncMock(return_value=None)
         await server._recover_video_queue_overflow("primary", asyncio.Queue())
-        server._restart_capture_for_display_settings.assert_not_awaited()
+        server._restart_capture_for_display_settings_locked.assert_not_awaited()
         await server._recover_video_queue_overflow("primary", server.video_chunk_queues["primary"])
-        server._restart_capture_for_display_settings.assert_awaited_once_with("primary")
+        server._restart_capture_for_display_settings_locked.assert_awaited_once_with("primary")
 
     async def test_buffered_video_sender_yields_to_input_tasks(self):
         server = queue_server()

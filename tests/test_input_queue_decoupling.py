@@ -9,7 +9,9 @@ assert the loop keeps serving other messages.
 """
 
 import asyncio
+import time
 import unittest
+from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -154,7 +156,7 @@ class InputQueueDecouplingTests(unittest.IsolatedAsyncioTestCase):
         input_handler.block_next_commit()
         server, _ = stats_server(input_handler=input_handler, display_id="primary")
         server.ws_handler.__func__.__globals__["INPUT_QUEUE_MAX"] = 16
-        state = {"ws": self.websocket, "acknowledged_frame_id": -1}
+        state = {"ws": self.websocket, "acknowledged_frame_id": -1, "sent_timestamps": OrderedDict()}
         server.display_clients["primary"] = state
         handler = await _start(server, self.websocket, self.awake_calls)
         self.websocket.feed("co,end,你好")
@@ -165,6 +167,7 @@ class InputQueueDecouplingTests(unittest.IsolatedAsyncioTestCase):
         keys = [part for _ in range(40) for part in ("kd,97", "ku,97")]
         self.websocket.feed(*keys)
         for frame_id in range(1, 4):
+            state["sent_timestamps"][frame_id] = time.monotonic()
             self.websocket.feed(
                 *(f"m,{x},{frame_id},0,0" for x in range(259)),
                 f"CLIENT_FRAME_ACK {frame_id}",

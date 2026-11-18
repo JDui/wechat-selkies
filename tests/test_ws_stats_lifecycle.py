@@ -39,7 +39,7 @@ def stats_server(gpus=True, probe_error=False, input_handler=None, input_queue_e
     # Exercise the actual connection handler without X11/PulseAudio/native dependencies.
     tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DataStreamingServer")
-    original.body = [node for node in original.body if getattr(node, "name", "") == "ws_handler"]
+    original.body = [node for node in original.body if getattr(node, "name", "") in {"ws_handler", "_record_frame_ack"}]
     # ACK tests start with an already registered display; the SETTINGS/capture
     # handshake is outside this connection-lifecycle fixture.
     if display_id is not None:
@@ -69,6 +69,7 @@ def stats_server(gpus=True, probe_error=False, input_handler=None, input_queue_e
         "os": SimpleNamespace(environ=environment or {}), "data_logger": logging.getLogger("stats-test"),
         "logger": logging.getLogger("stats-test"), "client_permissions": {},
         "TARGET_FRAMERATE": 30, "GPU_ID_DEFAULT": 0, "SETTING_DEFINITIONS": [], "IS_WAYLAND": False,
+        "MAX_UINT16_FRAME_ID": 65535,
         "PULSEAUDIO_AVAILABLE": False, "upload_dir_path": None,
         "INPUT_QUEUE_ENABLED": input_queue_enabled, "INPUT_QUEUE_MAX": 256,
         "INPUT_QUEUE_HARD_MAX": 4096,

@@ -249,9 +249,9 @@ class ServerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         server.display_clients = {"primary": {"encoder": "av1enc", "ws": websocket}}
         server.capture_instances = {"primary": {"module": capture}}
         server._reconfigure_lock = asyncio.Lock()
-        server._restart_capture_for_display_settings = AsyncMock()
+        server._restart_capture_for_display_settings_locked = AsyncMock(return_value=None)
         await asyncio.wait_for(server._fallback_av1_capture("primary", capture, "lost device"), 2.5)
-        server._restart_capture_for_display_settings.assert_awaited_once_with("primary")
+        server._restart_capture_for_display_settings_locked.assert_awaited_once_with("primary")
         self.assertTrue(cancelled.is_set())
 
     async def test_client_failure_accepts_only_registered_controller_enum_and_rate(self):

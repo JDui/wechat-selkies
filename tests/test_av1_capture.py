@@ -377,14 +377,14 @@ class Av1ServerTests(unittest.IsolatedAsyncioTestCase):
         websocket = SimpleNamespace(send=AsyncMock())
         server.display_clients = {"primary": {"encoder": "av1enc", "ws": websocket}}
         server.capture_instances = {"primary": {"module": capture}}
-        server._restart_capture_for_display_settings = AsyncMock()
+        server._restart_capture_for_display_settings_locked = AsyncMock(return_value=None)
         await server._fallback_av1_capture("primary", object(), "stale")
-        server._restart_capture_for_display_settings.assert_not_awaited()
+        server._restart_capture_for_display_settings_locked.assert_not_awaited()
         namespace["asyncio"] = SimpleNamespace(sleep=AsyncMock(), CancelledError=asyncio.CancelledError,
                                               wait_for=asyncio.wait_for)
         await server._monitor_av1_capture("primary", capture)
         self.assertEqual(server.display_clients["primary"]["encoder"], "x264enc")
-        server._restart_capture_for_display_settings.assert_awaited_once_with("primary")
+        server._restart_capture_for_display_settings_locked.assert_awaited_once_with("primary")
         self.assertTrue(websocket.send.call_args.args[0].startswith("AV1_ENCODER_FALLBACK,"))
 
     async def test_startup_failure_stops_capture_and_falls_back_even_if_notification_disconnects(self):

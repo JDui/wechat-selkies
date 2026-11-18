@@ -31,14 +31,14 @@
   }
   function config(width, height, data) {
     var codec = "hev1.1.6.L120.B0";
-    try { if (data) codec = codecFromAnnexB(data); }
-    catch (error) { fallback(error.message); }
+    if (data) codec = codecFromAnnexB(data);
     return { codec: codec, codedWidth: width, codedHeight: height,
       optimizeForLatency: true, hardwareAcceleration: "prefer-hardware" };
   }
   function fallback(reason) {
     if (fallingBack) return;
     fallingBack = true;
+    setTimeout(function () { fallingBack = false; }, 2000);
     console.warn("H.265 fallback:", reason);
     if (shared) {
       showNotice("此浏览器无法解码共享的 H.265 画面，请在主控端切换 H.264。");
@@ -46,18 +46,27 @@
     }
     // Persist only the codec change. Never reset FPS/quality/resolution on a
     // codec refusal, and retain pending saves during a network outage.
-    localStorage.setItem(prefix + "encoder" + suffix, "x264enc");
-    window.selkiesPreferences.save("encoder" + suffix, "x264enc");
+    try { localStorage.setItem(prefix + "encoder" + suffix, "x264enc"); } catch (_err) {}
+    if (window.selkiesPreferences) window.selkiesPreferences.save("encoder" + suffix, "x264enc");
     window.dispatchEvent(new Event("selkies-hevc-fallback"));
     window.postMessage({ type: "settings", settings: { encoder: "x264enc",
       displayId: suffix ? "display2" : "primary" } }, location.origin);
     showNotice();
-    setTimeout(function () { fallingBack = false; }, 2000);
   }
   var ready = (async function () {
     if (!window.isSecureContext || !window.VideoDecoder) return;
-    try { supported = !!(await VideoDecoder.isConfigSupported(config(1920, 1080))).supported; }
+    var timer;
+    try {
+      var answer = await Promise.race([
+        VideoDecoder.isConfigSupported(config(1920, 1080)),
+        new Promise(function (_resolve, reject) {
+          timer = setTimeout(function () { reject(new Error("HEVC capability probe timed out")); }, 3000);
+        })
+      ]);
+      supported = !!answer.supported;
+    }
     catch (_err) { supported = false; }
+    finally { clearTimeout(timer); }
   })();
   window.selkiesHevc = { ready: ready, config: config, fallback: fallback,
     supported: function () { return supported; } };

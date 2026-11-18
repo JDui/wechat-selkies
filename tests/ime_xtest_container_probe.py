@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -258,7 +259,7 @@ async def probe_frame_acks(client, spawn_records, drain, lines, terminal_pid) ->
     server, _ = fixture.stats_server(input_handler=client, display_id="primary")
     # This isolated server has no capture allocation to release on disconnect.
     server._release_idle_capture_memory = lambda: None
-    state = {"ws": ws, "acknowledged_frame_id": -1}
+    state = {"ws": ws, "acknowledged_frame_id": -1, "sent_timestamps": OrderedDict()}
     server.display_clients["primary"] = state
     handler = asyncio.create_task(server.ws_handler(ws))
     payload = "输入画面继续播放" * 3
@@ -298,6 +299,7 @@ async def probe_frame_acks(client, spawn_records, drain, lines, terminal_pid) ->
         while time.monotonic() < deadline:
             frame_id += 1
             ack_started = time.monotonic()
+            state["sent_timestamps"][frame_id] = time.monotonic()
             ws.feed(f"CLIENT_FRAME_ACK {frame_id}")
             while state["acknowledged_frame_id"] != frame_id:
                 if time.monotonic() - ack_started > .5:

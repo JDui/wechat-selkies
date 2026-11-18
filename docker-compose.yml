@@ -3,7 +3,7 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:1.91
+    image: wechat-selkies:1.92
     container_name: wechat-selkies
     init: true
     volumes:
@@ -127,7 +127,7 @@ services:
   axisnsbox-discovery:
     build:
       context: .
-    image: wechat-selkies:1.91
+    image: wechat-selkies:1.92
     container_name: axisnsbox-discovery
     init: true
     entrypoint: ["python3", "-u", "/scripts/lan_discovery_service.py"]

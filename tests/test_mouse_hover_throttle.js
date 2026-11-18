@@ -15,8 +15,9 @@ function element() {
   return {
     attrs: {}, children: [], listeners: {}, style: { setProperty() {} },
     setAttribute(name, value) { this.attrs[name] = value; },
+    getAttribute(name) { return Object.hasOwn(this.attrs, name) ? this.attrs[name] : null; },
     removeAttribute(name) { delete this.attrs[name]; },
-    querySelector() { return this.children[0] || null; },
+    querySelector(selector) { return this.children.find(child => String(child.className || "").split(" ").includes(selector.slice(1))) || null; },
     appendChild(child) { this.children.push(child); },
     addEventListener(name, fn) { this.listeners[name] = fn; },
   };
@@ -52,7 +53,7 @@ function harness() {
   c.Date = { now: () => c.now };
   vm.createContext(c);
   for (const name of ["isDynamicLatencyMousePresent", "setDynamicLatencyMouseInside",
-    "updateDynamicLatencyMousePosition", "syncSidebarToggleLowLatencyState",
+    "updateDynamicLatencyMousePosition", "syncSidebarToggleLowLatencyState", "syncSidebarStreamHealth",
     "ensureDynamicLatencyStyle", "restoreDynamicLatency", "activateDynamicLatency",
     "markDynamicLatencyInteractive", "bindDynamicLatencyMode"]) {
     vm.runInContext(functionSource(name), c);

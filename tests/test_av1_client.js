@@ -96,7 +96,8 @@ function wireTransport(f, shared = false) {
   const noop = () => {};
   Object.assign(f.scope, {
     A: shared, w: "websockets", Ae: "av1enc", ze: true, Ye: shared ? "awaiting_identification" : "ready", yt: null,
-    j: 0, n: null, Gt: {}, Za: [], axiAv1Decoder: null, se: -1, zi: new Set(), E: null, Oe: "primary", oe: false,
+    j: 0, n: null, Gt: {}, Za: [], axiAv1Decoder: null, axiStripeTimestamp: 0, axiLastDecoderRecoveryAt: -Infinity,
+    se: -1, zi: new Set(), E: null, Oe: "primary", oe: false,
     H: 128, J: 96, c: { width: 128, height: 96 }, h: { setTransform: noop, clearRect: noop },
     $n: noop, li: noop, ga: noop, Pt: noop, ji: noop, ve: async () => true,
     axiServerSettings: null, Ji: () => ({}), Ua: noop, vn: noop,
@@ -212,7 +213,7 @@ function wireTransport(f, shared = false) {
       Object.assign(geometry.scope.window, { devicePixelRatio: 2, is_manual_resolution_mode: !sharedMode });
       Object.assign(geometry.scope, { c: canvas, h: { drawImage: (...args) => drawn.push(args) }, ft: false, Fi: true,
         H: source.width, J: source.height, Ve: value => value - value % 2, tn() {}, requestAnimationFrame() {} });
-      vm.runInContext(shipped("function Pt(", "function Pi(") + shipped("function ae(){", "async function te(){"), geometry.scope);
+      vm.runInContext(shipped("function Pt(", "function Pi(") + shipped("let axiPaintRequest=null;", "async function te(){"), geometry.scope);
       geometry.scope.Pt(source.width, source.height, true); geometry.scope.ae();
       assert.equal(canvas.width, source.width); assert.equal(canvas.height, source.height);
       assert.equal(drawn[0][0].visibleRect.height, source.height);

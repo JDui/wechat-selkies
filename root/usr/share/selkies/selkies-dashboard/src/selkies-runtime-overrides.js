@@ -90,6 +90,7 @@
   var lastFrameProgressAt = 0;
   var streamRecoveryStage = 0;
   var streamRecoveryInFlight = false;
+  var streamRecoveryStartedAt = 0;
   var streamRecoveryNoticeTimer = null;
   var frameTrackerBindTimer = null;
   var pageStallWatchdogTimer = null;
@@ -98,6 +99,7 @@
   var renderStallWatchdogTimer = null;
   var lastRenderProgressAt = Date.now();
   var lastRenderKickAt = 0;
+  var lastAutomaticVideoRecoveryAt = 0;
   var lastVideoPacketAt = 0;
   var lastObservedFps = -1;
   var audioWatchdogTimer = null;
@@ -690,6 +692,7 @@
   function forcePinLogin() {
     if (staleSessionHandled) return;
     staleSessionHandled = true;
+    if (window.__selkiesStreamHealth) window.__selkiesStreamHealth.setSuspended(true);
     var base = authBasePath();
     var logoutUrl = base + "logout";
     var landingUrl = appBasePath();
@@ -967,6 +970,12 @@
         typeof protocols === "undefined"
           ? new NativeWebSocket(wsUrl)
           : new NativeWebSocket(wsUrl, protocols);
+      var isRetiredStreamSocket = function (event) {
+        var health = window.__selkiesStreamHealth;
+        if (!health || typeof health.isCurrentSocket !== "function" || health.isCurrentSocket(ws) !== false) return false;
+        if (event && typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        return true;
+      };
 
       try {
         var nativeSend = ws.send;
@@ -974,6 +983,9 @@
           var inputSampler = createInputSampler(ws, nativeSend);
           var wrappedSend = function (data) {
             var payload = sanitizeOutgoingWebSocketPayload(data);
+            if ((payload === "STOP_VIDEO" || payload === "START_VIDEO") && window.__selkiesStreamHealth) {
+              try { window.__selkiesStreamHealth.pipeline(ws, payload === "START_VIDEO"); } catch (_healthErr) {}
+            }
             if (queueAssistKeyCommand(ws, payload)) return;
             if (typeof payload === "string" && inputSampler.send(payload)) {
               return;
@@ -986,6 +998,7 @@
       } catch (_sendErr) {}
 
       ws.addEventListener("message", function (event) {
+        if (isRetiredStreamSocket(event)) return;
         if (!event || event.data !== "FORCE_PIN_LOGIN") return;
         try {
           ws.close(4002, "single-session takeover");
@@ -993,12 +1006,28 @@
         forcePinLogin();
       });
       ws.addEventListener("message", function (event) {
+        if (isRetiredStreamSocket(event)) return;
         if (!event) return;
         if (event.data instanceof ArrayBuffer) {
-          noteInboundStreamPacket(event.data);
+          noteInboundStreamPacket(event.data, ws);
           return;
         }
         if (typeof event.data !== "string") return;
+        var health = window.__selkiesStreamHealth;
+        if (health) {
+          try {
+            if (event.data.indexOf("AUTH_SUCCESS,") === 0 || event.data.indexOf("ROLE_UPDATE,") === 0) {
+              health.setRole(ws, JSON.parse(event.data.slice(event.data.indexOf(",") + 1)).role);
+            } else if (event.data.indexOf("STREAM_HEALTH,") === 0) {
+              health.serverEvent(ws, JSON.parse(event.data.slice("STREAM_HEALTH,".length)));
+            } else if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
+              var connection = health.connection();
+              if (connection && connection.socket === ws && event.data.split(" ")[1] === connection.displayId) health.reset(ws);
+            } else if (event.data === "VIDEO_STARTED" || event.data === "VIDEO_STOPPED") {
+              health.pipeline(ws, event.data === "VIDEO_STARTED");
+            }
+          } catch (_healthErr) {}
+        }
         if (event.data === "AUDIO_STARTED") {
           lastAudioPipelineActive = true;
           lastAudioStartRequestAt = 0;
@@ -1006,7 +1035,6 @@
           lastAudioPipelineActive = false;
         } else if (event.data === "VIDEO_STARTED") {
           lastVideoPipelineActive = true;
-          lastRenderProgressAt = Date.now();
         } else if (event.data === "VIDEO_STOPPED") {
           lastVideoPipelineActive = false;
         }
@@ -1026,11 +1054,13 @@
         }
         if (event.data.charAt(0) === "{") {
           try {
-            recordNetworkStatsBandwidth(JSON.parse(event.data));
+            var payload = JSON.parse(event.data);
+            if (payload && payload.type === "pipeline_status" && typeof payload.video === "boolean") {
+              if (health) health.pipeline(ws, payload.video);
+              lastVideoPipelineActive = payload.video;
+            }
+            recordNetworkStatsBandwidth(payload);
           } catch (_statsErr) {}
-        }
-        if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
-          noteVideoHealthEvent("pipeline-reset");
         }
         if (event.data === "text_commit_failed") {
           setActivityTask("ime-delivery-failed", {
@@ -1080,6 +1110,8 @@
       });
       activeDataSockets.push(ws);
       ws.addEventListener("open", function () {
+        if (isRetiredStreamSocket()) return;
+        try { if (window.__selkiesStreamHealth) window.__selkiesStreamHealth.opened(ws); } catch (_healthErr) {}
         syncAssistInputTransport();
         reportClientAwakeState();
         scheduleAutoSplitForPinSession(1800);
@@ -1094,6 +1126,8 @@
         syncAssistInputTransport();
       });
       ws.addEventListener("close", function (event) {
+        if (isRetiredStreamSocket()) return;
+        try { if (window.__selkiesStreamHealth) window.__selkiesStreamHealth.closed(ws, event); } catch (_healthErr) {}
         var code = event && typeof event.code === "number" ? event.code : 0;
         var reason = String((event && event.reason) || "").toLowerCase();
         recordUploadDiagnostic("websocket-close", {
@@ -1386,7 +1420,8 @@
   function isForegroundControllerPage() {
     if (document.hidden) return false;
     if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
-    return hasOpenDataSocket();
+    var connection = window.__selkiesStreamHealth && window.__selkiesStreamHealth.connection();
+    return !!(connection && connection.role === "controller" && hasOpenDataSocket());
   }
 
   function noteVideoHealthEvent(source) {
@@ -1663,7 +1698,7 @@
     return requested;
   }
 
-  function noteInboundStreamPacket(payload) {
+  function noteInboundStreamPacket(payload, socket) {
     if (!payload || !(payload instanceof ArrayBuffer) || payload.byteLength < 1) return;
     var type = 0;
     try {
@@ -1673,8 +1708,36 @@
     }
     if (type === 1) {
       lastAudioPacketAt = Date.now();
-    } else if (type === 0 || type === 3 || type === 4 || type === 5) {
-      lastVideoPacketAt = Date.now();
+    } else if (type === 0 || type === 3 || type === 4 || type === 5 || type === 6) {
+      var health = window.__selkiesStreamHealth;
+      if (health && socket) {
+        try { health.packet(socket, payload); } catch (_healthErr) {}
+        var connection = health.connection();
+        if (!connection || connection.socket !== socket) return;
+      }
+      if (payload.byteLength > (type === 0 ? 2 : type === 3 ? 4 : 10)) lastVideoPacketAt = Date.now();
+    }
+  }
+
+  function requestVideoStreamRecovery(source) {
+    if (document.hidden || !lastVideoPipelineActive) return false;
+    var health = window.__selkiesStreamHealth;
+    var connection = health && health.connection();
+    if (!connection || !connection.socket || connection.socket.readyState !== window.WebSocket.OPEN) return false;
+    if (connection.role !== "controller" && connection.role !== "viewer") return false;
+    var now = Date.now();
+    if (lastAutomaticVideoRecoveryAt && now - lastAutomaticVideoRecoveryAt < 10000) return false;
+    try {
+      // A viewer may request a fresh shared keyframe; only the owning controller
+      // can restart its video capture. Neither path resets input or audio.
+      connection.socket.send(connection.role === "viewer" ? "START_VIDEO" :
+        "FORCE_STREAM_RECOVER," + connection.displayId + ",video");
+      lastAutomaticVideoRecoveryAt = now;
+      streamRecoveryStartedAt = now;
+      try { recordUploadDiagnostic("video-recovery", { source: String(source || "render-stall"), displayId: connection.displayId }); } catch (_diagnosticErr) {}
+      return true;
+    } catch (_sendErr) {
+      return false;
     }
   }
 
@@ -1732,20 +1795,10 @@
   function recoverRenderStall(source) {
     var now = Date.now();
     if (now - lastRenderKickAt < RENDER_STALL_COOLDOWN_MS) return false;
+    if (!requestVideoStreamRecovery(source)) return false;
     lastRenderKickAt = now;
     kickLocalRenderSurfaces(source || "render-stall");
     suppressDynamicLatency(6000);
-    if (dynamicLatencyApplied) {
-      restoreDynamicLatency();
-    }
-    sendRawDataCommand("RESET_IO_MODULES");
-    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-    window.setTimeout(function () {
-      if (!hasOpenDataSocket() || document.hidden) return;
-      if (!lastVideoPipelineActive) {
-        sendRawDataCommand("START_VIDEO");
-      }
-    }, 350);
     return true;
   }
 
@@ -3321,34 +3374,10 @@
     }
   }
 
-  // Rebuilds the video/audio pipelines without touching the page lifecycle.  This is the
-  // preferred recovery path: it keeps the WebSocket session, clipboard and UI state intact.
+  // Automatic recovery keeps the input session and audio pipeline intact.
   function runInPlacePipelineRestart() {
     clearAutoRebuildTimers();
-    sendRawDataCommand("STOP_VIDEO");
-    sendRawDataCommand("STOP_AUDIO");
-    sendRawDataCommand("RESET_IO_MODULES");
-    sendRawDataCommand("kr");
-    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-    sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
-    autoRebuildTimerIds.push(
-      window.setTimeout(function () {
-        if (lastVideoPipelineActive) return;
-        sendRawDataCommand("START_VIDEO");
-        autoRebuildTimerIds.push(
-          window.setTimeout(function () {
-            sendRawDataCommand("START_AUDIO");
-          }, 180)
-        );
-        autoRebuildTimerIds.push(
-          window.setTimeout(function () {
-            if (lastVideoPipelineActive) return;
-            sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-            sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
-          }, 2200)
-        );
-      }, 2200)
-    );
+    return requestVideoStreamRecovery("pipeline-restart");
   }
 
   // Schedules a full page reset behind a grace window.  If the stream recovers before the
@@ -3379,8 +3408,8 @@
     });
     pendingFullResetTimer = window.setTimeout(function () {
       pendingFullResetTimer = null;
-      var framesFlowing = lastFrameProgressAt && Date.now() - lastFrameProgressAt < 3000;
-      if (framesFlowing || (lastVideoPipelineActive && !isStreamLikelyStalled())) {
+      var framesFlowing = lastFrameProgressAt > streamRecoveryStartedAt && Date.now() - lastFrameProgressAt < 3000;
+      if (framesFlowing || (lastFrameProgressAt > streamRecoveryStartedAt && !isStreamLikelyStalled())) {
         recordUploadDiagnostic("page-reload-cancelled", { reason: reloadReason });
         finishStreamRecoveryActivity("\u5df2\u53d6\u6d88\u9875\u9762\u91cd\u7f6e\uff0c\u63a8\u6d41\u5df2\u6062\u590d\u3002", "success", 2400);
         return;
@@ -3419,6 +3448,7 @@
     streamRecoveryStage = 0;
     waitingSinceMs = 0;
     lastFrameProgressAt = 0;
+    streamRecoveryStartedAt = Date.now();
     if (pipelineResetNoticeTimer) {
       window.clearTimeout(pipelineResetNoticeTimer);
       pipelineResetNoticeTimer = null;
@@ -4564,7 +4594,7 @@
       streamRebuildWatchdogTimer = null;
       var task = activityTasks["stream-reconfig"];
       if (!task || isRebuildActivitySettled(task)) return;
-      if (!isStreamLikelyStalled()) {
+      if (lastFrameProgressAt > streamRecoveryStartedAt && !isStreamLikelyStalled()) {
         finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
         return;
       }
@@ -4614,7 +4644,7 @@
         waitingSinceMs = 0;
         return;
       }
-      if (!isStreamLikelyStalled()) {
+      if (lastFrameProgressAt > streamRecoveryStartedAt && !isStreamLikelyStalled()) {
         finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
         return;
       }
@@ -4639,12 +4669,15 @@
     var video = document.getElementById("stream");
     if (!video || video.__selkiesFrameTrackerBound) return;
     video.__selkiesFrameTrackerBound = true;
-    ["loadeddata", "playing", "canplay", "timeupdate", "seeked"].forEach(function (eventName) {
-      video.addEventListener(eventName, noteFrameProgress);
-    });
+    var progress = function () {
+      var health = window.__selkiesStreamHealth;
+      var connection = health && health.connection();
+      if (connection) health.frameRendered(connection.displayId, null);
+      else noteFrameProgress();
+    };
     if (typeof video.requestVideoFrameCallback === "function") {
       var onFrame = function () {
-        noteFrameProgress();
+        progress();
         if (video.isConnected) {
           video.requestVideoFrameCallback(onFrame);
         } else {
@@ -4652,18 +4685,26 @@
         }
       };
       video.requestVideoFrameCallback(onFrame);
+    } else {
+      var lastMediaTime = Number(video.currentTime || 0);
+      video.addEventListener("timeupdate", function () {
+        var mediaTime = Number(video.currentTime || 0);
+        if (mediaTime !== lastMediaTime) progress();
+        lastMediaTime = mediaTime;
+      });
     }
   }
 
+  function getPendingVideoStallMs() {
+    var health = window.__selkiesStreamHealth;
+    if (!health || document.hidden || !lastVideoPipelineActive) return 0;
+    try { return health.stalledFor(); } catch (_healthErr) { return 0; }
+  }
+
   function getFrameStallActive() {
-    if (!hasOpenDataSocket()) return false;
-    if (!hasVisibleVideoStream()) return false;
-    if (!lastVideoPipelineActive) return false;
-    if (!lastFrameProgressAt) return false;
-    if (dynamicLatencyApplied) return false;
-    if (isTransportBusy()) return false;
-    if (streamRecoveryInFlight) return false;
-    return Date.now() - lastFrameProgressAt >= STREAM_STALL_THRESHOLD_MS;
+    if (!hasOpenDataSocket() || !hasVisibleStreamSurface()) return false;
+    if (isTransportBusy() || streamRecoveryInFlight) return false;
+    return getPendingVideoStallMs() >= STREAM_STALL_THRESHOLD_MS;
   }
 
   function isStreamLikelyStalled() {
@@ -4677,7 +4718,7 @@
   }
 
   function tryRecoverFromWaiting() {
-    if (!VIDEO_CORRUPTION_WATCHDOG) return;
+    if (!VIDEO_CORRUPTION_WATCHDOG || !lastVideoPipelineActive) return;
     var now = Date.now();
     var lastRecoverAt = lastRecoverTimestamp();
     if (streamRecoveryInFlight) return;
@@ -4693,20 +4734,19 @@
     var hardLimit = softLimit + Math.max(0, STREAM_RECOVER_HARD_STAGES);
     if (streamRecoveryStage <= softLimit) {
       // Stage 1..N: lightweight in-place rebuild of the streaming session.
-      sendRawDataCommand("RESET_IO_MODULES");
-      sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+      requestVideoStreamRecovery("waiting-for-stream");
       window.setTimeout(function () {
         streamRecoveryInFlight = false;
       }, 900);
       return;
     }
     if (streamRecoveryStage <= hardLimit) {
-      // Stage N+1..M: restart the video/audio pipelines in place.  Still no page reload.
+      // Further attempts rebuild only the current video pipeline.
       runInPlacePipelineRestart();
       setActivityTask("stream-reconfig", {
         title: "\u6b63\u5728\u91cd\u5efa\u63a8\u6d41\u7ba1\u7ebf",
         detail:
-          "\u8f7b\u91cf\u6062\u590d\u672a\u7a33\u5b9a\uff0c\u6b63\u5728\u5c31\u5730\u91cd\u542f\u89c6\u9891\u4e0e\u97f3\u9891\u7ba1\u7ebf\uff0c\u4e0d\u4f1a\u5237\u65b0\u9875\u9762\u3002",
+          "画面仍未更新，正在重建视频流。",
         phase: "\u7ba1\u7ebf\u91cd\u542f",
         kind: "warning",
         progress: null,
@@ -4734,8 +4774,7 @@
     });
     scheduleStreamRecoveryNoticeTimeout();
     markRecoverTimestamp(now);
-    sendRawDataCommand("RESET_IO_MODULES");
-    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
+    requestVideoStreamRecovery("waiting-for-stream");
     window.setTimeout(function () {
       streamRecoveryInFlight = false;
     }, 1200);
@@ -4757,7 +4796,7 @@
         waitingSinceMs = 0;
         var now = Date.now();
         if (!healthySinceMs) healthySinceMs = now;
-        if (streamRecoveryStage > 0 && !streamRecoveryInFlight) {
+        if (streamRecoveryStage > 0 && !streamRecoveryInFlight && lastFrameProgressAt > streamRecoveryStartedAt) {
           finishStreamRecoveryActivity("\u89c6\u9891\u5e27\u5df2\u6062\u590d\u66f4\u65b0\u3002", "success", 1800);
         }
         // Once the stream has been healthy long enough the escalation ladder starts over,
@@ -4845,16 +4884,12 @@
     var now = Date.now();
     if (streamRecoveryInFlight) return false;
     if (now - pageStallSoftRecoverAt < Math.min(60000, PAGE_STALL_THRESHOLD_MS)) return false;
+    var requested = deep ? runInPlacePipelineRestart() : requestVideoStreamRecovery(source);
+    if (!requested) return false;
     pageStallSoftRecoverAt = now;
     waitingSinceMs = 0;
     softRecoverAttempts += 1;
     markRecoverTimestamp(now);
-    if (deep) {
-      runInPlacePipelineRestart();
-      return true;
-    }
-    sendRawDataCommand("RESET_IO_MODULES");
-    sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
     return true;
   }
 
@@ -4870,7 +4905,6 @@
   function checkPageStallHealth() {
     if (!PAGE_STALL_WATCHDOG) return;
     var now = Date.now();
-    var expectedLag = now - lastPageWatchdogTickAt - 5000;
     lastPageWatchdogTickAt = now;
     if (document.hidden) return;
     if (isTransportBusy()) return;
@@ -4881,19 +4915,15 @@
       waitingSinceMs = now;
     }
     var streamStalledFor = streamStalled && waitingSinceMs ? now - waitingSinceMs : 0;
-    var frameStalledFor = lastFrameProgressAt && hasVisibleVideoStream() ? now - lastFrameProgressAt : 0;
-    var loopWasBlocked = expectedLag >= PAGE_STALL_LOOP_LAG_MS;
+    var frameStalledFor = hasVisibleStreamSurface() ? getPendingVideoStallMs() : 0;
     var shouldRecover =
       streamStalledFor >= PAGE_STALL_THRESHOLD_MS ||
-      (frameStalledFor >= PAGE_STALL_THRESHOLD_MS && lastVideoPipelineActive) ||
-      (loopWasBlocked && hasVisibleStreamSurface());
+      (frameStalledFor >= PAGE_STALL_THRESHOLD_MS && lastVideoPipelineActive);
     if (!shouldRecover) return;
 
-    // Escalate in place first: lightweight rebuild, then a deeper pipeline restart, and only
-    // then consider a full page reset (which itself is deferred and cancellable).  The deep
-    // rebuild starts one step before the reset gate so it always gets a real chance first.
+    // Retry video recovery before considering a deferred, cancellable page reset.
     var deepRebuild = softRecoverAttempts >= Math.max(1, PAGE_STALL_RELOAD_MIN_RECOVERS - 1);
-    runSilentStreamSoftRecover(loopWasBlocked ? "event-loop-lag" : "stream-stall", deepRebuild);
+    runSilentStreamSoftRecover("stream-stall", deepRebuild);
     maybeReloadForPageStall(Math.max(frameStalledFor, streamStalledFor), "stream-stall");
   }
 
@@ -4948,31 +4978,14 @@
     });
   }
 
-  function noteRenderProgressFromFps() {
-    var fps = Number(window.fps || 0);
-    if (!Number.isFinite(fps)) fps = 0;
-    if (fps > 0) {
-      lastObservedFps = fps;
-      lastRenderProgressAt = Date.now();
-    }
-  }
-
   function checkRenderStallHealth() {
-    if (!RENDER_STALL_WATCHDOG) return;
-    if (document.hidden) return;
-    if (!hasOpenDataSocket()) return;
-    if (!lastVideoPipelineActive) return;
-    if (isTransportBusy()) return;
-    if (!hasVisibleStreamSurface()) return;
-    noteRenderProgressFromFps();
-    var now = Date.now();
-    var recentInteraction = now - lastUiInteractionAt < Math.max(30000, RENDER_STALL_THRESHOLD_MS * 2);
-    var recentVideoPackets = lastVideoPacketAt && now - lastVideoPacketAt < Math.max(30000, RENDER_STALL_THRESHOLD_MS * 3);
-    var waitingStatus = isStreamLikelyStalled();
-    if (!recentInteraction && !recentVideoPackets && !waitingStatus) return;
-    var referenceAt = lastRenderProgressAt || lastFrameProgressAt || lastVideoPacketAt || now;
-    if (now - referenceAt < RENDER_STALL_THRESHOLD_MS) return;
-    recoverRenderStall(recentVideoPackets ? "render-stall-with-packets" : "render-stall-no-packets");
+    if (!RENDER_STALL_WATCHDOG || document.hidden) return;
+    if (!hasOpenDataSocket() || !lastVideoPipelineActive) return;
+    if (isTransportBusy() || !hasVisibleStreamSurface()) return;
+    // Received FPS and an old static picture cannot prove presentation progress.
+    // Only unpresented video from the current connection can trigger recovery.
+    if (getPendingVideoStallMs() < RENDER_STALL_THRESHOLD_MS) return;
+    recoverRenderStall("render-stall-with-pending-video");
   }
 
   function startRenderStallWatchdog() {
@@ -6343,6 +6356,46 @@
       toggle.removeAttribute("data-selkies-low-latency");
       indicator.removeAttribute("data-active");
     }
+    syncSidebarStreamHealth(toggle);
+  }
+
+  function syncSidebarStreamHealth(toggle) {
+    if (!toggle) return;
+    var health = window.__selkiesStreamHealth;
+    var status = health ? health.diagnostics() : {};
+    ["drop", "stall"].forEach(function (kind) {
+      var selector = ".selkies-stream-health-" + kind;
+      var dot = toggle.querySelector(selector);
+      if (!dot) {
+        dot = document.createElement("span");
+        dot.className = "selkies-stream-health-dot selkies-stream-health-" + kind;
+        dot.setAttribute("aria-hidden", "true");
+        toggle.appendChild(dot);
+      }
+      if (status[kind + "Active"] && !document.hidden) {
+        if (dot.getAttribute("data-active") !== "1") dot.setAttribute("data-active", "1");
+      } else if (dot.getAttribute("data-active") !== null) dot.removeAttribute("data-active");
+    });
+    var hint = "上方红点：传输异常或视频丢帧；下方紫点：画面卡顿";
+    var saved = toggle.__selkiesHealthTitle;
+    var current = toggle.getAttribute("title");
+    if (!saved || current !== saved.applied) saved = { original: current, applied: "" };
+    saved.applied = (saved.original ? saved.original + "\n" : "") + hint;
+    if (current !== saved.applied) toggle.setAttribute("title", saved.applied);
+    toggle.__selkiesHealthTitle = saved;
+  }
+
+  function bindStreamHealthHooks() {
+    var health = window.__selkiesStreamHealth;
+    if (!health) return;
+    health.onFrameRendered = function (displayId) {
+      var connection = health.connection();
+      if (!document.hidden && lastVideoPipelineActive && connection && connection.displayId === displayId) noteFrameProgress();
+    };
+    health.onChange = function () {
+      syncSidebarStreamHealth(findSidebarToggleButton());
+    };
+    health.start();
   }
 
   function clearSidebarToggleState(element) {
@@ -6361,6 +6414,16 @@
     if (indicator && indicator.parentElement) {
       indicator.parentElement.removeChild(indicator);
     }
+    ["drop", "stall"].forEach(function (kind) {
+      var dot = element.querySelector && element.querySelector(".selkies-stream-health-" + kind);
+      if (dot && dot.parentElement) dot.parentElement.removeChild(dot);
+    });
+    var saved = element.__selkiesHealthTitle;
+    if (saved && element.getAttribute("title") === saved.applied) {
+      if (saved.original === null) element.removeAttribute("title");
+      else element.setAttribute("title", saved.original);
+    }
+    delete element.__selkiesHealthTitle;
   }
 
   function clearStaleSidebarToggleState(currentToggle) {
@@ -6475,7 +6538,14 @@
       "[data-selkies-sidebar-toggle='1']::after{content:'';position:absolute;top:18%;bottom:18%;left:50%;width:4px;transform:translateX(-50%);border-radius:999px;opacity:0;pointer-events:none;transition:opacity .24s ease,box-shadow .24s ease}" +
       "[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active']::after{opacity:1;background:linear-gradient(180deg,#ff5f6d 0%,#ffc371 20%,#7c3aed 42%,#06b6d4 68%,#22c55e 100%);background-size:100% 220%;animation:selkies-rainbow-fill 1.8s linear infinite;box-shadow:0 0 12px rgba(56,189,248,.32)}" +
       "[data-selkies-sidebar-toggle='1'] .selkies-sidebar-rainbow-core[data-active='mouse'],[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='mouse']::after{opacity:1;background:#f59e0b;animation:none;box-shadow:0 0 12px rgba(245,158,11,.4)}" +
-      "[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] svg,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] path,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] span,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] i{animation:selkies-rainbow-fg 1.8s linear infinite;color:#ff5f6d !important;fill:currentColor !important;stroke:currentColor !important}" +
+      "[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] svg,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] path,[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] span:not(.selkies-stream-health-dot),[data-selkies-sidebar-toggle='1'][data-selkies-low-latency='active'] i{animation:selkies-rainbow-fg 1.8s linear infinite;color:#ff5f6d !important;fill:currentColor !important;stroke:currentColor !important}" +
+      "[data-selkies-sidebar-toggle='1'] .selkies-stream-health-dot{position:absolute;left:50%;width:5px;height:5px;border-radius:50%;background:#94a3b8;opacity:.28;pointer-events:none;z-index:3;animation:none;transition:background-color .15s ease}" +
+      "[data-selkies-sidebar-toggle='1'] .selkies-stream-health-drop{top:9%;transform:translate(-50%,-50%)}" +
+      "[data-selkies-sidebar-toggle='1'] .selkies-stream-health-stall{bottom:9%;transform:translate(-50%,50%)}" +
+      "[data-selkies-sidebar-toggle='1'] .selkies-stream-health-drop[data-active='1']{background:#ef4444;box-shadow:0 0 7px #ef4444;animation:selkies-stream-health-pulse .8s ease-in-out infinite}" +
+      "[data-selkies-sidebar-toggle='1'] .selkies-stream-health-stall[data-active='1']{background:#a855f7;box-shadow:0 0 7px #a855f7;animation:selkies-stream-health-pulse .8s ease-in-out infinite}" +
+      "@keyframes selkies-stream-health-pulse{0%,100%{opacity:1}50%{opacity:.25}}" +
+      "@media(prefers-reduced-motion:reduce){[data-selkies-sidebar-toggle='1'] .selkies-stream-health-dot[data-active='1']{animation:none;opacity:1}}" +
       "@keyframes selkies-rainbow-fg{0%{color:#ff5f6d}20%{color:#ffc371}40%{color:#7c3aed}60%{color:#06b6d4}80%{color:#22c55e}100%{color:#ff5f6d}}" +
       "@keyframes selkies-rainbow-fill{0%{background-position:50% 0%}100%{background-position:50% 100%}}";
     document.head.appendChild(style);
@@ -9136,9 +9206,6 @@
       } else if (data.type === "pipelineStatusUpdate") {
         if (Object.prototype.hasOwnProperty.call(data, "video")) {
           lastVideoPipelineActive = sanitizeBool(data.video, lastVideoPipelineActive);
-          if (lastVideoPipelineActive) {
-            lastRenderProgressAt = Date.now();
-          }
           if (pipelineResetNoticeTimer) {
             window.clearTimeout(pipelineResetNoticeTimer);
             pipelineResetNoticeTimer = null;
@@ -9146,13 +9213,7 @@
           if (lastVideoPipelineActive) {
             suppressDynamicLatency(4000);
             waitingSinceMs = 0;
-            noteFrameProgress();
-            clearStreamRecoveryNoticeTimer();
             scheduleKeyboardAssistFocus(120);
-            cancelPendingFullReset();
-            if (activityTasks["stream-reconfig"]) {
-              completeActivityTask("stream-reconfig", "\u89c6\u9891\u7ba1\u7ebf\u5df2\u6062\u590d\u3002", "success", 1800);
-            }
           } else {
             suppressDynamicLatency(2000);
             if (dynamicLatencyApplied) {
@@ -9412,6 +9473,7 @@
   if (enforcePinOnBrowserReload()) {
     return;
   }
+  bindStreamHealthHooks();
   bindClipboardSyncTriggers();
   bindSidebarKeyboardShortcut();
   installAssistInputGuard();
