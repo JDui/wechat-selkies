@@ -1077,6 +1077,7 @@
       });
       activeDataSockets.push(ws);
       ws.addEventListener("open", function () {
+        syncAssistInputTransport();
         reportClientAwakeState();
         scheduleAutoSplitForPinSession(1800);
         window.setTimeout(function () {
@@ -1087,6 +1088,7 @@
         activeDataSockets = activeDataSockets.filter(function (item) {
           return item !== ws;
         });
+        syncAssistInputTransport();
       });
       ws.addEventListener("close", function (event) {
         var code = event && typeof event.code === "number" ? event.code : 0;
@@ -6757,6 +6759,34 @@
     }
   }
 
+  async function copyUnsentAssistInput() {
+    // Stop pending delivery before copying, so pasting the recovered text
+    // cannot race a transport retry. This action only writes the local clipboard.
+    retainAssistPendingInput();
+    var text = assistRetainedText;
+    if (!text) {
+      setActivityTask("ime-recovery-copy", {
+        title: "没有未发送文字", detail: "当前页面没有保留的未发送文字。",
+        kind: "info", priority: 70, expiresAt: Date.now() + 3000
+      });
+      return false;
+    }
+    try {
+      await withClientClipboardWritePermission(function () { return copyTextToClipboard(text); });
+      setActivityTask("ime-recovery-copy", {
+        title: "未发送文字已复制", detail: "已复制到本机剪贴板，请核对远端输入框后补输。",
+        kind: "success", priority: 85, expiresAt: Date.now() + 5000
+      });
+      return true;
+    } catch (_err) {
+      setActivityTask("ime-recovery-copy", {
+        title: "复制未完成", detail: "无法写入本机剪贴板。文字仍保留在当前页面，可检查剪贴板权限后重试。",
+        kind: "warning", priority: 85, expiresAt: Date.now() + 6000
+      });
+      return false;
+    }
+  }
+
   function repairImeAndClipboardLight() {
     noteUiInteraction();
     resetClientClipboardRuntime();
@@ -6764,13 +6794,13 @@
     imeCompositionActive = false;
     assistComposing = false;
     assistCompositionTarget = null;
+    if (assistCompositionTransport) assistCompositionTransport.retired = true;
     assistConfirmedCompositionText = "";
     assistCompositionKeys = Object.create(null);
     clearAssistCompositionCommit(false);
-    // Explicit repair permits the next key to flush retained text on the
-    // current connection, after the user has restored the remote input focus.
-    assistPendingSocket = null;
-    assistReconnectWarned = false;
+    // Resetting input cannot establish where an old Enter or text belongs.
+    // Keep unsent text for explicit copying, and discard queued key actions.
+    retainAssistPendingInput();
     var assist = normalizeKeyboardAssist();
     var active = document.activeElement;
     if (active && active !== document.body && active !== assist && typeof active.blur === "function") {
@@ -6854,6 +6884,7 @@
       '<label class="selkies-tool-row"><span>\u5feb\u6377 Bar \u4f4d\u7f6e</span><select data-debug-select="bottom-dock-position"><option value="bottom">\u5e95\u90e8</option><option value="top">\u9876\u90e8</option></select></label>' +
       '<label class="selkies-tool-row selkies-tool-row-slider"><span>\u8f93\u5165\u91c7\u6837\u589e\u5e45</span><div class="selkies-tool-slider"><input type="range" min="50" max="200" step="10" data-debug-range="input-sampling-multiplier"><span class="selkies-tool-value" data-debug-value="input-sampling-multiplier"></span></div></label>' +
       '<div class="selkies-repair-note" data-debug-note="input-sampling"></div>' +
+      '<button type="button" class="selkies-repair-btn secondary" data-debug-action="copy-unsent-input">复制未发送文字</button>' +
       '<label class="selkies-tool-row" data-debug-row="idle-focus-seconds"><span>QQ\u5931\u7126\u65f6\u95f4</span><select data-debug-select="idle-focus-seconds"><option value="0">\u4e0d\u5931\u7126</option><option value="1800">30\u5206\u949f</option><option value="600">\u5341\u5206\u949f</option><option value="300">\u4e94\u5206\u949f</option><option value="60">\u4e00\u5206\u949f</option></select></label>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="notification-test">\u7a7f\u900f\u5f0f\u6d88\u606f\u63a8\u9001\u68c0\u6d4b</button>' +
       '<button type="button" class="selkies-repair-btn secondary" data-debug-action="wechat-audio-test">\u5fae\u4fe1\u6a21\u62df\u6d88\u606f\u63d0\u793a\u97f3\u6d4b\u8bd5</button>' +
@@ -7009,6 +7040,18 @@
     }
     if (!section.dataset.bound) {
       section.dataset.bound = "1";
+      section.querySelector('[data-debug-action="copy-unsent-input"]').addEventListener("click", async function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+          await copyUnsentAssistInput();
+        } finally {
+          button.disabled = false;
+        }
+      });
       section.querySelector('[data-debug-action="sleep-now"]').addEventListener("click", async function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -8459,6 +8502,7 @@
   var ASSIST_TYPING_COOLDOWN_MS = 2000;
   var ASSIST_FLUSH_RETRY_MS = 120;
   var lastAssistInputAt = 0;
+  var lastAssistActivityAt = -Infinity;
   var assistGuardAttached = false;
   var assistFlushRetryTimer = null;
   var assistFlushWarned = false;
@@ -8466,12 +8510,14 @@
   var assistCommitTimer = null;
   var assistCompositionCommit = null;
   var assistPendingText = "";
+  var assistRetainedText = "";
   var assistPendingPackets = [];
   var assistSending = false;
   var assistCompositionTarget = null;
+  var assistCompositionTransport = null;
   var assistConfirmedCompositionText = "";
   var assistPendingSocket = null;
-  var assistReconnectWarned = false;
+  var assistLastSocket = null;
   var assistCompositionKeys = Object.create(null);
   var assistInputTrace = null;
 
@@ -8497,7 +8543,57 @@
   }
 
   function noteAssistInput() {
-    lastAssistInputAt = Date.now();
+    var now = Date.now();
+    lastAssistInputAt = now;
+    // The guard owns these events at window capture, so document-level
+    // activity listeners cannot see IME edits and candidate-selection keys.
+    noteUiInteraction();
+    noteFrontendInteraction();
+    if (now >= dynamicLatencySuppressedUntil && now - lastAssistActivityAt >= 40) {
+      lastAssistActivityAt = now;
+      markDynamicLatencyInteractive("文本输入");
+    }
+  }
+
+  function retainAssistText(text) {
+    if (!text) return;
+    assistRetainedText += text;
+    traceAssistInput("retained", null, text);
+    setActivityTask("ime-retained", {
+      title: "文字尚未发送",
+      detail: "新输入可继续。可在“妙妙小工具”中复制未发送文字，核对后自行补输。",
+      kind: "warning", priority: 85, expiresAt: Date.now() + 15000
+    });
+  }
+
+  function retainAssistPendingInput() {
+    var text = assistPendingText;
+    assistPendingText = "";
+    assistPendingPackets = [];
+    assistPendingSocket = null;
+    if (assistFlushRetryTimer) window.clearTimeout(assistFlushRetryTimer);
+    assistFlushRetryTimer = null;
+    if (assistFlushWarned) {
+      completeActivityTask("ime-pending", "未发送文字已保留，未重放按键。", "warning", 1500);
+    }
+    assistFlushWarned = false;
+    retainAssistText(text);
+  }
+
+  function syncAssistInputTransport() {
+    var socket = getPrimaryOpenDataSocket();
+    if (assistPendingSocket && assistPendingSocket !== socket) {
+      // Quarantine only the old transport's unsent text. Leaving its packets
+      // at the head of the live FIFO would block every future IME commit.
+      retainAssistPendingInput();
+    }
+    if (socket) assistLastSocket = socket;
+    return socket;
+  }
+
+  function captureAssistInputTransport(target) {
+    var socket = syncAssistInputTransport();
+    return { target: target, socket: socket, initial: !assistLastSocket };
   }
 
   function retryAssistInput() {
@@ -8521,22 +8617,8 @@
   function flushAssistInput() {
     // Drain only immutable committed text. Never read the live preedit field
     // from a retry or a keydown: it may already belong to the next word.
-    if (!assistPendingPackets.length) return true;
-    var socket = getPrimaryOpenDataSocket();
-    // Never replay text into a replacement connection: its focused application
-    // may have changed. Keep unsent text available for recovery in this page.
-    if (assistPendingSocket && assistPendingSocket !== socket) {
-      if (!assistReconnectWarned) {
-        assistReconnectWarned = true;
-        console.warn("[selkies-overrides] unsent text retained after connection change");
-        setActivityTask("ime-pending", {
-          title: "\u6587\u5b57\u5c1a\u672a\u53d1\u9001",
-          detail: "\u8fde\u63a5\u5df2\u66f4\u6362\u3002\u8bf7\u5148\u786e\u8ba4\u8fdc\u7aef\u8f93\u5165\u6846\uff0c\u518d\u4f7f\u7528\u8f93\u5165\u6cd5\u4fee\u590d\u5de5\u5177\u6062\u590d\u8f93\u5165\u3002",
-          kind: "warning", priority: 85, expiresAt: Date.now() + 15000
-        });
-      }
-      return false;
-    }
+    var socket = syncAssistInputTransport();
+    if (!assistPendingPackets.length) return !!socket;
     if (socket) assistPendingSocket = socket;
     while (socket && socket.readyState === window.WebSocket.OPEN && socket.bufferedAmount < 262144) {
       var packet = assistPendingPackets[0];
@@ -8552,7 +8634,6 @@
       if (packet.text) traceAssistInput("send-accepted", null, packet.text);
       if (!assistPendingPackets.length) {
         assistPendingSocket = null;
-        assistReconnectWarned = false;
         if (assistFlushWarned) {
           completeActivityTask("ime-pending", "\u5f85\u53d1\u9001\u6587\u5b57\u5df2\u4ea4\u7ed9\u8fde\u63a5\u3002", "success", 1500);
         }
@@ -8566,8 +8647,16 @@
     return false;
   }
 
-  function queueAssistText(text) {
+  function queueAssistText(text, transport) {
     if (!text) return;
+    // Detect replacement before appending: the retry timer may not have run
+    // yet when the user starts typing through the new connection.
+    var socket = syncAssistInputTransport();
+    if ((!socket && assistLastSocket) ||
+        (transport && (transport.retired || (transport.socket ? transport.socket !== socket : !transport.initial)))) {
+      retainAssistText(text);
+      return;
+    }
     traceAssistInput("queued", null, text);
     assistPendingText += text;
     var points = Array.from(text);
@@ -8640,6 +8729,7 @@
         var key = event.code || event.key;
         if (assistComposing || event.isComposing || event.keyCode === 229 ||
             (type === "keyup" && assistCompositionKeys[key])) {
+          noteAssistInput();
           if (type === "keydown") assistCompositionKeys[key] = true;
           else delete assistCompositionKeys[key];
           event.stopImmediatePropagation();
@@ -8647,10 +8737,12 @@
         }
         if (type === "keydown") {
           clearAssistCompositionCommit(true);
+          assistCompositionTransport = null;
         }
         // Let iPad edit the assist, then send its input event exactly once.
         // The legacy key handler cancels native editing even for unmapped keys.
         if (useNativeAssistText(event)) {
+          noteAssistInput();
           event.stopImmediatePropagation();
           return;
         }
@@ -8662,6 +8754,7 @@
               // WebSocket wrapper, which appends them to the same FIFO.
               return;
             }
+            noteAssistInput();
             event.stopImmediatePropagation();
             // Printable keys must still reach the local input field while
             // offline/busy; their input events join the pending text queue.
@@ -8683,6 +8776,7 @@
       clearAssistCompositionCommit(true);
       assistComposing = imeCompositionActive = true;
       assistCompositionTarget = event.target;
+      assistCompositionTransport = captureAssistInputTransport(event.target);
       assistConfirmedCompositionText = "";
       noteAssistInput();
       event.stopImmediatePropagation();
@@ -8690,6 +8784,7 @@
     window.addEventListener("compositionupdate", function (event) {
       if (isAssist(event)) {
         traceAssistInput("compositionupdate", event);
+        noteAssistInput();
         event.stopImmediatePropagation();
       }
     }, true);
@@ -8697,6 +8792,9 @@
       if (!isAssist(event)) return;
       traceAssistInput("compositionend", event);
       var confirmed = event.target === assistCompositionTarget ? assistConfirmedCompositionText : "";
+      var transport = assistCompositionTransport && assistCompositionTransport.target === event.target
+        ? assistCompositionTransport : null;
+      assistCompositionTransport = null;
       assistConfirmedCompositionText = "";
       assistComposing = imeCompositionActive = false;
       assistCompositionTarget = null;
@@ -8712,9 +8810,9 @@
       // final DOM agree. Stale preedit must never be guessed from the field.
       if (confirmed && event.target.value === confirmed + text) text = confirmed + text;
       traceAssistInput("commit", event, text);
-      var commit = { target: event.target, text: text, endText: endText, cleared: false };
+      var commit = { target: event.target, text: text, endText: endText, cleared: false, transport: transport };
       assistCompositionCommit = commit;
-      queueAssistText(text);
+      queueAssistText(text, transport);
       flushAssistInput();
       // Only cleanup is deferred. A trailing input event acknowledges this
       // same commit, and must not send it again (including after this timer).
@@ -8748,6 +8846,11 @@
       var value = event.target.value;
       var commit = assistCompositionCommit;
       var compositionInput = event.isComposing || /Composition/.test(event.inputType || "");
+      var independentInput = !event.isComposing &&
+        /^(?:insertFromPaste(?:AsQuotation)?|insertFromDrop|insertFromYank)$/.test(event.inputType || "");
+      var transport = independentInput ? null : commit && commit.target === event.target &&
+        (compositionInput || (!commit.text && event.inputType === "insertText")) ? commit.transport :
+        (assistCompositionTransport && assistCompositionTransport.target === event.target ? assistCompositionTransport : null);
       // A composition input is not necessarily an echo: some keyboards deliver
       // the selected candidate only after an empty compositionend. Match both
       // the end payload and the merged commit so split confirmations still work.
@@ -8769,6 +8872,9 @@
         // its compositionstart was omitted. Retire the old cleanup timer
         // without clearing the live field or sending unconfirmed text.
         clearAssistCompositionCommit(false);
+        if (!assistCompositionTransport || assistCompositionTransport.retired || assistCompositionTransport.target !== event.target) {
+          assistCompositionTransport = captureAssistInputTransport(event.target);
+        }
         return;
       }
       // An ordinary input without an intervening keydown can append to the
@@ -8783,9 +8889,14 @@
           typeof event.data === "string") {
         value = event.data;
       }
-      clearAssistCompositionCommit(false);
+      // A menu paste/drop starts its own insertion without a keydown. Preserve
+      // the interrupted composition's origin for its potentially delayed end.
+      if (!independentInput) {
+        clearAssistCompositionCommit(false);
+        assistCompositionTransport = null;
+      }
       event.target.value = "";
-      queueAssistText(value);
+      queueAssistText(value, transport);
       flushAssistInput();
     }, true);
     window.addEventListener("focusout", function (event) {
@@ -8799,7 +8910,7 @@
     });
     // Recovery is explicit after reconnect; copying never transmits pending text.
     window.selkiesRecoverPendingInput = function () {
-      return assistPendingText;
+      return assistRetainedText + assistPendingText;
     };
     window.selkiesImeTrace = function (enabled) {
       if (enabled === true) assistInputTrace = [];

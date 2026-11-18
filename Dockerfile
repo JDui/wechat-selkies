@@ -285,7 +285,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="1.87"
+LABEL org.opencontainers.image.version="1.88"
 # Keep the stable legacy H.264 ABI. Load the upstream H.265 runtime by its
 # private path instead of upgrading the pixelflux package used by that pipeline.
 ARG HEVC_PIP_INDEX_URL=https://pypi.org/simple

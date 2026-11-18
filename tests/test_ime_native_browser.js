@@ -39,6 +39,8 @@ async function setup(browser, appleTouch = false) {
     // var is required because the shipped guard updates this flag.
     window.getPrimaryOpenDataSocket = () => socket;
     window.setActivityTask = () => {}; window.completeActivityTask = () => {};
+    window.noteUiInteraction = () => {}; window.noteFrontendInteraction = () => {};
+    window.markDynamicLatencyInteractive = () => {}; window.dynamicLatencySuppressedUntil = 0;
     window.eval("var imeCompositionActive = false;\n" + guard + "\ninstallAssistInputGuard();");
   }, source.slice(guardStart, guardEnd));
   await page.addScriptTag({ type: "module", content: bundle.slice(0, prefixEnd) + "\nwindow.__InputClass = iu;" });

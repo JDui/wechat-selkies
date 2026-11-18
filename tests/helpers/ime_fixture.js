@@ -34,6 +34,7 @@ function createClock() {
 
 function fixture(options = {}) {
   const listeners = {}, timers = new Map(), sent = [], notices = [], warnings = [];
+  const documentListeners = {};
   let timerId = 0;
   const socket = { readyState: 1, bufferedAmount: 0, send: text => sent.push(text) };
   const state = { socket, assist: { id: "keyboard-input-assist", value: "" } };
@@ -43,10 +44,16 @@ function fixture(options = {}) {
     setTimeout: options.clock ? options.clock.setTimeout : function (fn) { timers.set(++timerId, fn); return timerId; },
     clearTimeout: options.clock ? options.clock.clearTimeout : function (id) { timers.delete(id); }
   };
-  const context = vm.createContext({ window, document: { getElementById: () => state.assist },
+  const document = {
+    getElementById: () => state.assist,
+    addEventListener(type, fn) { (documentListeners[type] ||= []).push(fn); }
+  };
+  const context = vm.createContext({ window, document,
     navigator: options.navigator,
     console: { warn: (...args) => warnings.push(args), log() {} },
     Date: options.clock ? { now: options.clock.now } : Date, imeCompositionActive: false,
+    dynamicLatencySuppressedUntil: 0,
+    noteUiInteraction() {}, noteFrontendInteraction() {}, markDynamicLatencyInteractive() {},
     getPrimaryOpenDataSocket: () => state.socket,
     setActivityTask: (...args) => notices.push(args), completeActivityTask() {} });
   vm.runInContext(source.slice(start, end) + "\ninstallAssistInputGuard();", context);
@@ -55,6 +62,11 @@ function fixture(options = {}) {
       stopImmediatePropagation() { this.stopped = true; },
       preventDefault() { this.prevented = true; }, ...props };
     for (const fn of listeners[type] || []) { fn(e); if (e.stopped) break; }
+    // Window capture runs before document capture. IME events consumed by the
+    // guard must not accidentally reach the document's activity listeners.
+    if (!e.stopped) {
+      for (const fn of documentListeners[type] || []) { fn(e); if (e.stopped) break; }
+    }
     // The legacy listener only sees input events not stopped by the guard.
     if (type === "input" && !e.stopped) state.assist.value = "";
     return e;
@@ -63,7 +75,7 @@ function fixture(options = {}) {
     const batch = [...timers.values()]; timers.clear(); batch.forEach(fn => fn());
   }
   function input(value, props) { state.assist.value = value; return event("input", props); }
-  return { state, sent, notices, warnings, window, context, event, tick, input, socket,
+  return { state, sent, notices, warnings, window, document, context, event, tick, input, socket,
     timerCount: options.clock ? options.clock.count : () => timers.size };
 }
 

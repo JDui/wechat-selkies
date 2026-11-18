@@ -103,6 +103,11 @@ def stats_server(gpus=True, probe_error=False, input_handler=None, input_queue_e
     server._frame_backpressure_task = None
     server._register_input_priority = lambda *_: None
     server._set_display_high_load_state = lambda *_: None
+    # Native capture and sleep state are outside this connection fixture.
+    # Keep their lifecycle hooks present while exercising the real ws_handler.
+    server._adaptive_sleeping = False
+    server._stream_sleep_requested = lambda: False
+    server._release_idle_capture_memory = lambda: None
     server._reconfigure_lock = asyncio.Lock()
     server.reconfigure_displays = AsyncMock()
     server.shutdown_pipelines = AsyncMock()
