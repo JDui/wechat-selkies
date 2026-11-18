@@ -23,7 +23,9 @@ def queue_server():
              "_record_frame_ack", "_run_frame_backpressure_logic", "_recover_stalled_video",
              "_force_recover_display", "_stop_capture_for_display", "_restart_capture_for_display_settings",
              "_restart_capture_for_display_settings_locked", "reconfigure_displays",
-             "_fallback_av1_capture", "_sync_shared_viewer"}
+             "_fallback_av1_capture", "_sync_shared_viewer", "_set_display_video_active",
+             "_start_backpressure_task_if_needed", "_ensure_backpressure_task_is_stopped",
+             "_reset_frame_ids_and_notify"}
     original.body = [node for node in original.body if getattr(node, "name", "") in names]
     broadcasts = []
     namespace = {"asyncio": asyncio, "time": time, "json": json, "data_logger": logging.getLogger("queue-test"),
@@ -31,6 +33,7 @@ def queue_server():
                  "MAX_UINT16_FRAME_ID": 65535, "STALLED_CLIENT_TIMEOUT_SECONDS": 4,
                  "STALLED_CLIENT_RECOVERY_SECONDS": 8, "STALLED_CLIENT_RECOVERY_COOLDOWN_SECONDS": 30,
                  "SENT_FRAME_TIMESTAMP_HISTORY_SIZE": 1000, "DEFAULT_STREAM_LOAD_SEND_FPS": 18,
+                 "IS_WAYLAND": False,
                  "websockets": SimpleNamespace(broadcast=lambda clients, data: broadcasts.append(data), ConnectionClosed=ConnectionError)}
     exec(compile(ast.Module(body=[original], type_ignores=[]), str(SOURCE), "exec"), namespace)
     server = namespace["DataStreamingServer"]()

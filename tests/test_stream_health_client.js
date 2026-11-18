@@ -205,9 +205,54 @@ test('event loop lag pulses separately, grants fresh grace and never initiates r
   f.block(1500);
   assert(f.health.diagnostics().stallActive); assert.equal(f.health.diagnostics().stallReason, 'event_loop_lag');
   assert.equal(f.health.stalledFor(), 0); assert.equal(ws.sends, 0);
+  assert.equal(f.health.diagnostics().displays[0].lastPacketAt, 3000);
+  assert.equal(f.health.diagnostics().displays[0].lastRenderAt, 3000);
+  assert.equal(f.health.diagnostics().displays[0].pendingFrames, 0);
   f.advance(3000); assert(!f.health.diagnostics().stallActive);
+  f.advance(60000); assert.equal(f.health.stalledFor(), 0); assert(!f.health.diagnostics().stallActive);
   f.hide(true); f.block(5000); f.hide(false);
   assert(!f.health.diagnostics().stallActive);
+});
+
+test('event loop lag preserves the final unrendered packet beyond its fresh grace period', () => {
+  const f = fixture(), ws = f.connect();
+  f.advance(3000); f.health.packet(ws, packet(6, 17));
+  f.block(1500);
+  let state = f.health.diagnostics();
+  assert.equal(state.stallReason, 'event_loop_lag');
+  assert.equal(state.displays[0].pendingFrames, 1);
+  assert.equal(state.displays[0].framesRendered, 0);
+  assert.equal(state.displays[0].lastPacketAt, 3000);
+  assert.equal(state.displays[0].lastRenderAt, null);
+  assert.equal(state.displays[0].graceRemainingMs, 3000);
+  assert.equal(f.health.stalledFor(), 0);
+  f.advance(3000);
+  assert.equal(f.health.stalledFor(), 0); assert(!f.health.diagnostics().stallActive);
+  f.advance(500);
+  state = f.health.diagnostics();
+  assert.equal(state.stalledForMs, 500); assert(state.stallActive);
+  assert.equal(state.stallReason, 'render_timeout');
+  assert.equal(state.displays[0].pendingFrames, 1);
+  f.advance(12000);
+  assert.equal(f.health.stalledFor(), 12500);
+  assert.equal(f.health.diagnostics().displays[0].framesRendered, 0);
+  assert(!f.health.diagnostics().dropActive); assert.equal(ws.sends, 0);
+});
+
+test('real output after event loop lag still clears its preserved pending packet', () => {
+  const f = fixture(), ws = f.connect(); let outputs = 0;
+  f.health.onFrameRendered = () => { outputs += 1; };
+  f.advance(3000); f.health.packet(ws, packet(3, 23));
+  f.block(1500); f.advance(200);
+  assert(f.health.frameRendered('primary', null));
+  const state = f.health.diagnostics().displays[0];
+  assert.equal(state.pendingFrames, 0); assert.equal(state.framesRendered, 1);
+  assert.equal(state.lastPacketAt, 3000); assert.equal(state.lastRenderAt, 4700);
+  assert.equal(outputs, 1);
+  f.advance(60000);
+  assert.equal(f.health.stalledFor(), 0); assert(!f.health.diagnostics().stallActive);
+  assert.equal(f.health.diagnostics().displays[0].stallReasons.render_timeout, undefined);
+  assert.equal(ws.sends, 0);
 });
 
 test('callback errors are isolated and start never duplicates timers', () => {

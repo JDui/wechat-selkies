@@ -53,6 +53,7 @@ function fixture(options = {}) {
       __selkiesStreamHealth: { report: (...args) => reports.push(args), frameRendered: (...args) => renders.push(args) } },
     document: { hidden: !!options.hidden },
     Gt: {}, axiAv1Decoder: null, axiStripeTimestamp: 0, axiLastDecoderRecoveryAt: -Infinity,
+    axiDecoderRecovery: null, axiDecoderRecoveryEpoch: 0, axiJpegGeneration: 0,
     A: !!options.shared, ze: true, oe: true, Oe: options.display || "primary", Ae: "x264enc", Ye: "ready",
     WebSocket: { OPEN: 1 }, f: { readyState: 1, send: message => sent.push(message) },
     c: { width: 1920, height: 1080 }, h: { drawImage: frame => { if (frame.bad) throw new Error("stale surface"); drawn.push(frame); } },
@@ -139,6 +140,39 @@ function fixture(options = {}) {
   assert(hookFrame.closed); assert.equal(render.raf.size, 1, "optional health hooks cannot interrupt rendering");
   render.scope.Pa();
 
+  // An old asynchronous JPEG decode must not overwrite the current picture
+  // after a pipeline reset, even when it completes after the new frame.
+  const jpeg = fixture(), jpegDecoders = [];
+  jpeg.scope.Ae = "jpeg";
+  jpeg.scope.ImageDecoder = class ImageDecoder {
+    constructor() {
+      this.closed = false;
+      this.result = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
+      jpegDecoders.push(this);
+    }
+    decode() { return this.result; }
+    close() { this.closed = true; }
+  };
+  vm.runInContext(shipped("async function z(G,N){", "function V(G){") + shipped("function ga(){", "const kl="), jpeg.scope);
+  const oldJpeg = { codedWidth: 1920, codedHeight: 1080, close() { this.closed = true; } };
+  const currentJpeg = { codedWidth: 1920, codedHeight: 1080, close() { this.closed = true; } };
+  const oldJpegDecode = jpeg.scope.z(0, new Uint8Array(4));
+  jpeg.scope.ga();
+  const currentJpegDecode = jpeg.scope.z(0, new Uint8Array(4));
+  jpegDecoders[1].resolve({ image: currentJpeg }); await currentJpegDecode;
+  jpeg.scope.axiSchedulePaint(); jpeg.paint();
+  assert.deepEqual(jpeg.drawn, [currentJpeg]);
+  jpegDecoders[0].resolve({ image: oldJpeg }); await oldJpegDecode;
+  jpeg.paint();
+  assert.deepEqual(jpeg.drawn, [currentJpeg], "a retired JPEG result cannot redraw stale pixels");
+  assert.equal(jpeg.scope.Fe.length, 0);
+  assert(oldJpeg.closed && currentJpeg.closed, "both retired and rendered images release their resources");
+  assert(jpegDecoders.every(decoder => decoder.closed), "successful and retired ImageDecoders are closed");
+  const failedJpegDecode = jpeg.scope.z(0, new Uint8Array(4));
+  jpegDecoders[2].reject(new Error("invalid JPEG data")); await failedJpegDecode;
+  assert(jpegDecoders[2].closed, "a rejected decode still closes the ImageDecoder");
+  assert.equal(jpeg.scope.Fe.length, 0);
+
   // Pending and already-submitted pictures use the same bounded queue budget.
   for (const stalledProbe of [false, true]) {
     const bounded = fixture({ probe: stalledProbe ? () => new Promise(() => {}) : undefined });
@@ -172,6 +206,74 @@ function fixture(options = {}) {
   assert.equal(recovering.sent.length, 1, "transient decoder recovery requests are throttled for five seconds");
   recovering.time.advance(5000); recovering.push(3); await settle();
   assert.equal(recovering.sent.length, 2);
+
+  // A cooldown may delay a second request, but cannot permanently abandon a
+  // stripe whose decoder was closed while another stripe continues drawing.
+  const partial = fixture();
+  partial.push(1, true, 0, 1920, 540); partial.push(1, true, 540, 1920, 540); await settle();
+  partial.decoders[0].callbacks.error(new Error("first decoder failure"));
+  partial.push(2, true, 0, 1920, 540); await settle();
+  partial.decoders[2].callbacks.error(new Error("second decoder failure during cooldown"));
+  partial.push(2, true, 540, 1920, 540); await settle();
+  partial.output(partial.decoders[3], 0); partial.scope.axiSchedulePaint(); partial.paint();
+  for (let id = 3; id <= 11; id++) {
+    partial.push(id, false, 0, 1920, 540);
+    partial.push(id, false, 540, 1920, 540);
+    partial.output(partial.decoders[3], id - 2); partial.paint(); partial.time.advance(500);
+  }
+  assert.equal(partial.sent.length, 1, "one delayed request preserves the five-second cooldown");
+  assert.equal(partial.renders.length, 10, "the other stripe keeps drawing during this failure");
+  assert.equal(partial.scope.Gt[0], undefined, "deltas cannot recreate a decoder without its keyframe");
+  partial.time.advance(500);
+  assert.deepEqual(partial.sent, ["FORCE_STREAM_RECOVER,primary,video", "FORCE_STREAM_RECOVER,primary,video"],
+    "a working stripe cannot suppress recovery of the abandoned stripe");
+  partial.time.advance(30000);
+  assert.equal(partial.sent.length, 2, "the trailing request does not become a repeating restart timer");
+  partial.scope.Pa();
+
+  for (const options of [{}, { shared: true }, { display: "display2" }]) {
+    const trailing = fixture({ ...options, decodeError: new Error("decoder unavailable") });
+    trailing.push(); await settle(); trailing.push(2); await settle();
+    assert.equal(trailing.sent.length, 1);
+    trailing.time.advance(5000);
+    const expected = options.shared ? "START_VIDEO" : "FORCE_STREAM_RECOVER," + (options.display || "primary") + ",video";
+    assert.deepEqual(trailing.sent, [expected, expected], "the delayed request keeps the original display and role");
+    trailing.scope.Pa();
+  }
+
+  // A new keyframe can repair every affected stripe before the trailing
+  // request. Only complete decoder recovery cancels that pending request.
+  const repaired = fixture();
+  repaired.push(1, true, 0, 1920, 540); repaired.push(1, true, 540, 1920, 540); await settle();
+  repaired.decoders[0].callbacks.error(new Error("first decoder failure"));
+  repaired.push(2, true, 0, 1920, 540); await settle();
+  repaired.decoders[2].callbacks.error(new Error("second decoder failure"));
+  repaired.push(3, true, 0, 1920, 540); repaired.push(3, true, 540, 1920, 540); await settle();
+  repaired.output(repaired.decoders[3], 0);
+  assert.notEqual(repaired.scope.axiDecoderRecovery, null, "one stripe's output is not complete recovery");
+  repaired.output(repaired.decoders[4], 0);
+  assert.equal(repaired.scope.axiDecoderRecovery, null);
+  repaired.time.advance(5000);
+  assert.equal(repaired.sent.length, 1, "healthy replacement decoders need no extra pipeline restart");
+  repaired.scope.Pa();
+
+  for (const [name, retire] of [
+    ["pipeline reset", f => f.scope.Pa()],
+    ["video stopped", f => { f.scope.ze = false; }],
+    ["background tab", f => { f.scope.document.hidden = true; }],
+    ["socket replaced", f => { f.scope.f = { readyState: 1, send: message => f.sent.push(message) }; }],
+    ["socket closed", f => { f.scope.f.readyState = 3; }],
+    ["codec changed", f => { f.scope.Ae = "av1enc"; }],
+    ["role changed", f => { f.scope.A = true; }],
+    ["display changed", f => { f.scope.Oe = "display2"; }]
+  ]) {
+    const retired = fixture({ decodeError: new Error("decoder unavailable") });
+    retired.push(); await settle(); retired.push(2); await settle();
+    assert.notEqual(retired.scope.axiDecoderRecovery, null);
+    retire(retired); retired.time.advance(5000);
+    assert.equal(retired.sent.length, 1, name + " prevents a stale delayed recovery command");
+    assert.equal(retired.scope.axiDecoderRecovery, null, name + " releases the retired request");
+  }
 
   // A shared tab whose background decoder was reclaimed must request a new
   // keyframe on return, without resetting the controller's capture pipeline.
@@ -208,5 +310,5 @@ function fixture(options = {}) {
   fallbackWindow.selkiesHevc.fallback("unsupported");
   assert.equal(messages[0].settings.encoder, "x264enc", "storage failure cannot prevent the codec fallback command");
 
-  console.log("PASS video decode recovery: stale probes / output, geometry change, queue bounds, actual draw progress, RAF resilience, scoped recovery and HEVC probe timeout");
+  console.log("PASS video decode recovery: stale probes / JPEG output, geometry change, queue bounds, actual draw progress, RAF resilience, delayed scoped recovery and HEVC probe timeout");
 })().catch(error => { console.error(error); process.exitCode = 1; });

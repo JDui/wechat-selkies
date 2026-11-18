@@ -259,6 +259,7 @@ def settings_server(**extra):
     server.input_handler = None
     server.is_pcmflux_capturing = False
     server.reconfigure_displays = AsyncMock()
+    server._restart_capture_for_display_settings = AsyncMock()
     return server, namespace
 
 
@@ -357,6 +358,7 @@ class Av1ServerTests(unittest.IsolatedAsyncioTestCase):
         server, _ = server_methods({"_sync_shared_viewer"}, Av1Capture=FailedKeyRequest)
         server.capture_loop = asyncio.get_running_loop()
         capture = FailedKeyRequest()
+        server.display_clients = {"primary": {"encoder": "av1enc"}}
         server.capture_instances = {"primary": {"module": capture}}
         server.broadcast_stream_resolution = AsyncMock()
         server._fallback_av1_capture = AsyncMock()

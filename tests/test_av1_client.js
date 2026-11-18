@@ -97,6 +97,7 @@ function wireTransport(f, shared = false) {
   Object.assign(f.scope, {
     A: shared, w: "websockets", Ae: "av1enc", ze: true, Ye: shared ? "awaiting_identification" : "ready", yt: null,
     j: 0, n: null, Gt: {}, Za: [], axiAv1Decoder: null, axiStripeTimestamp: 0, axiLastDecoderRecoveryAt: -Infinity,
+    axiDecoderRecovery: null, axiDecoderRecoveryEpoch: 0,
     se: -1, zi: new Set(), E: null, Oe: "primary", oe: false,
     H: 128, J: 96, c: { width: 128, height: 96 }, h: { setTransform: noop, clearRect: noop },
     $n: noop, li: noop, ga: noop, Pt: noop, ji: noop, ve: async () => true,

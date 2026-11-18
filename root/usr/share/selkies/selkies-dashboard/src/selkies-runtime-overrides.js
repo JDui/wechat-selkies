@@ -73,6 +73,7 @@
   var activeDataSockets = [];
   var lastClipboardTriggerAt = 0;
   var streamRestartTimer = null;
+  var streamRestartGeneration = 0;
   var lastUiInteractionAt = Date.now();
   var activityTasks = Object.create(null);
   var activityRenderTimer = null;
@@ -986,6 +987,7 @@
             if ((payload === "STOP_VIDEO" || payload === "START_VIDEO") && window.__selkiesStreamHealth) {
               try { window.__selkiesStreamHealth.pipeline(ws, payload === "START_VIDEO"); } catch (_healthErr) {}
             }
+            if (payload === "STOP_VIDEO") cancelPendingFullReset();
             if (queueAssistKeyCommand(ws, payload)) return;
             if (typeof payload === "string" && inputSampler.send(payload)) {
               return;
@@ -1022,7 +1024,10 @@
               health.serverEvent(ws, JSON.parse(event.data.slice("STREAM_HEALTH,".length)));
             } else if (event.data.indexOf("PIPELINE_RESETTING ") === 0) {
               var connection = health.connection();
-              if (connection && connection.socket === ws && event.data.split(" ")[1] === connection.displayId) health.reset(ws);
+              if (connection && connection.socket === ws && event.data.split(" ")[1] === connection.displayId) {
+                health.reset(ws);
+                streamRecoveryStartedAt = Date.now();
+              }
             } else if (event.data === "VIDEO_STARTED" || event.data === "VIDEO_STOPPED") {
               health.pipeline(ws, event.data === "VIDEO_STARTED");
             }
@@ -3384,6 +3389,13 @@
   // window elapses the reset is cancelled, so a reload only happens when it is really needed.
   function scheduleGuardedFullReset(reason, stalledForMs) {
     if (pendingFullResetTimer) return true;
+    if (document.hidden || isTransportBusy()) return false;
+    var health = window.__selkiesStreamHealth;
+    var expectedConnection = health && health.connection();
+    var expectedSocket = expectedConnection && expectedConnection.socket;
+    var expectedDisplay = expectedConnection && expectedConnection.displayId;
+    var expectedRecoveryStartedAt = streamRecoveryStartedAt;
+    var expectedVideoActive = lastVideoPipelineActive;
     var now = Date.now();
     if (now - getLastPageStallReloadAt() < PAGE_STALL_COOLDOWN_MS) return false;
     markPageStallReloadAt(now);
@@ -3406,10 +3418,22 @@
       priority: 98,
       startedAt: now
     });
-    pendingFullResetTimer = window.setTimeout(function () {
+    var resetTimer = window.setTimeout(function () {
+      if (pendingFullResetTimer !== resetTimer) return;
       pendingFullResetTimer = null;
-      var framesFlowing = lastFrameProgressAt > streamRecoveryStartedAt && Date.now() - lastFrameProgressAt < 3000;
-      if (framesFlowing || (lastFrameProgressAt > streamRecoveryStartedAt && !isStreamLikelyStalled())) {
+      var currentConnection = health && health.connection();
+      var connectionChanged = expectedSocket ? !currentConnection || currentConnection.socket !== expectedSocket ||
+        currentConnection.displayId !== expectedDisplay : !!currentConnection;
+      if (document.hidden || isTransportBusy() || connectionChanged ||
+          (expectedVideoActive && !lastVideoPipelineActive) || streamRecoveryStartedAt !== expectedRecoveryStartedAt) {
+        recordUploadDiagnostic("page-reload-cancelled", { reason: reloadReason, cause: "recovery-context-changed" });
+        if (streamRecoveryStartedAt === expectedRecoveryStartedAt) {
+          finishStreamRecoveryActivity("页面或连接状态已变化，已取消本次自动刷新。", "info", 2400);
+        }
+        return;
+      }
+      var framesFlowing = lastFrameProgressAt > expectedRecoveryStartedAt && Date.now() - lastFrameProgressAt < 3000;
+      if (framesFlowing || (lastFrameProgressAt > expectedRecoveryStartedAt && !isStreamLikelyStalled())) {
         recordUploadDiagnostic("page-reload-cancelled", { reason: reloadReason });
         finishStreamRecoveryActivity("\u5df2\u53d6\u6d88\u9875\u9762\u91cd\u7f6e\uff0c\u63a8\u6d41\u5df2\u6062\u590d\u3002", "success", 2400);
         return;
@@ -3420,11 +3444,22 @@
         window.location.reload();
       } catch (_err) {}
     }, FULL_RESET_GRACE_MS);
+    pendingFullResetTimer = resetTimer;
     return true;
   }
 
   function restartStreamingPipelines(reason, options) {
     var allowFullReset = !!(options && options.allowReload);
+    var generation = ++streamRestartGeneration;
+    var health = window.__selkiesStreamHealth;
+    var expectedConnection = health && health.connection();
+    var expectedSocket = expectedConnection && expectedConnection.socket;
+    var repairStartedAt = Date.now();
+    var isCurrentRepair = function () {
+      var currentConnection = health && health.connection();
+      return generation === streamRestartGeneration &&
+        (expectedSocket ? !!currentConnection && currentConnection.socket === expectedSocket : !currentConnection);
+    };
     if (streamRestartTimer) {
       window.clearTimeout(streamRestartTimer);
       streamRestartTimer = null;
@@ -3448,7 +3483,7 @@
     streamRecoveryStage = 0;
     waitingSinceMs = 0;
     lastFrameProgressAt = 0;
-    streamRecoveryStartedAt = Date.now();
+    streamRecoveryStartedAt = repairStartedAt;
     if (pipelineResetNoticeTimer) {
       window.clearTimeout(pipelineResetNoticeTimer);
       pipelineResetNoticeTimer = null;
@@ -3473,11 +3508,13 @@
     sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
     scheduleKeyboardAssistFocus(60);
     window.setTimeout(function () {
+      if (!isCurrentRepair()) return;
       scheduleKeyboardAssistFocus(240);
     }, 240);
     streamRestartTimer = window.setTimeout(function () {
       streamRestartTimer = null;
-      if (lastVideoPipelineActive) {
+      if (!isCurrentRepair()) return;
+      if (lastFrameProgressAt > Math.max(repairStartedAt, streamRecoveryStartedAt)) {
         finishStreamRecoveryActivity("\u63a8\u6d41\u7cfb\u7edf\u5df2\u6062\u590d\u3002", "success", 1800);
         return;
       }
@@ -3485,19 +3522,23 @@
       sendRawDataCommand("cmd,/scripts/recover-ui-services.sh");
       streamRestartVerifyTimer = window.setTimeout(function () {
         streamRestartVerifyTimer = null;
-        if (lastVideoPipelineActive) {
+        if (!isCurrentRepair()) return;
+        if (lastFrameProgressAt > Math.max(repairStartedAt, streamRecoveryStartedAt)) {
           finishStreamRecoveryActivity("\u63a8\u6d41\u7cfb\u7edf\u5df2\u6062\u590d\u3002", "success", 1800);
           return;
         }
         sendRawDataCommand("STOP_VIDEO");
         sendRawDataCommand("STOP_AUDIO");
         window.setTimeout(function () {
+          if (!isCurrentRepair()) return;
           sendRawDataCommand("START_VIDEO");
           window.setTimeout(function () {
+            if (!isCurrentRepair()) return;
             sendRawDataCommand("START_AUDIO");
           }, 180);
           window.setTimeout(function () {
-            if (lastVideoPipelineActive) {
+            if (!isCurrentRepair()) return;
+            if (lastFrameProgressAt > Math.max(repairStartedAt, streamRecoveryStartedAt)) {
               finishStreamRecoveryActivity("\u63a8\u6d41\u7cfb\u7edf\u5df2\u6062\u590d\u3002", "success", 1800);
               return;
             }

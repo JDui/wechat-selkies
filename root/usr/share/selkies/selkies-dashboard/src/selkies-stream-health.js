@@ -262,8 +262,9 @@
         previousTick >= state.graceUntil && state.lastActivityAt !== null && previousTick - state.lastActivityAt < 3000;
       if (loopBlocked) {
         // A resumed event loop gets a fresh observation window, not an immediate
-        // stream restart based on time spent unable to run callbacks.
-        clearWork(state, at, false);
+        // stream restart based on time spent unable to run callbacks. Keep any
+        // received work: a long task does not prove that its frames were drawn.
+        state.graceUntil = at + GRACE_MS;
         pulse(state, "stall", "event_loop_lag", at);
       } else if (waitTime(state, at) >= STALL_HINT_MS) {
         pulse(state, "stall", "render_timeout", at);

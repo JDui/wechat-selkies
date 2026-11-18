@@ -54,6 +54,7 @@ function fixture() {
     lastAutomaticVideoRecoveryAt: 0, lastRenderKickAt: 0, streamRecoveryStartedAt: 0,
     lastFrameProgressAt: 1, lastRenderProgressAt: 1, waitingSinceMs: 0,
     streamRecoveryInFlight: false, streamRecoveryStage: 0, activityTasks: {},
+    pendingFullResetTimer: null,
     RENDER_STALL_WATCHDOG: true, RENDER_STALL_THRESHOLD_MS: 12000, RENDER_STALL_COOLDOWN_MS: 25000,
     STREAM_STALL_THRESHOLD_MS: 18000, PAGE_STALL_WATCHDOG: true, PAGE_STALL_THRESHOLD_MS: 45000,
     PAGE_STALL_RELOAD_MIN_RECOVERS: 2, lastPageWatchdogTickAt: 1, softRecoverAttempts: 0,
@@ -75,7 +76,7 @@ function fixture() {
   });
   vm.runInContext(helper, scope);
   for (const name of ["installSingleSessionWebSocketGuard", "hasOpenDataSocket", "noteInboundStreamPacket",
-    "requestVideoStreamRecovery", "recoverRenderStall", "getPendingVideoStallMs", "getFrameStallActive",
+    "requestVideoStreamRecovery", "recoverRenderStall", "cancelPendingFullReset", "getPendingVideoStallMs", "getFrameStallActive",
     "checkRenderStallHealth", "checkPageStallHealth", "noteFrameProgress", "syncSidebarToggleLowLatencyState",
     "syncSidebarStreamHealth", "clearSidebarToggleState", "ensureDynamicLatencyStyle", "bindStreamHealthHooks",
     "bindServerSettingsModeHint"]) vm.runInContext(shipped(name), scope);
@@ -140,7 +141,10 @@ display2.emit("message", 'STREAM_HEALTH,{"kind":"drop","reason":"video_queue_ove
 assert.equal(secondary.health.diagnostics().dropActive, true);
 display2.emit("message", "PIPELINE_RESETTING display2");
 assert.equal(secondary.health.diagnostics().displays[0].pendingFrames, 0);
+assert.equal(secondary.scope.streamRecoveryStartedAt, secondary.scope.Date.now(), "a reset starts a new presentation expectation");
+secondary.scope.pendingFullResetTimer = 42;
 display2.send("STOP_VIDEO");
+assert.equal(secondary.scope.pendingFullResetTimer, null, "intentional pause cancels a scheduled automatic reload");
 assert.equal(secondary.health.diagnostics().displays[0].active, false);
 display2.send("START_VIDEO");
 display2.emit("message", packet(2));
