@@ -59,6 +59,8 @@ node scripts/verify-downloads.mjs target/release/axiver-client.exe ../screenshot
 
 并行连接、自动收纳与mipmap磨砂的本机计时及验收见 [2026-11-17记录](../docs/client/connection-frost-2026-11-17.md)。针对性原生检查可运行 `node scripts/verify-connection-frost.mjs`。
 
+浮窗展开、切页和移动时短暂失去模糊、出现黑边的修复及验证边界见 [2026-11-19记录](../docs/client/frost-loading-fix-2026-11-19.md)。异步材质回归运行 `node tests/frost-lifetime.cjs`；浏览器材质回归运行 `node scripts/verify-frost-headless.mjs`。
+
 进度、品牌和Bar风格验收见 [design-qa-v5.md](./design-qa-v5.md)，此前磨砂与模式记录见 [design-qa-v4.md](./design-qa-v4.md)，设计分析见 [UI-INTEGRATION-REVIEW.md](./UI-INTEGRATION-REVIEW.md)。旧版架构记录保留在 `design-qa-v2.md`。
 
 原有进程级 `--ignore-certificate-errors` 策略继续保留以兼容自签部署；本次不改变证书策略。真实中文/日文输入、登录后的微信/QQ 拖放与长时间远程会话仍需在实际环境中验证。

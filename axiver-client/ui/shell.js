@@ -75,43 +75,105 @@
   const knownRequests = new Set();
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let backdrop = null;
+  let sourceBackdrop = null;
   let frameSequence = 0;
+  let materialSequence = 0;
+  let materialKey = null;
+  let materialTask = Promise.resolve();
   let closeAnimation = false;
   function animate(element, keyframes, options = {}) {
     if (motion.matches) return null;
     return element.animate(keyframes, {duration: 240, easing: "cubic-bezier(.2,.8,.2,1)", ...options});
   }
+  function materialBounds(layout) {
+    const panel = $("panel");
+    // Rust reserves the old native size during a shrinking CSS transition.
+    // Keep pixels for both that visible size and the destination layout.
+    return {...layout,
+      width: Math.max(layout.width, layout.expanded ? layout.panelX + panel.offsetWidth : 0),
+      height: Math.max(layout.height, layout.expanded ? layout.panelY + panel.offsetHeight : 0),
+    };
+  }
   function materialOffsets(layout) {
-    if (!layout || !backdrop) return;
+    if (!layout) return;
     for (const id of ["pill", "panel"]) {
       const surface = $(id);
       if (surface.hidden) continue;
-      const rect = surface.getBoundingClientRect();
-      // Each surface samples the remote pixels directly beneath itself,
-      // including the chip as it follows the changing pill width.
-      const x = layout.viewX + rect.left + surface.clientLeft - (backdrop.x || 0);
-      const y = layout.viewY + rect.top + surface.clientTop - (backdrop.y || 0);
-      surface.style.setProperty("--sample-x", (-x+18)+"px");
-      surface.style.setProperty("--sample-y", (-y+18)+"px");
+      // Work in the untransformed surface coordinates. Entry animations
+      // transform the material together with the card, without shifting its crop.
+      const x = layout.viewX + (id === "pill" ? layout.pillX : layout.panelX) + surface.clientLeft;
+      const y = layout.viewY + (id === "pill" ? layout.pillY : layout.panelY) + surface.clientTop;
+      // Reserve the target size too: a growing CSS transition can otherwise
+      // outrun the old crop while the replacement PNGs are still decoding.
+      const width = id === "panel"
+        ? Math.max(surface.clientWidth, layout.panelWidth - (surface.offsetWidth - surface.clientWidth))
+        : surface.clientWidth;
+      const height = id === "panel"
+        ? Math.max(surface.clientHeight, layout.panelHeight - (surface.offsetHeight - surface.clientHeight))
+        : surface.clientHeight;
+      const covered = backdrop && x >= backdrop.x && y >= backdrop.y
+        && x + width <= backdrop.x + backdrop.width
+        && y + height <= backdrop.y + backdrop.height;
+      // A decoded texture for the dot does not make an expanded panel ready.
+      // Keep the opaque material wherever the previous crop no longer covers.
+      surface.classList.toggle("has-backdrop", Boolean(covered));
+      if (!backdrop) continue;
+      surface.style.setProperty("--sample-x", (backdrop.x - x + 18) + "px");
+      surface.style.setProperty("--sample-y", (backdrop.y - y + 18) + "px");
     }
   }
+  async function prepareBackdrop(source, bounds, sequence) {
+    try {
+      const frame = window.__AXIVER_FROST__.render(source.image, source.frame, bounds);
+      if (!frame) {
+        if (sequence === materialSequence) materialKey = null;
+        return;
+      }
+      // CSS must never see a half-ready pair of PNGs. Retain the last complete
+      // material until both new images are decoded, then publish in one task.
+      const images = [frame.src, frame.pillSrc].map(src => {
+        const image = new Image();
+        image.src = src;
+        return image;
+      });
+      await Promise.all(images.map(image => image.decode()));
+      if (sequence !== materialSequence) return;
+      backdrop = {...frame, images};
+      window.__AXIVER_SHELL__.backdropStats = {
+        x: frame.x, y: frame.y, width: frame.width, height: frame.height,
+        sampleWidth: frame.sampleWidth, sampleHeight: frame.sampleHeight, processingMs: frame.processingMs,
+      };
+      const root = document.documentElement;
+      root.style.setProperty("--pill-backdrop", `url("${frame.pillSrc}")`);
+      root.style.setProperty("--backdrop", `url("${frame.src}")`);
+      root.style.setProperty("--backdrop-size", `${frame.width}px ${frame.height}px`);
+      root.classList.add("has-backdrop");
+      materialOffsets(window.__AXIVER_SHELL__.layout);
+    } catch {
+      // Failed or obsolete captures leave the last complete material intact.
+      if (sequence === materialSequence) materialKey = null;
+    }
+  }
+  function refreshBackdrop() {
+    const layout = window.__AXIVER_SHELL__?.layout;
+    if (!layout || !sourceBackdrop) return materialTask;
+    const bounds = materialBounds(layout);
+    const key = [sourceBackdrop.sequence, bounds.viewX, bounds.viewY, bounds.width, bounds.height].join(":");
+    // eval-push and the IPC reply can echo the same layout. Do not restart
+    // decoding on those echoes or let an older crop win after a later move.
+    if (key === materialKey) return materialTask;
+    materialKey = key;
+    materialTask = prepareBackdrop(sourceBackdrop, bounds, ++materialSequence);
+    return materialTask;
+  }
   async function renderBackdrop(frame) {
-    const sequence=++frameSequence;
-    const image=new Image(); image.src=frame.src;
+    const sequence = ++frameSequence;
+    const image = new Image();
+    image.src = frame.src;
     try { await image.decode(); } catch { return; }
-    if (sequence!==frameSequence) return;
-    const layout = window.__AXIVER_SHELL__.layout;
-    if (!layout) return;
-    frame = window.__AXIVER_FROST__.render(image, frame, layout);
-    if (!frame) return;
-    backdrop=frame;
-    window.__AXIVER_SHELL__.backdropStats = {sampleWidth: frame.sampleWidth, sampleHeight: frame.sampleHeight, processingMs: frame.processingMs};
-    const root=document.documentElement;
-    root.style.setProperty("--pill-backdrop", `url("${frame.pillSrc}")`);
-    root.style.setProperty("--backdrop", `url("${frame.src}")`);
-    root.style.setProperty("--backdrop-size", `${frame.width}px ${frame.height}px`);
-    root.classList.add("has-backdrop");
-    materialOffsets(window.__AXIVER_SHELL__.layout);
+    if (sequence !== frameSequence) return;
+    sourceBackdrop = {image, frame, sequence};
+    return refreshBackdrop();
   }
   function sizeText(bytes) {
     if (bytes == null) return "大小待确认";
@@ -375,6 +437,7 @@
     panel.style.height = layout.panelHeight + "px";
     $("btn-return").hidden = !layout.toolActive;
     materialOffsets(layout);
+    refreshBackdrop();
     syncPill();
   }
 
