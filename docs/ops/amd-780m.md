@@ -62,7 +62,7 @@ AMD 初始化阶段已完成 8 项设备选择 / 探测 / 回退定向测试。�
 
 ## H.265 前后端支持
 
-2026-11-17：`AXiVer` 已加入可选 `h265enc`，默认仍为 H.264。复用上游 [pixelflux 2.2.3](https://github.com/selkies-project/pixelflux/tree/2.2.3)，固定安装到 `/opt/selkies-hevc`，避免替换旧 H.264 采集库的 ABI。无需新增独立 FFmpeg 推流进程。
+2026-11-17：`AXiVer` 已加入可选 `h265enc`，默认仍为 H.264。复用上游 [pixelflux 2.2.3](https://github.com/selkies-project/pixelflux/tree/2.2.3)，固定安装到 `/opt/selkies-pixelflux`，供全帧 H.264、H.265 和 AV1 共用；H.264 不再保留旧 ABI 回退。无需新增独立 FFmpeg 推流进程。
 
 - 后端提供 X11 全帧 HEVC Main、8-bit、4:2:0；继续使用原有视频队列、ACK、背压、空闲节流与恢复逻辑。HEVC Annex-B 帧使用独立类型 5，与 H.264 类型 4 区分。
 - 浏览器先用 WebCodecs 探测 HEVC，再根据首个关键帧 SPS 的真实 profile / level 配置解码器。不按浏览器名称猜测能力。
