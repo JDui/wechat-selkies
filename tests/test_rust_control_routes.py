@@ -14,7 +14,7 @@ class RustControlRouteTests(unittest.TestCase):
         bridge = self.read("root/scripts/session_auth_bridge.py")
         for route in [
             "auth/check", "auth/pin", "auth/logout",
-            "auth/session", "auth/upload-token", "auth/dock-download/state",
+            "auth/session", "auth/upload-token",
         ]:
             self.assertIn(f"/{route}", rust)
         self.assertNotIn('if path == "/check":', bridge)
@@ -26,6 +26,8 @@ class RustControlRouteTests(unittest.TestCase):
         self.assertIn("CUPLOAD/auth/pin", nginx)
         self.assertIn("CUPLOAD/auth/upload-token", nginx)
         self.assertIn("CUPLOAD/auth/session", nginx)
+        self.assertIn("CAUTH/dock-download/state", nginx)
+        self.assertIn('if path == "/dock-download/state":', bridge)
 
     def test_preferences_api_is_served_by_rust_sidecar(self):
         nginx = self.read("root/defaults/default.conf")
