@@ -549,6 +549,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 name = "selkies-upload-sidecar"
 version = "1.45.0"
 dependencies = [
+ "url",
  "axum",
  "base64",
  "blake3",
