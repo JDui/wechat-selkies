@@ -4,12 +4,8 @@ import hmac
 import http.server
 import json
 import os
-import secrets
 import time
 import threading
-import base64
-import urllib.error
-import urllib.request
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -18,37 +14,8 @@ from urllib.parse import parse_qs, urlparse
 
 PORT = int(os.environ.get("SELKIES_SESSION_AUTH_PORT", "38082"))
 PASSWORD = os.environ.get("PASSWORD", "")
-SESSION_MODE = os.environ.get("SELKIES_SESSION_MODE", "pin-takeover")
 STATE_PATH = Path(os.environ.get("SELKIES_SESSION_STATE_PATH", "/run/selkies-runtime/active-session.json"))
 COOKIE_NAME = os.environ.get("SELKIES_SESSION_COOKIE_NAME", "selkies_session")
-COOKIE_PATH = os.environ.get("SELKIES_SESSION_COOKIE_PATH", os.environ.get("SUBFOLDER", "/") or "/")
-SLEEP_MANAGER_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("LOCAL_LINK_BRIDGE_PORT", "38084"))))
-SLEEP_MANAGER_URL = f"http://127.0.0.1:{SLEEP_MANAGER_PORT}/sleep"
-SLEEP_WAKE_TIMEOUT_SECONDS = float(os.environ.get("SELKIES_CONTAINER_SLEEP_WAKE_TIMEOUT_SECONDS", "45") or "45")
-SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "true").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-SLEEP_STATE_PATH = Path(os.environ.get("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-runtime/container-sleep.json"))
-UPLOAD_ENABLED = os.environ.get("SELKIES_UPLOAD_ENABLED", "true").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-UPLOAD_ROOT = os.environ.get("SELKIES_UPLOAD_DIR", os.environ.get("FILE_MANAGER_PATH", "/config/uploads"))
-UPLOAD_MAX_FILE_SIZE = int(os.environ.get("SELKIES_UPLOAD_MAX_FILE_SIZE", "2147483648"))
-UPLOAD_TOKEN_TTL_SECONDS = max(30, int(os.environ.get("SELKIES_UPLOAD_TOKEN_TTL_SECONDS", "300")))
-UPLOAD_CHUNK_SIZE = int(os.environ.get("SELKIES_UPLOAD_CHUNK_SIZE", "524288"))
-UPLOAD_MAX_CONCURRENCY = int(os.environ.get("SELKIES_UPLOAD_MAX_CONCURRENCY", "3"))
-UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
 def diagnostics_env_int(name, default, minimum, maximum=None):
     try:
         value = int(str(os.environ.get(name, default)).strip())
@@ -81,18 +48,6 @@ _diagnostics_active_date = None
 DIAGNOSTICS_LOCK = threading.RLock()
 
 
-def normalize_cookie_path(path):
-    path = str(path or "/")
-    if not path.startswith("/"):
-        path = "/" + path
-    if not path.endswith("/"):
-        path += "/"
-    return path
-
-
-COOKIE_PATH = normalize_cookie_path(COOKIE_PATH)
-
-
 def read_state():
     try:
         data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -103,20 +58,6 @@ def read_state():
     except Exception:
         pass
     return {}
-
-
-def write_state(state):
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
-    tmp_path.replace(STATE_PATH)
-
-
-def ensure_upload_signing_key(state):
-    state = dict(state or {})
-    if not state.get("upload_signing_key"):
-        state["upload_signing_key"] = secrets.token_urlsafe(48)
-    return state
 
 
 def token_digest(token):
@@ -174,47 +115,6 @@ def parse_session_identity_from_url(raw_url):
     return parse_session_identity_from_query(urlparse(raw_url or "").query)
 
 
-def sleep_manager_json(path, method="GET", timeout=1.0):
-    req = urllib.request.Request(f"{SLEEP_MANAGER_URL}{path}", method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            return resp.status, json.loads(body or "{}")
-    except urllib.error.HTTPError as exc:
-        try:
-            payload = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
-        except Exception:
-            payload = {}
-        return exc.code, payload
-    except Exception:
-        return 0, {}
-
-
-def is_container_sleeping():
-    status, payload = sleep_manager_json("/status", timeout=0.6)
-    if status == 200:
-        return bool(payload.get("sleeping"))
-    if not SLEEP_ENABLED:
-        return False
-    try:
-        state = json.loads(SLEEP_STATE_PATH.read_text(encoding="utf-8"))
-        return bool(isinstance(state, dict) and state.get("sleeping"))
-    except Exception:
-        return False
-
-
-def wake_container_for_pin():
-    if not is_container_sleeping():
-        return True
-    deadline = time.time() + max(1.0, SLEEP_WAKE_TIMEOUT_SECONDS)
-    while time.time() < deadline:
-        status, payload = sleep_manager_json("/wake", method="POST", timeout=10.0)
-        if status == 200 and payload.get("ok") and not payload.get("sleeping"):
-            return True
-        time.sleep(0.5)
-    return False
-
-
 def request_has_valid_session(handler):
     token = parse_cookie(handler.headers.get("Cookie"))
     if is_valid_token(token):
@@ -226,59 +126,6 @@ def request_has_valid_session(handler):
 
     session_id, session_epoch = parse_session_identity_from_url(handler.headers.get("X-Original-URI"))
     return is_valid_session_identity(session_id, session_epoch)
-
-
-def new_session():
-    now_ms = int(time.time() * 1000)
-    session_id = "sid_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")
-    token = "st_" + secrets.token_urlsafe(32)
-    state = ensure_upload_signing_key({
-        "session_id": session_id,
-        "session_epoch": now_ms,
-        "token_hash": token_digest(token),
-        "issued_at": now_ms,
-        "mode": SESSION_MODE,
-    })
-    write_state(state)
-    return token, state
-
-
-def base64url(data):
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def issue_upload_token():
-    state = ensure_upload_signing_key(read_state())
-    if not state.get("session_id") and not PASSWORD:
-        state.update(
-            {
-                "session_id": "anonymous",
-                "session_epoch": int(time.time() * 1000),
-                "issued_at": int(time.time() * 1000),
-                "mode": SESSION_MODE,
-            }
-        )
-    write_state(state)
-    now = int(time.time())
-    claims = {
-        "v": 1,
-        "sid": str(state.get("session_id") or ""),
-        "epoch": int(state.get("session_epoch") or 0),
-        "iat": now,
-        "exp": now + UPLOAD_TOKEN_TTL_SECONDS,
-        "root": UPLOAD_ROOT,
-        "max_file_size": UPLOAD_MAX_FILE_SIZE,
-        "overwrite": UPLOAD_ALLOW_OVERWRITE,
-    }
-    encoded = base64url(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    signature = base64url(
-        hmac.new(
-            str(state["upload_signing_key"]).encode("utf-8"),
-            encoded.encode("ascii"),
-            hashlib.sha256,
-        ).digest()
-    )
-    return f"{encoded}.{signature}", claims
 
 
 def diagnostics_day_stamp(ts):
@@ -411,18 +258,6 @@ def _append_diagnostics_unlocked(payload):
         stream.write(line)
 
 
-def cookie_header(token, max_age=None):
-    parts = [
-        f"{COOKIE_NAME}={token}",
-        f"Path={COOKIE_PATH}",
-        "HttpOnly",
-        "SameSite=Lax",
-    ]
-    if max_age is not None:
-        parts.append(f"Max-Age={int(max_age)}")
-    return "; ".join(parts)
-
-
 DOWNLOADS = None
 
 
@@ -479,56 +314,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "NOTIFICATION_BRIDGE_MODE_PATH", "/config/state/notification-bridge.json"))
             self.send_json(HTTPStatus.OK, build_identity_payload(read_discovery_state(state_path)))
             return
-        if path.startswith("/dock-download/"):
-            if not request_has_valid_session(self):
-                self.send_json(401, {"ok": False, "error": "session-expired"})
-                return
-            if DOWNLOADS is None:
-                self.send_json(503, {"ok": False, "error": "disabled"})
-                return
-            query = parse_qs(urlparse(self.path).query)
-            if path == "/dock-download/state":
-                self.send_json(200, DOWNLOADS.status(download_identity(), query.get("client", [""])[0]))
-            else:
-                self.send_json(404, {"ok": False})
-            return
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"ok": True})
-            return
-        if path == "/check":
-            if not PASSWORD:
-                self.send_empty(HTTPStatus.NO_CONTENT)
-                return
-            if is_container_sleeping():
-                # nginx auth_request only accepts 2xx, 401 and 403. A custom
-                # 418 becomes a 500 before the login-page error mapping runs.
-                self.send_empty(HTTPStatus.UNAUTHORIZED)
-                return
-            if not request_has_valid_session(self):
-                self.send_empty(HTTPStatus.UNAUTHORIZED)
-                return
-            self.send_empty(HTTPStatus.NO_CONTENT)
-            return
-        if path == "/session":
-            if not PASSWORD:
-                self.send_json(HTTPStatus.OK, {"ok": True, "enabled": False})
-                return
-            if not request_has_valid_session(self):
-                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "stale": True})
-                return
-            state = read_state()
-            sleeping = is_container_sleeping()
-            self.send_json(
-                HTTPStatus.OK,
-                {
-                    "ok": True,
-                    "enabled": True,
-                    "session_id": state.get("session_id", ""),
-                    "session_epoch": state.get("session_epoch", 0),
-                    "mode": state.get("mode", SESSION_MODE),
-                    "sleeping": sleeping,
-                },
-            )
             return
         self.send_empty(HTTPStatus.NOT_FOUND)
 
@@ -553,29 +340,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except ValueError as error:
                 self.send_json(409, {"ok": False, "error": str(error)})
             return
-        if path == "/upload-token":
-            if not UPLOAD_ENABLED:
-                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "disabled": True})
-                return
-            if not request_has_valid_session(self):
-                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "stale": True})
-                return
-            token, claims = issue_upload_token()
-            self.send_json(
-                HTTPStatus.OK,
-                {
-                    "ok": True,
-                    "token": token,
-                    "expires_at": claims["exp"],
-                    "session_id": claims["sid"],
-                    "session_epoch": claims["epoch"],
-                    "max_file_size": claims["max_file_size"],
-                    "overwrite": claims["overwrite"],
-                    "chunk_size": UPLOAD_CHUNK_SIZE,
-                    "max_concurrency": UPLOAD_MAX_CONCURRENCY,
-                },
-            )
-            return
         if path == "/diagnostics":
             if not request_has_valid_session(self):
                 self.send_empty(HTTPStatus.UNAUTHORIZED)
@@ -591,38 +355,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_empty(HTTPStatus.NO_CONTENT)
             return
-        if path == "/pin":
-            if not PASSWORD:
-                self.send_empty(HTTPStatus.NO_CONTENT)
-                return
-            pin = self.headers.get("X-PIN", "")
-            if not hmac.compare_digest(pin, PASSWORD):
-                self.send_empty(HTTPStatus.UNAUTHORIZED)
-                return
-            if not wake_container_for_pin():
-                self.send_json(
-                    HTTPStatus.SERVICE_UNAVAILABLE,
-                    {"ok": False, "wakeup_failed": True},
-                )
-                return
-            token, state = new_session()
-            self.send_json(
-                HTTPStatus.OK,
-                {
-                    "ok": True,
-                    "session_id": state["session_id"],
-                    "session_epoch": state["session_epoch"],
-                },
-                {"Set-Cookie": cookie_header(token)},
-            )
-            return
-        if path == "/logout":
-            token = parse_cookie(self.headers.get("Cookie"))
-            state = read_state()
-            if token and state.get("token_hash") == token_digest(token):
-                write_state({})
-            self.send_empty(HTTPStatus.NO_CONTENT, {"Set-Cookie": cookie_header("", 0)})
-            return
         self.send_empty(HTTPStatus.NOT_FOUND)
 
 
@@ -635,19 +367,6 @@ if __name__ == "__main__":
             with DIAGNOSTICS_LOCK:
                 rotate_diagnostics_file(time.time())
     threading.Thread(target=maintain_diagnostics, daemon=True).start()
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    initial_state = ensure_upload_signing_key(read_state())
-    if not initial_state.get("session_id") and not PASSWORD:
-        now_ms = int(time.time() * 1000)
-        initial_state.update(
-            {
-                "session_id": "anonymous",
-                "session_epoch": now_ms,
-                "issued_at": now_ms,
-                "mode": SESSION_MODE,
-            }
-        )
-    write_state(initial_state)
     if (os.getenv("SELKIES_DROP_DOWNLOAD_ENABLED", "true").lower() in ("1", "true", "yes")
             and "download" in os.getenv("SELKIES_FILE_TRANSFERS", "upload,download")
             and os.getenv("HARDEN_DESKTOP", "false").lower() not in ("1", "true", "yes")):
