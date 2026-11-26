@@ -4,7 +4,7 @@ Branch: `AXiVer`
 
 ## Scope
 
-Full-frame `x264enc` now uses the private, pinned Pixelflux 2.2.3 runtime through `selkies/h264_capture.py`, sharing the same runtime loader as HEVC and AV1. H.264 no longer falls back to the old H.264 capture path when the private runtime or hardware encoder fails.
+Full-frame `x264enc` now uses the upgraded, pinned Pixelflux 2.2.3 runtime through `selkies/h264_capture.py`, sharing the same runtime loader as HEVC and AV1. H.264 no longer falls back to the old H.264 capture path when the private runtime or hardware encoder fails.
 
 - H.264 hardware encoding is selected through the same VA-API render node used by HEVC/AV1.
 - CPU H.264 remains available only when the existing `use_cpu` setting explicitly requests it.
@@ -17,9 +17,7 @@ Full-frame `x264enc` now uses the private, pinned Pixelflux 2.2.3 runtime throug
 
 ## Runtime boundary
 
-The private Pixelflux 2.2.3 wheel is installed under `/opt/selkies-pixelflux`. The loader remains isolated from the base image's `pixelflux` import namespace.
-
-The base image's original Pixelflux package is still used by `x264enc-striped` and JPEG capture, which retain the existing `StripeCallback` ABI. This is not an H.264 full-frame fallback. Removing that remaining dependency requires a separate migration of the striped/JPEG callback and settings adapters.
+The base image's Pixelflux package is upgraded in place to 2.2.3. H.264, HEVC and AV1 use the same installed module; there is no duplicate private wheel, legacy `StripeCallback` capture path, striped H.264 mode or JPEG video mode.
 
 ## Verification
 
@@ -31,7 +29,7 @@ Added `tests/test_h264_capture.py` covering:
 - Hardware capability and runtime demotion rejection.
 - Missing-IDR timeout and cleanup.
 - Live frame-rate, Paint-over and quality updates.
-- Server routing of full-frame H.264 to the new adapter while keeping the striped/JPEG path separate.
+- Server routing of full-frame H.264 to the new adapter and no longer exposes the legacy striped/JPEG paths.
 
 The repository does not currently run this Python suite automatically on every branch push. Run it in the project build/test environment:
 
