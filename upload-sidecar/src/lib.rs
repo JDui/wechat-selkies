@@ -31,6 +31,7 @@ pub mod native;
 pub mod local_link;
 pub mod sleep;
 pub mod download;
+pub mod preferences;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -147,6 +148,7 @@ pub struct AppState {
     local_links: Arc<local_link::LocalLinkQueue>,
     sleep: Arc<sleep::SleepManager>,
     downloads: Arc<download::DownloadManager>,
+    preferences: Arc<preferences::PreferencesStore>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,6 +282,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
     );
     let downloads = Arc::new(download::DownloadManager::new(download_config)?);
     downloads.start_cleanup();
+    let preferences = Arc::new(preferences::PreferencesStore::from_env());
     let state = AppState {
         permits: Arc::new(Semaphore::new(config.max_concurrency)),
         config: Arc::new(config),
@@ -289,6 +292,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         local_links: Arc::new(local_link::LocalLinkQueue::new(local_link_max_events)),
         sleep,
         downloads,
+        preferences,
     };
     start_session_cleanup(&state);
     Ok(state)
@@ -425,6 +429,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sleep/activity", post(sleep_activity))
         .route("/sleep/wake", post(sleep_wake))
         .route("/sleep/sleep", post(sleep_manual))
+        .route("/preferences", get(preferences_get).post(preferences_update))
         .route("/native-download/jobs", post(download_create))
         .route("/native-download/state", get(download_state))
         .route("/native-download/file/{id}", get(download_stream))
@@ -490,6 +495,40 @@ async fn local_link_pull(
 
 async fn local_link_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true }))
+}
+
+async fn preferences_get(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let store = state.preferences.clone();
+    let preferences = tokio::task::spawn_blocking(move || store.read())
+        .await
+        .map_err(internal_error)?
+        .map_err(|error| ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "preferences_read_failed",
+            error.to_string(),
+        ))?;
+    Ok(Json(serde_json::json!({ "ok": true, "preferences": preferences })))
+}
+
+async fn preferences_update(
+    State(state): State<AppState>,
+    Json(patch): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let store = state.preferences.clone();
+    let preferences = tokio::task::spawn_blocking(move || store.update(patch))
+        .await
+        .map_err(internal_error)?
+        .map_err(|error| {
+            let status = if matches!(error, preferences::PreferencesError::Invalid(_)) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            ApiError::new(status, "preferences_update_failed", error.to_string())
+        })?;
+    Ok(Json(serde_json::json!({ "ok": true, "preferences": preferences })))
 }
 
 async fn sleep_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
