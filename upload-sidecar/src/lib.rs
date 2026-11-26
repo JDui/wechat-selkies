@@ -563,23 +563,24 @@ struct DownloadStreamQuery {
 
 struct DownloadStreamState {
     file: tokio::fs::File,
-    manager: Arc<download::DownloadManager>,
+    manager: Option<Arc<download::DownloadManager>>,
     id: String,
     token: String,
     session_id: String,
     session_epoch: u64,
-    finished: bool,
 }
 
 impl Drop for DownloadStreamState {
     fn drop(&mut self) {
-        self.manager.finish_file(
-            &self.id,
-            &self.token,
-            &self.session_id,
-            self.session_epoch,
-            self.finished,
-        );
+        if let Some(manager) = self.manager.take() {
+            manager.finish_file(
+                &self.id,
+                &self.token,
+                &self.session_id,
+                self.session_epoch,
+                false,
+            );
+        }
     }
 }
 
@@ -658,21 +659,29 @@ async fn download_stream(
     };
     let stream_state = DownloadStreamState {
         file,
-        manager: state.downloads.clone(),
+        manager: Some(state.downloads.clone()),
         id,
         token: query.token,
         session_id,
         session_epoch,
-        finished: false,
     };
     let stream = futures_util::stream::try_unfold(stream_state, |mut stream_state| async move {
-        if !stream_state.manager.session_matches(&stream_state.session_id, stream_state.session_epoch) {
+        let manager = stream_state.manager.as_ref().expect("download stream manager is present");
+        if !manager.session_matches(&stream_state.session_id, stream_state.session_epoch) {
             return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "session changed"));
         }
         let mut buffer = vec![0_u8; 1024 * 1024];
         let count = stream_state.file.read(&mut buffer).await?;
         if count == 0 {
-            stream_state.finished = true;
+            if let Some(manager) = stream_state.manager.take() {
+                manager.finish_file(
+                    &stream_state.id,
+                    &stream_state.token,
+                    &stream_state.session_id,
+                    stream_state.session_epoch,
+                    true,
+                );
+            }
             return Ok(None);
         }
         buffer.truncate(count);
