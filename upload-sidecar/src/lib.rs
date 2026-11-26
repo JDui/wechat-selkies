@@ -149,7 +149,8 @@ pub struct AppState {
     started_at: Instant,
     local_links: Arc<local_link::LocalLinkQueue>,
     sleep: Arc<sleep::SleepManager>,
-    downloads: Arc<download::DownloadManager>,
+    downloads: Option<Arc<download::DownloadManager>>,
+    checksum_permits: Arc<Semaphore>,
     preferences: Arc<preferences::PreferencesStore>,
     auth: Arc<auth::AuthManager>,
 }
@@ -292,8 +293,26 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         config.download_cache_root.clone(),
         config.download_root.clone(),
     );
-    let downloads = Arc::new(download::DownloadManager::new(download_config)?);
-    downloads.start_cleanup();
+    let flag = |name: &str, default: bool| std::env::var(name).ok()
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default);
+    let transfers = std::env::var("SELKIES_FILE_TRANSFERS").unwrap_or_else(|_| "upload,download".into());
+    let downloads = if flag("SELKIES_DROP_DOWNLOAD_ENABLED", true)
+        && !flag("HARDEN_DESKTOP", false)
+        && transfers.split(',').any(|item| item.trim() == "download")
+    {
+        match download::DownloadManager::new(download_config) {
+            Ok(manager) => {
+                let manager = Arc::new(manager);
+                manager.start_cleanup();
+                Some(manager)
+            }
+            Err(error) => {
+                warn!(%error, "native downloads disabled: cache initialization failed");
+                None
+            }
+        }
+    } else { None };
     let preferences = Arc::new(preferences::PreferencesStore::from_env());
     let state = AppState {
         permits: Arc::new(Semaphore::new(config.max_concurrency)),
@@ -304,6 +323,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         local_links: Arc::new(local_link::LocalLinkQueue::new(local_link_max_events)),
         sleep,
         downloads,
+        checksum_permits: Arc::new(Semaphore::new(1)),
         preferences,
         auth,
     };
@@ -677,27 +697,28 @@ struct DownloadStreamQuery {
     token: String,
 }
 
-struct DownloadStreamState {
-    file: tokio::fs::File,
-    manager: Option<Arc<download::DownloadManager>>,
+struct DownloadLease {
+    manager: Arc<download::DownloadManager>,
     id: String,
     token: String,
     session_id: String,
     session_epoch: u64,
+    complete: bool,
+    _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-impl Drop for DownloadStreamState {
+impl Drop for DownloadLease {
     fn drop(&mut self) {
-        if let Some(manager) = self.manager.take() {
-            manager.finish_file(
-                &self.id,
-                &self.token,
-                &self.session_id,
-                self.session_epoch,
-                false,
-            );
-        }
+        self.manager.finish_file(
+            &self.id, &self.token, &self.session_id, self.session_epoch, self.complete,
+        );
     }
+}
+
+struct DownloadStreamState {
+    file: tokio::fs::File,
+    lease: DownloadLease,
+    remaining: u64,
 }
 
 fn content_disposition_name(name: &str) -> String {
@@ -720,7 +741,8 @@ async fn download_create(
     State(state): State<AppState>,
     Json(request): Json<DownloadCreateRequest>,
 ) -> Result<(StatusCode, Json<download::DownloadJobStatus>), ApiError> {
-    let result = state.downloads.create_job(
+    let manager = state.downloads.as_ref().ok_or_else(download_disabled)?;
+    let result = manager.create_job(
         request.source,
         request.session_id,
         request.session_epoch,
@@ -751,59 +773,71 @@ async fn download_create(
 async fn download_state(
     State(state): State<AppState>,
     Query(query): Query<DownloadStateQuery>,
-) -> Json<download::DownloadStatus> {
-    Json(state.downloads.status(&query.sid, query.epoch, &query.client))
+) -> Result<Json<download::DownloadStatus>, ApiError> {
+    let manager = state.downloads.as_ref().ok_or_else(download_disabled)?;
+    Ok(Json(manager.status(&query.sid, query.epoch, &query.client)))
+}
+
+fn download_disabled() -> ApiError {
+    ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "disabled", "native download unavailable")
 }
 
 async fn download_stream(
     State(state): State<AppState>,
+    method: axum::http::Method,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
     Query(query): Query<DownloadStreamQuery>,
 ) -> Result<Response, ApiError> {
-    let (session_id, session_epoch) = state.downloads.current_identity()
-        .map_err(|error| ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", &error))?;
-    let info = state.downloads.verify_file(&id, &query.token, &session_id, session_epoch)
-        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
-    let path = state.downloads.cache_file(&id)
-        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
-    let file = match tokio::fs::File::open(path).await {
-        Ok(file) => file,
-        Err(error) => {
-            state.downloads.finish_file(&id, &query.token, &session_id, session_epoch, false);
-            return Err(internal_error(error));
-        }
+    // Axum's GET router also handles HEAD. HEAD must not reserve a one-time token.
+    if method != axum::http::Method::GET {
+        return Err(ApiError::new(StatusCode::METHOD_NOT_ALLOWED, "method-not-allowed", "GET required"));
+    }
+    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
+    let original_uri = headers.get("x-original-uri").and_then(|value| value.to_str().ok());
+    if state.sleep.is_sleeping() || !state.auth.is_valid_request(cookie, None, original_uri) {
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired"));
+    }
+    let manager = state.downloads.as_ref().ok_or_else(download_disabled)?.clone();
+    let permit = manager.try_stream_permit()
+        .map_err(|error| ApiError::new(StatusCode::TOO_MANY_REQUESTS, "download-busy", error))?;
+    let (session_id, session_epoch) = manager.current_identity()
+        .map_err(|error| ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", error))?;
+    let info = manager.verify_file(&id, &query.token, &session_id, session_epoch)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", error))?;
+    // Install the guard before any await so cancellation cannot strand the job.
+    let lease = DownloadLease {
+        manager: manager.clone(), id, token: query.token, session_id, session_epoch,
+        complete: false, _permit: permit,
     };
-    let stream_state = DownloadStreamState {
-        file,
-        manager: Some(state.downloads.clone()),
-        id,
-        token: query.token,
-        session_id,
-        session_epoch,
-    };
+    let path = manager.cache_file(&lease.id)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", error))?;
+    let file = tokio::fs::File::open(path).await.map_err(internal_error)?;
+    let stream_state = DownloadStreamState { file, lease, remaining: info.size };
     let stream = futures_util::stream::try_unfold(stream_state, |mut stream_state| async move {
-        let manager = stream_state.manager.as_ref().expect("download stream manager is present");
-        if !manager.session_matches(&stream_state.session_id, stream_state.session_epoch) {
+        if stream_state.remaining == 0 {
+            stream_state.lease.complete = true;
+            return Ok::<_, std::io::Error>(None);
+        }
+        let manager = stream_state.lease.manager.clone();
+        let sid = stream_state.lease.session_id.clone();
+        let epoch = stream_state.lease.session_epoch;
+        let valid = tokio::task::spawn_blocking(move || manager.session_matches(&sid, epoch))
+            .await.map_err(std::io::Error::other)?;
+        if !valid {
             return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "session changed"));
         }
-        let mut buffer = vec![0_u8; 1024 * 1024];
+        let mut buffer = vec![0_u8; stream_state.remaining.min(1024 * 1024) as usize];
         let count = stream_state.file.read(&mut buffer).await?;
         if count == 0 {
-            if let Some(manager) = stream_state.manager.take() {
-                manager.finish_file(
-                    &stream_state.id,
-                    &stream_state.token,
-                    &stream_state.session_id,
-                    stream_state.session_epoch,
-                    true,
-                );
-            }
-            return Ok(None);
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "download cache truncated"));
         }
         buffer.truncate(count);
+        stream_state.remaining -= count as u64;
+        // A Content-Length response may not be polled again after its final chunk.
+        stream_state.lease.complete = stream_state.remaining == 0;
         Ok(Some((Bytes::from(buffer), stream_state)))
     });
-    let body = Body::from_stream(stream);
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/octet-stream")
@@ -811,10 +845,9 @@ async fn download_stream(
         .header("Content-Length", info.size.to_string())
         .header("Cache-Control", "no-store")
         .header("X-Content-Type-Options", "nosniff")
-        .body(body)
+        .body(Body::from_stream(stream))
         .map_err(internal_error)
 }
-
 
 async fn create_session(
     State(state): State<AppState>,
@@ -909,14 +942,11 @@ async fn put_chunk(
     request: Request,
 ) -> Result<Json<SessionResponse>, ApiError> {
     let claims = authenticate(&state, &headers).await?;
-    let permit = state
-        .permits
-        .clone()
-        .acquire_owned()
+    let permit = state.permits.clone().try_acquire_owned()
+        .map_err(|_| ApiError::new(StatusCode::TOO_MANY_REQUESTS, "upload-busy", "upload workers busy; retry"))?;
+    let body = tokio::time::timeout(Duration::from_secs(60), to_bytes(request.into_body(), state.config.chunk_size))
         .await
-        .map_err(internal_error)?;
-    let body = to_bytes(request.into_body(), state.config.chunk_size)
-        .await
+        .map_err(|_| ApiError::new(StatusCode::REQUEST_TIMEOUT, "upload-timeout", "upload chunk timed out"))?
         .map_err(|_| {
             ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -1006,7 +1036,8 @@ async fn complete_session(
         ));
     }
     if let Some(checksum) = &record.checksum {
-        verify_checksum(source.clone(), checksum.clone()).await?;
+        let permit = state.checksum_permits.clone().acquire_owned().await.map_err(internal_error)?;
+        verify_checksum(source.clone(), checksum.clone(), permit).await?;
     }
     let relative = validate_relative_path(&record.file_name, &state.config.allowed_subdirs)?;
     let destination = ensure_target_safe(&state, &relative, true).await?;
@@ -1068,6 +1099,9 @@ async fn delete_session(
 }
 
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<TokenClaims, ApiError> {
+    if !state.auth.upload_enabled() {
+        return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "upload-disabled", "upload disabled"));
+    }
     let value = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
@@ -1344,9 +1378,10 @@ fn atomic_link_move(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::remove_file(source)
 }
 
-async fn verify_checksum(path: PathBuf, checksum: ChecksumRequest) -> Result<(), ApiError> {
+async fn verify_checksum(path: PathBuf, checksum: ChecksumRequest, permit: tokio::sync::OwnedSemaphorePermit) -> Result<(), ApiError> {
     let actual = tokio::task::spawn_blocking(move || -> Result<String, std::io::Error> {
         use std::io::Read;
+        let _permit = permit;
         let mut file = std::fs::File::open(path)?;
         let mut buffer = vec![0_u8; 1024 * 1024];
         match checksum.algorithm {

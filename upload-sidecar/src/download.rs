@@ -14,7 +14,7 @@ use std::{
 
 use fs2::available_space;
 use serde::Serialize;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -126,6 +126,7 @@ pub struct DownloadManager {
     config: DownloadConfig,
     jobs: Mutex<HashMap<String, DownloadJob>>,
     permits: Arc<Semaphore>,
+    stream_permits: Arc<Semaphore>,
 }
 
 impl DownloadManager {
@@ -153,6 +154,9 @@ impl DownloadManager {
                 return Err("download cache contains foreign entries".into());
             }
         }
+        if !marker.exists() && fs::read_dir(&cache_root).map_err(|error| error.to_string())?.next().is_some() {
+            return Err("download cache is not marked as owned".into());
+        }
         if marker.exists() {
             if fs::symlink_metadata(&marker).map(|metadata| metadata.file_type().is_symlink()).unwrap_or(false) || fs::read_to_string(&marker).ok().as_deref() != Some("selkies native download cache v1\n") {
                 return Err("download cache ownership marker mismatch".into());
@@ -174,6 +178,7 @@ impl DownloadManager {
         config.download_root = download_root;
         Ok(Self {
             permits: Arc::new(Semaphore::new(config.max_concurrency)),
+            stream_permits: Arc::new(Semaphore::new(config.max_concurrency)),
             config,
             jobs: Mutex::new(HashMap::new()),
         })
@@ -263,7 +268,7 @@ impl DownloadManager {
             name: job.name.clone(),
             size: job.size,
             error: job.error.clone(),
-            token: if include_token && job.state == "ready" && !job.used {
+            token: if include_token && job.state == "ready" && !job.used && !job.active && job.expires_at >= unix_seconds() {
                 Some(job.token.clone())
             } else {
                 None
@@ -272,6 +277,9 @@ impl DownloadManager {
     }
 
     pub fn status(&self, session_id: &str, session_epoch: u64, client: &str) -> DownloadStatus {
+        if !self.session_matches(session_id, session_epoch) {
+            return DownloadStatus { ok: false, jobs: Vec::new() };
+        }
         let jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
         let mut selected = jobs.values()
             .filter(|job| job.session_id == session_id && job.session_epoch == session_epoch && job.client == client)
@@ -281,11 +289,15 @@ impl DownloadManager {
                 name: job.name.clone(),
                 size: job.size,
                 error: job.error.clone(),
-                token: if job.state == "ready" && !job.used { Some(job.token.clone()) } else { None },
+                token: if job.state == "ready" && !job.used && !job.active && job.expires_at >= unix_seconds() { Some(job.token.clone()) } else { None },
             })
             .collect::<Vec<_>>();
         selected.sort_by_key(|job| job.id.clone());
         DownloadStatus { ok: true, jobs: selected }
+    }
+
+    pub fn try_stream_permit(&self) -> Result<OwnedSemaphorePermit, String> {
+        self.stream_permits.clone().try_acquire_owned().map_err(|_| "download-busy".into())
     }
 
     pub fn verify_file(
@@ -298,7 +310,7 @@ impl DownloadManager {
         self.validate_session(session_id, session_epoch)?;
         let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
         let job = jobs.get_mut(id).ok_or_else(|| "session-or-job-expired".to_string())?;
-        if job.session_id != session_id || job.session_epoch != session_epoch || job.used ||
+        if job.session_id != session_id || job.session_epoch != session_epoch || job.used || job.active ||
             job.state != "ready" || job.expires_at < unix_seconds() ||
             !constant_time_eq(job.token.as_bytes(), token.as_bytes()) {
             return Err("session-or-job-expired".into());
@@ -348,8 +360,11 @@ impl DownloadManager {
             ))
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
+        for id in &expired {
+            jobs.remove(id);
+        }
+        drop(jobs);
         for id in expired {
-            jobs.remove(&id);
             for suffix in ["part", "data"] {
                 let _ = fs::remove_file(self.config.cache_root.join(format!("{id}.{suffix}")));
             }
@@ -543,6 +558,7 @@ fn default_source_roots() -> Vec<PathBuf> {
         .map(|name| home.join(name))
         .collect::<Vec<_>>();
     let qq = home.join(".config/QQ");
+    let ordinary_roots = roots.len();
     if let Ok(entries) = fs::read_dir(&qq) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -560,6 +576,14 @@ fn default_source_roots() -> Vec<PathBuf> {
                 }
             }
         }
+    }
+    let qq_root = qq.canonicalize().ok();
+    let qq_roots = roots.split_off(ordinary_roots);
+    if let Some(qq_root) = qq_root {
+        roots.extend(qq_roots.into_iter().filter_map(|path| {
+            let resolved = path.canonicalize().ok()?;
+            (resolved.starts_with(&qq_root) && resolved.is_dir()).then_some(resolved)
+        }));
     }
     roots
 }
@@ -686,6 +710,9 @@ mod tests {
         let ready = ready.expect("download should become ready");
         let token = ready.token.expect("ready job exposes a one-time token");
         let info = manager.verify_file(&job.id, &token, "sid_test", 42).unwrap();
+        assert!(manager.verify_file(&job.id, &token, "sid_test", 42).is_err());
+        assert!(manager.status("sid_test", 42, &"a".repeat(32)).jobs[0].token.is_none());
+        assert!(manager.status("wrong", 42, &"a".repeat(32)).jobs.is_empty());
         assert_eq!(info.name, "sample.bin");
         assert_eq!(fs::read(manager.cache_file(&job.id).unwrap()).unwrap(), b"rust-transfer-payload");
 

@@ -100,6 +100,10 @@ impl AuthManager {
         Ok(())
     }
 
+    pub fn upload_enabled(&self) -> bool {
+        self.config.upload_enabled
+    }
+
     pub fn password_enabled(&self) -> bool {
         !self.config.password.is_empty()
     }
