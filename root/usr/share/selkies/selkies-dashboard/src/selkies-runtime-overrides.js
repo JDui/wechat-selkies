@@ -3821,9 +3821,6 @@
   function encoderMode(encoder) {
     var name = String(encoder || "").trim().toLowerCase();
     var useCpu = readUseCpuHint(true);
-    if (CPU_ONLY_ENCODERS.has(name)) {
-      return "CPU";
-    }
     if (VAAPI_ENCODER_HINTS.has(name) && sanitizeBool(runtime.driAvailable, false)) {
       return "VAAPI";
     }
