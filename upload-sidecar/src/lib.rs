@@ -573,10 +573,11 @@ async fn download_create(
         Ok(job) => Ok((StatusCode::ACCEPTED, Json(job))),
         Err(error) => {
             let (status, code) = match error.as_str() {
-                "already-preparing" | "queue-full" => (StatusCode::CONFLICT, error.as_str()),
-                "session-expired" => (StatusCode::UNAUTHORIZED, error.as_str()),
-                "invalid-client" => (StatusCode::BAD_REQUEST, error.as_str()),
-                _ => (StatusCode::BAD_REQUEST, error.as_str()),
+                "already-preparing" => (StatusCode::CONFLICT, "already-preparing"),
+                "queue-full" => (StatusCode::CONFLICT, "queue-full"),
+                "session-expired" => (StatusCode::UNAUTHORIZED, "session-expired"),
+                "invalid-client" => (StatusCode::BAD_REQUEST, "invalid-client"),
+                _ => (StatusCode::BAD_REQUEST, "download-error"),
             };
             Err(ApiError::new(status, code, &error))
         }
