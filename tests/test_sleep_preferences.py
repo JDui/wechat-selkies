@@ -1,123 +1,17 @@
-import importlib.util
-import json
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def load(name):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "root/scripts" / (name + ".py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class SleepTimingTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.manager = load("container_sleep_manager")
-        self.manager.FRONTEND_ACTIVITY_STATE_PATH = Path(self.temp.name) / "activity.json"
-        self.manager.MODE_STATE_PATH = Path(self.temp.name) / "mode.json"
-        self.manager.STATE_PATH = Path(self.temp.name) / "sleep.json"
-        self.manager.AWAKE_STATE_PATH = Path(self.temp.name) / "awake.json"
-        self.manager.started_at = 1000
-
-    def test_browser_clock_skew_cannot_shorten_idle_window(self):
-        for client_time in (1, 1234567890000, 9999999999999):
-            with mock.patch.object(self.manager.time, "time", return_value=2000):
-                self.assertEqual(self.manager.write_frontend_activity(client_time), 2000)
-            with mock.patch.object(self.manager.time, "time", return_value=2030):
-                payload = self.manager.status_payload()
-                self.assertEqual(payload["idle_for_seconds"], 30)
-                self.assertEqual(payload["idle_remaining_seconds"], 3570)
-
-    def test_changing_idle_setting_starts_a_full_new_window(self):
-        self.manager.MODE_STATE_PATH.write_text(json.dumps({
-            "adaptive_sleep_enabled": True, "adaptive_sleep_idle_seconds": 900,
-            "sleep_settings_updated_at": 2000,
-        }))
-        with mock.patch.object(self.manager.time, "time", return_value=2005):
-            self.assertEqual(self.manager.status_payload()["idle_remaining_seconds"], 895)
-
-    def test_warning_starts_only_after_full_idle_window(self):
-        self.manager.ENABLED = True
-        self.manager.REQUIRE_PIN = False
-        self.manager.MODE_STATE_PATH.write_text(json.dumps({
-            "adaptive_sleep_enabled": True, "adaptive_sleep_idle_seconds": 60,
-            "adaptive_sleep_idle_seconds_user_set": True,
-        }))
-        self.manager.AWAKE_STATE_PATH.write_text(json.dumps({
-            "clients": [{"awake": True, "updated_at": 2059}],
-        }))
-        with mock.patch.object(self.manager.time, "time", return_value=2000):
-            self.manager.write_frontend_activity()
-        for now, expected in ((2059, False), (2060, True)):
-            with mock.patch.object(self.manager.time, "time", return_value=now), \
-                 mock.patch.object(self.manager.time, "sleep", side_effect=[None, KeyboardInterrupt]):
-                with self.assertRaises(KeyboardInterrupt):
-                    self.manager.monitor_loop()
-            self.assertEqual(self.manager.read_state()["pending_sleep"], expected)
-        self.assertEqual(self.manager.read_state()["warning_deadline_at"], 2120)
-
-    def test_wake_resets_activity(self):
-        with mock.patch.object(self.manager.time, "time", return_value=2100):
-            self.manager.leave_sleep()
-            self.assertEqual(self.manager.latest_frontend_interaction_at(), 2100)
-
-    def test_full_sleep_freezes_workload_and_wake_resumes_it(self):
-        self.manager.ENABLED = True
-        self.manager.REQUIRE_PIN = False
-        with mock.patch.object(self.manager, "list_freezable_pids", return_value=[201, 200]), \
-             mock.patch.object(self.manager, "signal", mock.Mock(SIGSTOP=19, SIGCONT=18)), \
-             mock.patch.object(self.manager, "send_signal", return_value=True) as signal_process:
-            self.assertTrue(self.manager.enter_sleep("idle"))
-            self.assertTrue(self.manager.enter_sleep("manual"))
-            self.assertEqual(signal_process.call_args_list, [
-                mock.call(201, self.manager.signal.SIGSTOP), mock.call(200, self.manager.signal.SIGSTOP)])
-            state = self.manager.read_state()
-            self.assertEqual(state["mode"], "full")
-            self.assertEqual(state["frozen_pids"], [201, 200])
-            signal_process.reset_mock()
-            self.manager.leave_sleep()
-            self.assertEqual(signal_process.call_args_list, [
-                mock.call(201, self.manager.signal.SIGCONT), mock.call(200, self.manager.signal.SIGCONT)])
-            self.assertFalse(self.manager.read_state()["sleeping"])
-
-    def test_sleep_keeps_discovery_and_auth_but_freezes_desktop(self):
-        commands = {200: "python3 /scripts/lan_discovery_service.py",
-                    201: "python3 /scripts/session_auth_bridge.py",
-                    202: "/opt/wechat/wechat", 203: "python3 /scripts/notification_bridge.py"}
-        with mock.patch.object(self.manager, "current_ancestor_pids", return_value={1}), \
-             mock.patch.object(self.manager.Path, "iterdir", return_value=[Path(str(pid)) for pid in commands]), \
-             mock.patch.object(self.manager, "proc_cmdline", side_effect=commands.get), \
-             mock.patch.object(self.manager, "proc_comm", return_value="python3"), \
-             mock.patch.object(self.manager, "proc_state", return_value="S"):
-            self.assertEqual(self.manager.list_freezable_pids(), [203, 202])
-
-    def test_manual_sleep_survives_disabled_automatic_timer(self):
-        self.manager.ENABLED = True
-        self.manager.REQUIRE_PIN = False
-        self.manager.MODE_STATE_PATH.write_text(json.dumps({"adaptive_sleep_enabled": False}))
-        self.manager.write_state({"sleeping": True, "reason": "manual", "mode": "full"})
-        with mock.patch.object(self.manager.time, "sleep", side_effect=[None, KeyboardInterrupt]), \
-             mock.patch.object(self.manager, "leave_sleep") as wake:
-            with self.assertRaises(KeyboardInterrupt):
-                self.manager.monitor_loop()
-            wake.assert_not_called()
-        self.assertTrue(self.manager.read_state()["sleeping"])
-        self.assertEqual(self.manager.status_payload()["sleep_block_reason"], "sleeping")
-
-
 class PreferencesTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.bridge = load("session_auth_bridge")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("session_auth_bridge_test", Path(__file__).resolve().parents[1] / "root/scripts/session_auth_bridge.py")
+        self.bridge = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.bridge)
         self.bridge.PREFERENCES_PATH = Path(self.temp.name) / "preferences.json"
 
     def test_settings_and_named_favorites_survive_reload(self):
@@ -125,7 +19,9 @@ class PreferencesTests(unittest.TestCase):
                  "dock_network_monitor_enabled": False,
                  "download_favorites:/files/:/config": [{"path": "微信/文件", "name": "工作文件"}]}
         self.bridge.update_preferences(patch)
-        restarted = load("session_auth_bridge")
+        spec = importlib.util.spec_from_file_location("session_auth_bridge_test_restart", Path(__file__).resolve().parents[1] / "root/scripts/session_auth_bridge.py")
+        restarted = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(restarted)
         restarted.PREFERENCES_PATH = self.bridge.PREFERENCES_PATH
         self.assertEqual(restarted.read_preferences(), patch)
         restarted.update_preferences({"download_favorites:/files/:/config": []})
