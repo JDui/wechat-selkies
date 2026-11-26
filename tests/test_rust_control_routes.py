@@ -8,6 +8,24 @@ class RustControlRouteTests(unittest.TestCase):
     def read(self, relative):
         return (ROOT / relative).read_text(encoding="utf-8")
 
+    def test_session_auth_endpoints_are_owned_by_rust(self):
+        nginx = self.read("root/defaults/default.conf")
+        rust = self.read("upload-sidecar/src/lib.rs")
+        bridge = self.read("root/scripts/session_auth_bridge.py")
+        for route in [
+            "auth/check", "auth/pin", "auth/logout",
+            "auth/session", "auth/upload-token", "auth/dock-download/state",
+        ]:
+            self.assertIn(f"/{route}", rust)
+        self.assertNotIn('if path == "/check":', bridge)
+        self.assertNotIn('if path == "/pin":', bridge)
+        self.assertNotIn('if path == "/logout":', bridge)
+        self.assertNotIn('if path == "/session":', bridge)
+        self.assertNotIn('if path == "/upload-token":', bridge)
+        self.assertIn("CUPLOAD/auth/check", nginx)
+        self.assertIn("CUPLOAD/auth/pin", nginx)
+        self.assertIn("CUPLOAD/auth/upload-token", nginx)
+
     def test_preferences_api_is_served_by_rust_sidecar(self):
         nginx = self.read("root/defaults/default.conf")
         rust = self.read("upload-sidecar/src/lib.rs")
