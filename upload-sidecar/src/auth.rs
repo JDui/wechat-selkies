@@ -9,7 +9,6 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use url::form_urlencoded;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -304,14 +303,47 @@ impl AuthManager {
 fn parse_session_identity(query: &str) -> (String, String) {
     let mut session_id = String::new();
     let mut epoch = String::new();
-    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
-        match key.as_ref() {
-            "selkies_session_id" => session_id = value.into_owned(),
-            "selkies_session_epoch" => epoch = value.into_owned(),
+    for pair in query.trim_start_matches('?').split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else { continue; };
+        let key = decode_query_component(raw_key);
+        let value = decode_query_component(raw_value);
+        match key.as_str() {
+            "selkies_session_id" => session_id = value,
+            "selkies_session_epoch" => epoch = value,
             _ => {}
         }
     }
     (session_id, epoch)
+}
+
+fn decode_query_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16);
+                let low = (bytes[index + 2] as char).to_digit(16);
+                if let (Some(high), Some(low)) = (high, low) {
+                    decoded.push(((high << 4) | low) as u8);
+                    index += 3;
+                } else {
+                    decoded.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn token_digest(token: &str) -> String {
