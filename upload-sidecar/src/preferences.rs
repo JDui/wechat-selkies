@@ -51,6 +51,12 @@ impl std::fmt::Display for PreferencesError {
 
 impl std::error::Error for PreferencesError {}
 
+impl From<serde_json::Error> for PreferencesError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
+}
+
 pub struct PreferencesStore {
     path: PathBuf,
     lock: Mutex<()>,
