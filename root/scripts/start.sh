@@ -60,19 +60,6 @@ start_notification_daemon() {
     fi
 }
 
-start_local_link_bridge() {
-    if ! pgrep -f "/scripts/local_link_bridge.py" >/dev/null 2>&1; then
-        LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
-        LOCAL_LINK_BRIDGE_LOG_MAX_BYTES="${LOCAL_LINK_BRIDGE_LOG_MAX_BYTES:-1048576}"
-        if ensure_log_dir "$LOCAL_LINK_BRIDGE_LOG_PATH"; then
-            nohup bash -c 'set -o pipefail; nice -n 10 python3 -u /scripts/local_link_bridge.py 2>&1 | nice -n 10 python3 -u /scripts/size_limited_log_writer.py "$1" "$2"' \
-                _ "$LOCAL_LINK_BRIDGE_LOG_PATH" "$LOCAL_LINK_BRIDGE_LOG_MAX_BYTES" >/dev/null 2>&1 &
-        else
-            nohup nice -n 10 python3 -u /scripts/local_link_bridge.py >/tmp/local-link-bridge.log 2>&1 &
-        fi
-    fi
-}
-
 start_notification_bridge() {
     if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
         nohup nice -n 10 /scripts/run-notification-bridge.sh >/dev/null 2>&1 &
@@ -128,73 +115,6 @@ start_container_sleep_manager() {
             fi
         fi
     fi
-}
-
-reset_local_link_logs() {
-    LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
-    SELKIES_LOCAL_LINK_LOG_PATH="${SELKIES_LOCAL_LINK_LOG_PATH:-/config/logs/local-link-open.log}"
-    ensure_log_dir "$LOCAL_LINK_BRIDGE_LOG_PATH" || return 0
-    ensure_log_dir "$SELKIES_LOCAL_LINK_LOG_PATH" || return 0
-    : >"$LOCAL_LINK_BRIDGE_LOG_PATH"
-    : >"$SELKIES_LOCAL_LINK_LOG_PATH"
-}
-
-start_local_link_log_reset_loop() {
-    if ! is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
-        return
-    fi
-    if pgrep -f "/scripts/local-link-log-reset-loop.sh" >/dev/null 2>&1; then
-        return
-    fi
-
-    LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="${LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS:-10800}"
-    if ! [[ "$LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [ "$LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS" -lt 300 ]; then
-        LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="10800"
-    fi
-
-    cat >/tmp/local-link-log-reset-loop.sh <<'EOF'
-#!/bin/bash
-set -euo pipefail
-LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
-SELKIES_LOCAL_LINK_LOG_PATH="${SELKIES_LOCAL_LINK_LOG_PATH:-/config/logs/local-link-open.log}"
-LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS="${LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS:-10800}"
-while true; do
-    sleep "$LOCAL_LINK_LOG_RESET_INTERVAL_SECONDS"
-    : >"$LOCAL_LINK_BRIDGE_LOG_PATH"
-    : >"$SELKIES_LOCAL_LINK_LOG_PATH"
-done
-EOF
-    chmod +x /tmp/local-link-log-reset-loop.sh
-    nohup /tmp/local-link-log-reset-loop.sh >/dev/null 2>&1 &
-}
-
-wait_local_link_bridge_ready() {
-    if ! is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
-        return 0
-    fi
-    local port="${LOCAL_LINK_BRIDGE_PORT:-38080}"
-    local retries="${LOCAL_LINK_BRIDGE_READY_RETRIES:-20}"
-    local delay="${LOCAL_LINK_BRIDGE_READY_DELAY_SECONDS:-0.25}"
-    python3 - "$port" "$retries" "$delay" <<'PY'
-import json
-import sys
-import time
-import urllib.request
-
-port = int(sys.argv[1])
-retries = int(float(sys.argv[2]))
-delay = float(sys.argv[3])
-url = f"http://127.0.0.1:{port}/health"
-for _ in range(max(1, retries)):
-    try:
-        with urllib.request.urlopen(url, timeout=1.0) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-            if data.get("ok"):
-                sys.exit(0)
-    except Exception:
-        time.sleep(delay)
-sys.exit(1)
-PY
 }
 
 start_split_fab() {
@@ -268,13 +188,6 @@ start_notification_daemon
 start_container_sleep_manager
 start_session_auth_bridge
 start_notification_bridge
-
-if is_true "${SELKIES_LOCAL_LINK_OPEN:-true}"; then
-    reset_local_link_logs
-    start_local_link_bridge
-    start_local_link_log_reset_loop
-    wait_local_link_bridge_ready || echo "[start] warning: local link bridge did not report ready in time" >&2
-fi
 
 # start WeChat application in the background if exists and auto-start enabled
 if is_true "${AUTO_START_WECHAT:-true}"; then
