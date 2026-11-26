@@ -296,6 +296,7 @@ RUN /lsiopy/bin/pip install --no-cache-dir --no-deps --only-binary=:all: \
       --index-url "$PIXELFLUX_PIP_INDEX_URL" --upgrade pixelflux==2.2.3
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
+COPY --from=upload-sidecar-builder /build/target/release/libselkies_upload_sidecar.so /usr/local/lib/libselkies_upload_sidecar.so
 
 # The overlay above must never downgrade system directory permissions.  A stray `root/tmp`
 # directory would copy over /tmp as 0755 root:root, and then Xvfb (running as the unprivileged
