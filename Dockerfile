@@ -311,6 +311,7 @@ RUN sed -i 's/\r$//' \
     /etc/s6-overlay/s6-rc.d/init-intel-gpu/type \
     /etc/cont-init.d/89-stable-desktop-environment \
     /etc/s6-overlay/s6-rc.d/init-nginx/run \
+    /etc/s6-overlay/s6-rc.d/svc-runtime-sidecar/run \
     /etc/cont-init.d/90-selkies-paste-config \
     /etc/cont-init.d/91-selkies-single-session-patch \
     /etc/cont-init.d/92-xvfb-maxclients-patch \
