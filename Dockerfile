@@ -332,7 +332,6 @@ RUN sed -i 's/\r$//' \
     /scripts/container_download.py \
     /scripts/xdnd_receiver.py \
     /scripts/wechat-logout-monitor.py \
-    /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
     /scripts/lan_discovery_common.py \
     /scripts/lan_discovery_service.py \
@@ -368,7 +367,6 @@ RUN chmod +x /etc/cont-init.d/89-stable-desktop-environment \
     /scripts/size_limited_log_writer.py \
     /scripts/session_auth_bridge.py \
     /scripts/wechat-logout-monitor.py \
-    /scripts/container_sleep_manager.py \
     /scripts/notification_bridge.py \
     /scripts/lan_discovery_common.py \
     /scripts/lan_discovery_service.py \
