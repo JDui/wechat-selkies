@@ -601,3 +601,97 @@ fn download_error_details(code: &str) -> (&'static str, &'static str) {
         _ => ("io-error", "文件读取失败，请检查附件是否已下载完成"),
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_config(root: &Path) -> DownloadConfig {
+        let download_root = root.join("downloads");
+        let cache_root = root.join("cache");
+        let source_root = root.join("source");
+        fs::create_dir_all(&download_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        DownloadConfig {
+            cache_root,
+            download_root,
+            state_path: root.join("session.json"),
+            source_roots: vec![source_root],
+            use_default_roots: false,
+            max_file_bytes: 1024 * 1024,
+            max_cache_bytes: 2 * 1024 * 1024,
+            min_free_bytes: 0,
+            max_jobs: 4,
+            max_concurrency: 2,
+            ready_ttl_seconds: 60,
+            prepare_timeout_seconds: 60,
+        }
+    }
+
+    #[tokio::test]
+    async fn native_download_copies_under_session_and_consumes_one_time_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = test_config(temp.path());
+        fs::write(&config.state_path, serde_json::to_vec(&json!({
+            "session_id": "sid_test",
+            "session_epoch": 42
+        })).unwrap()).unwrap();
+        let source = config.source_roots[0].join("sample.bin");
+        fs::write(&source, b"rust-transfer-payload").unwrap();
+
+        let manager = Arc::new(DownloadManager::new(config).unwrap());
+        let job = manager.create_job(
+            source.to_string_lossy().to_string(),
+            "sid_test".into(),
+            42,
+            "a".repeat(32),
+        ).await.unwrap();
+        assert_eq!(job.state, "preparing");
+
+        let mut ready = None;
+        for _ in 0..100 {
+            let status = manager.status("sid_test", 42, &"a".repeat(32));
+            ready = status.jobs.into_iter().find(|item| item.id == job.id && item.state == "ready");
+            if ready.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let ready = ready.expect("download should become ready");
+        let token = ready.token.expect("ready job exposes a one-time token");
+        let info = manager.verify_file(&job.id, &token, "sid_test", 42).unwrap();
+        assert_eq!(info.name, "sample.bin");
+        assert_eq!(fs::read(manager.cache_file(&job.id).unwrap()).unwrap(), b"rust-transfer-payload");
+
+        manager.finish_file(&job.id, &token, "sid_test", 42, true);
+        let status = manager.status("sid_test", 42, &"a".repeat(32));
+        assert_eq!(status.jobs[0].state, "sent");
+        assert!(status.jobs[0].token.is_none());
+        assert!(manager.verify_file(&job.id, &token, "sid_test", 42).is_err());
+    }
+
+    #[test]
+    fn source_symlinks_cannot_escape_allowed_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = test_config(temp.path());
+        let outside = temp.path().join("outside.bin");
+        fs::write(&outside, b"outside").unwrap();
+        let link = config.source_roots[0].join("escape.bin");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let manager = DownloadManager::new(config).unwrap();
+        let error = manager.open_source(link.to_str().unwrap()).unwrap_err();
+        assert_eq!(error, "source-outside-allowed-roots");
+    }
+
+    #[test]
+    fn cache_job_names_are_fixed_length_hex_and_never_paths() {
+        let id = format!("axi-drop-{}", "a".repeat(48));
+        assert!(is_job_id(&id));
+        assert!(!is_job_id("../axi-drop-".to_string().as_str()));
+        assert!(!is_cache_data_name("axi-drop-xyz.data"));
+        assert!(is_cache_data_name(&format!("{id}.part")));
+    }
+}
