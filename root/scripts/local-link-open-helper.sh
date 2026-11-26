@@ -27,12 +27,11 @@ extract_link_target() {
 bridge_local_link() {
     local url="$1"
     local source="${2:-open}"
-    local port="${SELKIES_UPLOAD_PORT:-${SELKIES_CONTAINER_SLEEP_PORT:-${LOCAL_LINK_BRIDGE_PORT:-38084}}"
+    local port="${SELKIES_UPLOAD_PORT:-${SELKIES_CONTAINER_SLEEP_PORT:-${LOCAL_LINK_BRIDGE_PORT:-38084}}}"
 
     python3 - "$url" "$port" "$source" <<'PY'
 import json
 import sys
-import urllib.parse
 import urllib.request
 
 url = sys.argv[1]
