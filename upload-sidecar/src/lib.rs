@@ -1377,6 +1377,8 @@ mod tests {
             resume_enabled: true,
             checksum_enabled: true,
             allowed_subdirs: vec![],
+            download_cache_root: temp.path().join("drop-cache"),
+            download_root: temp.path().join("download-root"),
             local_link_max_events: 256,
             local_link_allowed_schemes: vec!["http".into(), "https".into(), "mailto".into()],
         })
@@ -1460,6 +1462,8 @@ mod tests {
             resume_enabled: true,
             checksum_enabled: false,
             allowed_subdirs: vec![],
+            download_cache_root: temp.path().join("drop-cache"),
+            download_root: temp.path().join("download-root"),
             local_link_max_events: 256,
             local_link_allowed_schemes: vec!["http".into(), "https".into(), "mailto".into()],
         }).await.unwrap();
