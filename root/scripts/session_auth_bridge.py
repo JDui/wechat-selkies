@@ -22,7 +22,7 @@ SESSION_MODE = os.environ.get("SELKIES_SESSION_MODE", "pin-takeover")
 STATE_PATH = Path(os.environ.get("SELKIES_SESSION_STATE_PATH", "/run/selkies-active-session.json"))
 COOKIE_NAME = os.environ.get("SELKIES_SESSION_COOKIE_NAME", "selkies_session")
 COOKIE_PATH = os.environ.get("SELKIES_SESSION_COOKIE_PATH", os.environ.get("SUBFOLDER", "/") or "/")
-SLEEP_MANAGER_PORT = int(os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("SELKIES_UPLOAD_PORT", "38084")))
+SLEEP_MANAGER_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("LOCAL_LINK_BRIDGE_PORT", "38084"))))
 SLEEP_MANAGER_URL = f"http://127.0.0.1:{SLEEP_MANAGER_PORT}/sleep"
 SLEEP_WAKE_TIMEOUT_SECONDS = float(os.environ.get("SELKIES_CONTAINER_SLEEP_WAKE_TIMEOUT_SECONDS", "45") or "45")
 SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "true").strip().lower() in (
@@ -49,7 +49,7 @@ UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false
     "yes",
     "on",
 )
-PREFERENCES_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", "38084"))
+PREFERENCES_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("LOCAL_LINK_BRIDGE_PORT", "38084"))))
 
 
 def _preferences_sidecar_json(method="GET", patch=None):
