@@ -324,6 +324,11 @@ impl DownloadManager {
         self.validate_session(session_id, session_epoch).is_ok()
     }
 
+    pub fn current_identity(&self) -> Result<(String, u64), String> {
+        let identity = self.read_identity()?;
+        Ok((identity.session_id, identity.session_epoch))
+    }
+
     pub fn cache_file(&self, id: &str) -> Result<PathBuf, String> {
         if !is_job_id(id) {
             return Err("session-or-job-expired".into());
