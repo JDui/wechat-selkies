@@ -120,10 +120,10 @@ class Downloads:
                 raise DownloadError("one-file-at-a-time")
             sid, client = lease[:2]
             identity = self.identity()
-            if not identity or identity[0] != sid:
+            if not identity or identity != sid or not isinstance(sid, tuple) or len(sid) != 2:
                 raise DownloadError("session-expired")
             try:
-                epoch = int(identity[1])
+                session_id, epoch = str(sid[0]), int(sid[1])
             except (TypeError, ValueError):
                 raise DownloadError("session-expired")
             source = str(files[0][0])
@@ -134,7 +134,7 @@ class Downloads:
                 method="POST",
                 payload={
                     "source": source,
-                    "session_id": sid,
+                    "session_id": session_id,
                     "session_epoch": epoch,
                     "client": client,
                 },
@@ -152,12 +152,12 @@ class Downloads:
 
     def status(self, sid, client):
         identity = self.identity()
-        if not identity or identity[0] != sid:
+        if not identity or identity != sid or not isinstance(sid, tuple) or len(sid) != 2:
             return dict(ok=True, native_ready=self.native_ready, phase="idle", error="", error_id="", jobs=[])
+        session_id, epoch = str(sid[0]), int(sid[1])
         try:
-            epoch = int(identity[1])
             _, payload = self._sidecar_request(
-                "/native-download/state?" + urlencode({"sid": sid, "epoch": epoch, "client": client}),
+                "/native-download/state?" + urlencode({"sid": session_id, "epoch": epoch, "client": client}),
                 timeout=1.5,
             )
         except (DownloadError, ValueError):
