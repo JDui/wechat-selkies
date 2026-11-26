@@ -61,15 +61,19 @@ def _preferences_sidecar_json(method="GET", patch=None):
     if data is not None:
         request.add_header("Content-Type", "application/json")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(request, timeout=2.0) as response:
-            body = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as error:
-        if error.code == HTTPStatus.BAD_REQUEST:
-            raise ValueError("Invalid preference") from error
-        raise OSError("Preferences sidecar request failed") from error
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise OSError("Preferences sidecar is unavailable") from error
+    for attempt in range(5):
+        try:
+            with opener.open(request, timeout=2.0) as response:
+                body = response.read().decode("utf-8", errors="replace")
+            break
+        except urllib.error.HTTPError as error:
+            if error.code == HTTPStatus.BAD_REQUEST:
+                raise ValueError("Invalid preference") from error
+            raise OSError("Preferences sidecar request failed") from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if attempt == 4:
+                raise OSError("Preferences sidecar is unavailable") from error
+            time.sleep(0.2)
     try:
         payload = json.loads(body or "{}")
     except (TypeError, ValueError) as error:
