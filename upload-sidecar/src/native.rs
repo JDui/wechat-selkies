@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    ffi::{CStr, CString, c_char, c_int, c_uint, c_ulong, c_void},
+    ffi::{CString, c_char, c_int, c_uint, c_ulong, c_void},
     ptr,
     sync::{
         Mutex,
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn selkies_xtest_key(
         Err(poisoned) => poisoned.into_inner(),
     };
     let accepted = unsafe {
-        (handle.fake_key_event)(handle.display, keycode, if pressed != 0 { 2 } else { 3 }, 0)
+        (handle.fake_key_event)(handle.display, keycode, if pressed != 0 { 1 } else { 0 }, 0)
     };
     unsafe { (handle.sync)(handle.display, 0) };
     if accepted != 0 { 0 } else { -2 }
