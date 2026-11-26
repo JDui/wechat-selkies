@@ -388,7 +388,7 @@ docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-2.04.tar wechat-selkies:2.05
+docker save -o wechat-selkies-2.05.tar wechat-selkies:2.05
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。
