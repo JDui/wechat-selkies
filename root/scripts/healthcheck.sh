@@ -9,12 +9,18 @@ is_true() {
     esac
 }
 
-# A sleeping upload/desktop process deliberately cannot answer health probes.
-# Verify the services needed to display login and wake up instead.
+# The Rust runtime serves auth, sleep and transfers even when upload is disabled.
+runtime_port="${SELKIES_UPLOAD_PORT:-${SELKIES_CONTAINER_SLEEP_PORT:-${LOCAL_LINK_BRIDGE_PORT:-38084}}}"
+if ! curl -fsS --max-time 3 "http://127.0.0.1:${runtime_port}/health" >/dev/null; then
+    echo "Rust runtime sidecar unavailable"
+    exit 1
+fi
+
+# A sleeping desktop intentionally cannot answer desktop health probes.
 if python3 - <<'PY'
 import json, os, sys
 try:
-    with open(os.getenv("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-container-sleep.json")) as handle:
+    with open(os.getenv("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-runtime/container-sleep.json")) as handle:
         state = json.load(handle)
     sleeping = state.get("sleeping") is True and state.get("mode") == "full"
 except (OSError, ValueError, AttributeError):
@@ -24,13 +30,7 @@ PY
 then
     pgrep -x nginx >/dev/null
     curl -fsS --max-time 3 "http://127.0.0.1:${SELKIES_SESSION_AUTH_PORT:-38082}/health" >/dev/null
-    curl -fsS --max-time 3 "http://127.0.0.1:${SELKIES_CONTAINER_SLEEP_PORT:-38083}/health" >/dev/null
     exit 0
-fi
-
-if ! curl -fsS --max-time 3 "http://127.0.0.1:${SELKIES_CONTAINER_SLEEP_PORT:-38083}/health" >/dev/null; then
-    echo "container sleep service unavailable"
-    exit 1
 fi
 
 if ! pgrep -x openbox >/dev/null 2>&1; then
@@ -55,18 +55,6 @@ fi
 if is_true "${AUTO_START_QQ:-false}" && is_true "${WATCHDOG_RESTART_QQ:-true}"; then
     if ! pgrep -af '^/usr/bin/[q]q([[:space:]]|$)' >/dev/null 2>&1; then
         echo "qq process missing"
-        exit 1
-    fi
-fi
-
-if is_true "${SELKIES_UPLOAD_ENABLED:-true}"; then
-    upload_port="${SELKIES_UPLOAD_PORT:-38084}"
-    if ! pgrep -af "/usr/local/bin/selkies-upload-sidecar" >/dev/null 2>&1; then
-        echo "upload sidecar process missing"
-        exit 1
-    fi
-    if ! curl -fsS --max-time 3 "http://127.0.0.1:${upload_port}/health" >/dev/null; then
-        echo "upload sidecar health endpoint failed"
         exit 1
     fi
 fi

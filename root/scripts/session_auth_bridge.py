@@ -324,6 +324,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "error": "", "error_id": "", "jobs": [],
                 })
                 return
+            query = parse_qs(urlparse(self.path).query)
             client = query.get("client", [""])[0]
             self.send_json(HTTPStatus.OK, DOWNLOADS.status(download_identity(), client))
             return

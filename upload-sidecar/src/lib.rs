@@ -119,7 +119,7 @@ impl Config {
             ),
             state_path: PathBuf::from(
                 std::env::var("SELKIES_SESSION_STATE_PATH")
-                    .unwrap_or_else(|_| "/run/selkies-active-session.json".into()),
+                    .unwrap_or_else(|_| "/run/selkies-runtime/active-session.json".into()),
             ),
             chunk_size,
             max_concurrency,

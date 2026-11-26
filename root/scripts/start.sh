@@ -90,17 +90,6 @@ start_audio_service() {
     fi
 }
 
-start_session_auth_bridge() {
-    if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
-        SELKIES_SESSION_AUTH_LOG_PATH="${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}"
-        if ensure_log_dir "$SELKIES_SESSION_AUTH_LOG_PATH"; then
-            nohup python3 -u /scripts/session_auth_bridge.py >>"$SELKIES_SESSION_AUTH_LOG_PATH" 2>&1 &
-        else
-            nohup python3 -u /scripts/session_auth_bridge.py >/tmp/session-auth-bridge.log 2>&1 &
-        fi
-    fi
-}
-
 start_split_fab() {
     if ! pgrep -f "/scripts/split_fab.py" >/dev/null 2>&1; then
         SPLIT_FAB_LOG_PATH="${SPLIT_FAB_LOG_PATH:-/config/logs/split-fab.log}"
@@ -169,7 +158,7 @@ configure_audio_environment
 start_tray
 start_audio_service
 start_notification_daemon
-start_session_auth_bridge
+# The residual XDND/diagnostics bridge starts in init-nginx.
 start_notification_bridge
 
 # start WeChat application in the background if exists and auto-start enabled

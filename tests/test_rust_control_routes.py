@@ -1,4 +1,9 @@
 import unittest
+import importlib.util
+import json
+import http.client
+import threading
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +62,45 @@ class RustControlRouteTests(unittest.TestCase):
         self.assertIn("127.0.0.1:CSLEEP/sleep/", nginx)
         self.assertIn('.route("/sleep/status", get(sleep_status))', rust)
         self.assertIn("selkies-upload-sidecar", service)
+
+    def test_runtime_paths_and_healthcheck_match_single_sidecar(self):
+        docker = self.read("Dockerfile")
+        compose = self.read("docker-compose.yml")
+        health = self.read("root/scripts/healthcheck.sh")
+        watchdog = self.read("root/scripts/process-watchdog.sh")
+        for path in ("/run/selkies-runtime/active-session.json", "/run/selkies-runtime/container-sleep.json"):
+            self.assertIn(path, docker)
+            self.assertIn(path, compose)
+        self.assertIn("${runtime_port}/health", health)
+        self.assertNotIn("38083", health)
+        self.assertNotIn("container_sleep_manager.py", watchdog)
+
+    def test_download_state_parses_real_http_query(self):
+        path = ROOT / "root/scripts/session_auth_bridge.py"
+        spec = importlib.util.spec_from_file_location("runtime_bridge_test", path)
+        bridge = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bridge)
+        identity = ("sid_test", 42)
+        manager = mock.Mock()
+        manager.status.return_value = {"ok": True, "jobs": []}
+        with mock.patch.object(bridge, "DOWNLOADS", manager), \
+             mock.patch.object(bridge, "download_identity", return_value=identity), \
+             mock.patch.object(bridge, "request_has_valid_session", return_value=True):
+            server = bridge.http.server.ThreadingHTTPServer(("127.0.0.1", 0), bridge.Handler)
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                connection.request("GET", "/dock-download/state?client=client123")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertTrue(json.loads(response.read())["ok"])
+                connection.close()
+                manager.status.assert_called_once_with(identity, "client123")
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=3)
 
     def test_local_link_shell_port_expansion_is_balanced(self):
         helper = self.read("root/scripts/local-link-open-helper.sh")
