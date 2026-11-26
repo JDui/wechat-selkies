@@ -1,11 +1,10 @@
 """Thin X11 drag-and-drop adapter; Rust sidecar owns copy, cache and job state."""
 import json
 import os
-import re
 import threading
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
