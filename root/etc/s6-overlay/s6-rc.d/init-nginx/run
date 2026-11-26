@@ -12,7 +12,7 @@ CWS="${CUSTOM_WS_PORT:-8081}"
 CLINK="${SELKIES_UPLOAD_PORT:-38084}"
 CNOTIFY="${NOTIFICATION_BRIDGE_PORT:-38081}"
 CAUTH="${SELKIES_SESSION_AUTH_PORT:-38082}"
-CSLEEP="${SELKIES_CONTAINER_SLEEP_PORT:-38083}"
+CSLEEP="${SELKIES_UPLOAD_PORT:-38084}"
 CUPLOAD="${SELKIES_UPLOAD_PORT:-38084}"
 SFOLDER="${SUBFOLDER:-/}"
 FILE_MANAGER_PATH="${FILE_MANAGER_PATH:-$HOME/Desktop}"
@@ -187,18 +187,6 @@ start_upload_sidecar() {
   nohup s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar >>"$upload_log" 2>&1 &
 }
 
-start_container_sleep_manager() {
-  # Keep status available even when sleep is disabled or PIN is missing.
-  # The manager enforces these prerequisites before freezing any process.
-  if pgrep -f "/scripts/container_sleep_manager.py" >/dev/null 2>&1; then
-    return
-  fi
-  CONTAINER_SLEEP_LOG_PATH="${SELKIES_CONTAINER_SLEEP_LOG_PATH:-/config/logs/container-sleep-manager.log}"
-  install -d -o abc -g abc -m 775 "$(dirname "$CONTAINER_SLEEP_LOG_PATH")"
-  nohup python3 -u /scripts/container_sleep_manager.py >>"$CONTAINER_SLEEP_LOG_PATH" 2>&1 &
-}
-
-start_container_sleep_manager
 start_session_auth_bridge
 start_upload_sidecar
 
