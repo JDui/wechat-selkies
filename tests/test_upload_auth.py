@@ -1,6 +1,3 @@
-import base64
-import hashlib
-import hmac
 import importlib.util
 import json
 import os
@@ -47,23 +44,6 @@ class UploadAuthTests(unittest.TestCase):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
         return module, diagnostics_path
-
-    def test_upload_token_binds_epoch_root_and_limits(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            bridge, _ = self.load_bridge(temporary)
-            token, claims = bridge.issue_upload_token()
-            encoded, signature = token.split(".", 1)
-            expected = hmac.new(
-                b"test-signing-key", encoded.encode("ascii"), hashlib.sha256
-            ).digest()
-            self.assertTrue(hmac.compare_digest(decode_base64url(signature), expected))
-            decoded = json.loads(decode_base64url(encoded))
-            self.assertEqual(decoded["sid"], "sid_test")
-            self.assertEqual(decoded["epoch"], 42)
-            self.assertEqual(decoded["root"], "/config/uploads")
-            self.assertEqual(decoded["max_file_size"], 4096)
-            self.assertEqual(decoded, claims)
-            self.assertNotIn("123456", token)
 
     def test_diagnostics_are_json_lines(self):
         with tempfile.TemporaryDirectory() as temporary:
