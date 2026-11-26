@@ -80,6 +80,15 @@ class PreferencesAdapterTests(unittest.TestCase):
         self.assertEqual(request.get_header("Content-type"), "application/json")
         self.assertEqual(json.loads(request.data.decode("utf-8")), patch)
 
+    def test_sidecar_port_can_follow_unified_runtime_listener(self):
+        self.bridge.PREFERENCES_PORT = 39123
+        opener = mock.Mock()
+        opener.open.return_value = FakeResponse({"ok": True, "preferences": {}})
+        with mock.patch.object(self.bridge.urllib.request, "build_opener", return_value=opener):
+            self.bridge.read_preferences()
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:39123/preferences")
+
     def test_sidecar_validation_error_is_returned_as_value_error(self):
         opener = mock.Mock()
         opener.open.side_effect = urllib.error.HTTPError(
