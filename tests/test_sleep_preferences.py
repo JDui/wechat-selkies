@@ -34,7 +34,7 @@ class PreferencesAdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.bridge = load("session_auth_bridge_preferences_test")
+        self.bridge = load("session_auth_bridge")
         self.bridge.PREFERENCES_PORT = 38084
 
     def test_read_preferences_delegates_to_rust_sidecar(self):
