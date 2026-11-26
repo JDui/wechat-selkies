@@ -431,12 +431,38 @@ mod tests {
     }
 
     #[test]
-    fn upload_token_matches_active_session_and_is_signed() {
+    fn upload_token_matches_active_session_and_has_valid_hmac() {
         let temp = tempfile::tempdir().unwrap();
         let manager = manager(temp.path(), "");
         manager.initialize().unwrap();
-        let token = manager.upload_token().unwrap();
-        let token = token["token"].as_str().unwrap();
-        assert_eq!(token.split('.').count(), 2);
+        let payload = manager.upload_token().unwrap();
+        let token = payload["token"].as_str().unwrap();
+        let (encoded, signature) = token.split_once('.').unwrap();
+        let state = manager.read_state_unlocked();
+        let key = state["upload_signing_key"].as_str().unwrap();
+        let mut mac = HmacSha256::new_from_slice(key.as_bytes()).unwrap();
+        mac.update(encoded.as_bytes());
+        let signature = URL_SAFE_NO_PAD.decode(signature).unwrap();
+        mac.verify_slice(&signature).unwrap();
+        let claims = serde_json::from_slice::<Value>(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap();
+        assert_eq!(claims["sid"], "anonymous");
+        assert_eq!(claims["root"], "/config/uploads");
+        assert_eq!(claims["max_file_size"], 1024);
+        assert_eq!(payload["chunk_size"], 524288);
+        assert_eq!(payload["max_concurrency"], 3);
+    }
+
+    #[test]
+    fn pin_validation_and_logout_invalidate_cookie() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(temp.path(), "123456");
+        manager.initialize().unwrap();
+        assert!(manager.verify_pin("123456"));
+        assert!(!manager.verify_pin("123457"));
+        let (token, _) = manager.new_session().unwrap();
+        let cookie = format!("selkies_session={token}");
+        assert!(manager.is_valid_cookie(Some(&cookie)));
+        manager.logout(Some(&cookie)).unwrap();
+        assert!(!manager.is_valid_cookie(Some(&cookie)));
     }
 }
