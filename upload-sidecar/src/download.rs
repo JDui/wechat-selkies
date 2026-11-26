@@ -526,23 +526,39 @@ fn default_source_roots() -> Vec<PathBuf> {
                 continue;
             }
             let profile = entry.path();
-            let nt_data = profile.join("nt_data");
-            if nt_data.is_dir() {
-                for leaf in ["File", "Pic", "Video", "Ptt", "Emoji", "file_recv", "FileRecv"] {
-                    roots.push(nt_data.join(leaf));
-                }
-                if let Ok(accounts) = fs::read_dir(&nt_data) {
+            let direct_nt_data = profile.join("nt_data");
+            add_qq_attachment_roots(&direct_nt_data, &mut roots);
+            if name == "nt_qq" {
+                if let Ok(accounts) = fs::read_dir(&profile) {
                     for account in accounts.flatten() {
-                        let account_path = account.path();
-                        for leaf in ["File", "Pic", "Video", "Ptt", "Emoji", "file_recv", "FileRecv"] {
-                            roots.push(account_path.join(leaf));
-                        }
+                        add_qq_attachment_roots(&account.path().join("nt_data"), &mut roots);
                     }
                 }
             }
         }
     }
     roots
+}
+
+fn add_qq_attachment_roots(nt_data: &Path, roots: &mut Vec<PathBuf>) {
+    const LEAVES: [&str; 7] = ["File", "Pic", "Video", "Ptt", "Emoji", "file_recv", "FileRecv"];
+    if !nt_data.is_dir() {
+        return;
+    }
+    for leaf in LEAVES {
+        roots.push(nt_data.join(leaf));
+    }
+    if let Ok(accounts) = fs::read_dir(nt_data) {
+        for account in accounts.flatten() {
+            let account_path = account.path();
+            if !account_path.is_dir() {
+                continue;
+            }
+            for leaf in LEAVES {
+                roots.push(account_path.join(leaf));
+            }
+        }
+    }
 }
 
 fn is_cache_data_name(name: &str) -> bool {
