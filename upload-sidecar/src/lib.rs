@@ -1074,6 +1074,8 @@ mod tests {
             resume_enabled: true,
             checksum_enabled: true,
             allowed_subdirs: vec![],
+            local_link_max_events: 256,
+            local_link_allowed_schemes: vec!["http".into(), "https".into(), "mailto".into()],
         };
         let state = build_state(config).await.unwrap();
         assert_eq!(state.permits.available_permits(), 2);
@@ -1142,6 +1144,8 @@ mod tests {
             resume_enabled: true,
             checksum_enabled: true,
             allowed_subdirs: vec![],
+            local_link_max_events: 256,
+            local_link_allowed_schemes: vec!["http".into(), "https".into(), "mailto".into()],
         })
         .await
         .unwrap();
@@ -1223,6 +1227,8 @@ mod tests {
             resume_enabled: true,
             checksum_enabled: false,
             allowed_subdirs: vec![],
+            local_link_max_events: 256,
+            local_link_allowed_schemes: vec!["http".into(), "https".into(), "mailto".into()],
         }).await.unwrap();
         let incomplete = SessionRecord {
             id: Uuid::new_v4(),
