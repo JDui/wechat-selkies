@@ -336,7 +336,6 @@ RUN sed -i 's/\r$//' \
     /scripts/lan_discovery_common.py \
     /scripts/lan_discovery_service.py \
     /scripts/local-link-open-helper.sh \
-    /scripts/local_link_bridge.py \
     /scripts/gio-wrapper.sh \
     /scripts/xdg-open-wrapper.sh \
     /scripts/x11-healthcheck.sh \
@@ -373,7 +372,6 @@ RUN chmod +x /etc/cont-init.d/89-stable-desktop-environment \
     /scripts/lan_discovery_common.py \
     /scripts/lan_discovery_service.py \
     /scripts/local-link-open-helper.sh \
-    /scripts/local_link_bridge.py \
     /scripts/gio-wrapper.sh \
     /scripts/xdg-open-wrapper.sh \
     /scripts/x11-healthcheck.sh \
