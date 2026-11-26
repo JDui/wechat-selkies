@@ -314,6 +314,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "NOTIFICATION_BRIDGE_MODE_PATH", "/config/state/notification-bridge.json"))
             self.send_json(HTTPStatus.OK, build_identity_payload(read_discovery_state(state_path)))
             return
+        if path == "/dock-download/state":
+            if not request_has_valid_session(self):
+                self.send_empty(HTTPStatus.UNAUTHORIZED)
+                return
+            client = query.get("client", [""])[0]
+            self.send_json(HTTPStatus.OK, DOWNLOADS.status(download_identity(), client))
+            return
+
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"ok": True})
             return
