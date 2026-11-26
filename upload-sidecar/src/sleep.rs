@@ -76,7 +76,7 @@ impl SleepConfig {
             awake_state_path: PathBuf::from(std::env::var("SELKIES_AWAKE_STATE_PATH").unwrap_or_else(|_| "/tmp/selkies-client-awake.json".into())),
             frontend_activity_state_path: PathBuf::from(std::env::var("SELKIES_FRONTEND_ACTIVITY_STATE_PATH").unwrap_or_else(|_| "/tmp/selkies-frontend-activity.json".into())),
             mode_state_path: PathBuf::from(std::env::var("NOTIFICATION_BRIDGE_MODE_PATH").unwrap_or_else(|_| "/config/state/notification-bridge.json".into())),
-            state_path: PathBuf::from(std::env::var("SELKIES_CONTAINER_SLEEP_STATE_PATH").unwrap_or_else(|_| "/run/selkies-container-sleep.json".into())),
+            state_path: PathBuf::from(std::env::var("SELKIES_CONTAINER_SLEEP_STATE_PATH").unwrap_or_else(|_| "/run/selkies-runtime/container-sleep.json".into())),
             desktop_ready_path: PathBuf::from(std::env::var("SELKIES_DESKTOP_READY_PATH").unwrap_or_else(|_| "/tmp/selkies-desktop-ready".into())),
             check_seconds: number("SELKIES_CONTAINER_SLEEP_CHECK_SECONDS", 5, 2, 60),
             startup_grace_seconds: number("SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS", 180, 15, 3600),
