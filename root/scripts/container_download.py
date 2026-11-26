@@ -38,7 +38,7 @@ def error_details(error):
 class Downloads:
     def __init__(self, identity):
         self.identity = identity
-        self.port = int(os.environ.get("SELKIES_UPLOAD_PORT", "38084"))
+        self.port = int(os.environ.get("SELKIES_UPLOAD_PORT", os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("LOCAL_LINK_BRIDGE_PORT", "38084"))))
         self.lock = threading.RLock()
         self.lease = None
         self.phase = "idle"
