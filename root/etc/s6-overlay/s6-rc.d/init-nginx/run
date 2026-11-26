@@ -183,8 +183,8 @@ start_rust_runtime_sidecar() {
   nohup s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar >>"$runtime_log" 2>&1 &
 }
 
-start_session_auth_bridge
 start_rust_runtime_sidecar
+start_session_auth_bridge
 
 cat > /usr/share/selkies/www/password-login.html <<EOF
 <!doctype html>
