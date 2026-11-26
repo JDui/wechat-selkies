@@ -8,7 +8,7 @@ use std::{
 use serde_json::{Map, Value, json};
 
 const MAX_PREFERENCES_BYTES: usize = 262_144;
-const VIDEO_ENCODERS: [&str; 5] = ["x264enc", "x264enc-striped", "jpeg", "h265enc", "av1enc"];
+const VIDEO_ENCODERS: [&str; 3] = ["x264enc", "h265enc", "av1enc"];
 const VIDEO_TOGGLES: [&str; 4] = ["use_paint_over_quality", "h264_streaming_mode", "h264_fullcolor", "use_cpu"];
 const TOOL_TOGGLES: [&str; 7] = [
     "notification_center_enabled",
@@ -119,11 +119,19 @@ impl PreferencesStore {
             Err(error) => return Err(PreferencesError::Io(error)),
         };
         let payload: Value = serde_json::from_slice(&bytes)?;
-        if payload.is_object() {
-            Ok(payload)
-        } else {
-            Ok(Value::Object(Map::new()))
+        let Some(mut object) = payload.as_object().cloned() else {
+            return Ok(Value::Object(Map::new()));
+        };
+        // Normalize selections persisted by older clients before the
+        // striped-H.264 and JPEG capture paths were removed.
+        for key in ["encoder", "encoder_display2"] {
+            if let Some(value) = object.get(key).and_then(Value::as_str) {
+                if !VIDEO_ENCODERS.contains(&value) {
+                    object.insert(key.to_string(), json!("x264enc"));
+                }
+            }
         }
+        Ok(Value::Object(object))
     }
 }
 
@@ -326,6 +334,18 @@ mod tests {
         assert_eq!(second["encoder"], json!("h265enc"));
         assert_eq!(second["framerate"], json!(45));
         assert_eq!(PreferencesStore::new(path).read().unwrap(), second);
+    }
+
+    #[test]
+    fn removed_legacy_encoders_are_normalized_to_h264() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("preferences.json");
+        fs::write(&path, br#"{"encoder":"jpeg","encoder_display2":"x264enc-striped","framerate":30}"#).unwrap();
+        let store = PreferencesStore::new(path);
+        let value = store.read().unwrap();
+        assert_eq!(value["encoder"], "x264enc");
+        assert_eq!(value["encoder_display2"], "x264enc");
+        assert_eq!(value["framerate"], 30);
     }
 
     #[test]
