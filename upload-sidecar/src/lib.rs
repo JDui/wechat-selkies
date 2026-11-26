@@ -510,7 +510,8 @@ async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> Resul
 async fn auth_session(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     if !state.auth.password_enabled() { return Ok(Json(serde_json::json!({ "ok": true, "enabled": false }))); }
     let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
-    if !state.auth.is_valid_cookie(cookie) { return Err(ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired")); }
+    let original_uri = headers.get("x-original-uri").and_then(|value| value.to_str().ok());
+    if !state.auth.is_valid_request(cookie, None, original_uri) { return Err(ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired")); }
     let mut payload = state.auth.session_payload();
     if let Some(object) = payload.as_object_mut() { object.insert("sleeping".into(), serde_json::json!(state.sleep.is_sleeping())); }
     Ok(Json(payload))
