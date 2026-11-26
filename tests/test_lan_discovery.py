@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -20,6 +21,60 @@ from lan_discovery_common import (  # noqa: E402
 )
 import notification_bridge  # noqa: E402
 import session_auth_bridge  # noqa: E402
+import lan_discovery_service  # noqa: E402
+
+
+
+class LanDiscoveryServiceLifecycleTests(unittest.TestCase):
+    def test_disabled_discovery_does_not_create_zeroconf(self):
+        fake_zeroconf = types.SimpleNamespace(
+            IPVersion=types.SimpleNamespace(V4Only=object()),
+            ServiceInfo=mock.Mock(),
+            Zeroconf=mock.Mock(),
+        )
+        lan_discovery_service.STOP_REQUESTED = False
+
+        def stop_after_one_poll(_seconds):
+            lan_discovery_service.STOP_REQUESTED = True
+
+        with mock.patch.dict(sys.modules, {"zeroconf": fake_zeroconf}), \
+             mock.patch.object(lan_discovery_service, "read_discovery_state", return_value={
+                 "lan_discovery_enabled": False,
+                 "lan_broadcast_name": "AXISNSBOX-000",
+             }), \
+             mock.patch.object(lan_discovery_service, "atomic_write_status"), \
+             mock.patch.object(lan_discovery_service.time, "sleep", side_effect=stop_after_one_poll):
+            lan_discovery_service.run()
+
+        fake_zeroconf.Zeroconf.assert_not_called()
+
+    def test_enabled_discovery_starts_registers_and_closes_zeroconf(self):
+        fake_service_info = mock.Mock(return_value=object())
+        fake_instance = mock.Mock()
+        fake_zeroconf = types.SimpleNamespace(
+            IPVersion=types.SimpleNamespace(V4Only=object()),
+            ServiceInfo=fake_service_info,
+            Zeroconf=mock.Mock(return_value=fake_instance),
+        )
+        lan_discovery_service.STOP_REQUESTED = False
+
+        def stop_after_one_poll(_seconds):
+            lan_discovery_service.STOP_REQUESTED = True
+
+        with mock.patch.dict(sys.modules, {"zeroconf": fake_zeroconf}), \
+             mock.patch.object(lan_discovery_service, "read_discovery_state", return_value={
+                 "lan_discovery_enabled": True,
+                 "lan_broadcast_name": "AXISNSBOX-000",
+             }), \
+             mock.patch.object(lan_discovery_service, "resolve_advertise_address", return_value="192.0.2.10"), \
+             mock.patch.object(lan_discovery_service, "atomic_write_status"), \
+             mock.patch.object(lan_discovery_service.time, "sleep", side_effect=stop_after_one_poll):
+            lan_discovery_service.run()
+
+        fake_zeroconf.Zeroconf.assert_called_once()
+        fake_instance.register_service.assert_called_once()
+        fake_instance.unregister_service.assert_called_once()
+        fake_instance.close.assert_called_once()
 
 
 class LanDiscoveryTests(unittest.TestCase):
