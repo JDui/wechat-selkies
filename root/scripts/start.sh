@@ -65,17 +65,17 @@ start_local_link_bridge() {
         LOCAL_LINK_BRIDGE_LOG_PATH="${LOCAL_LINK_BRIDGE_LOG_PATH:-/config/logs/local-link-bridge.log}"
         LOCAL_LINK_BRIDGE_LOG_MAX_BYTES="${LOCAL_LINK_BRIDGE_LOG_MAX_BYTES:-1048576}"
         if ensure_log_dir "$LOCAL_LINK_BRIDGE_LOG_PATH"; then
-            nohup bash -c 'set -o pipefail; python3 -u /scripts/local_link_bridge.py 2>&1 | python3 -u /scripts/size_limited_log_writer.py "$1" "$2"' \
+            nohup bash -c 'set -o pipefail; nice -n 10 python3 -u /scripts/local_link_bridge.py 2>&1 | nice -n 10 python3 -u /scripts/size_limited_log_writer.py "$1" "$2"' \
                 _ "$LOCAL_LINK_BRIDGE_LOG_PATH" "$LOCAL_LINK_BRIDGE_LOG_MAX_BYTES" >/dev/null 2>&1 &
         else
-            nohup python3 -u /scripts/local_link_bridge.py >/tmp/local-link-bridge.log 2>&1 &
+            nohup nice -n 10 python3 -u /scripts/local_link_bridge.py >/tmp/local-link-bridge.log 2>&1 &
         fi
     fi
 }
 
 start_notification_bridge() {
     if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
-        nohup /scripts/run-notification-bridge.sh >/dev/null 2>&1 &
+        nohup nice -n 10 /scripts/run-notification-bridge.sh >/dev/null 2>&1 &
     fi
 }
 
