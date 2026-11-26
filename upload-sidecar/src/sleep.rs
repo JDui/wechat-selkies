@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 unsafe extern "C" {
     fn kill(pid: i32, signal: i32) -> i32;
+    fn getuid() -> u32;
 }
 
 const SIGCONT: i32 = 18;
@@ -242,16 +243,20 @@ impl SleepManager {
         if state.get("sleeping").and_then(Value::as_bool).unwrap_or(false) {
             return true;
         }
-        let pids = self.list_freezable_pids();
-        let mut frozen = Vec::new();
-        for pid in pids {
-            if send_signal(pid, SIGSTOP) {
-                frozen.push(pid);
-            }
+        // Record process identity before freezing. A crash between STOP and
+        // state publication must not strand the desktop with no wake manifest.
+        let candidates = self.list_freezable_pids().into_iter()
+            .filter_map(|pid| proc_starttime(pid).map(|start| (pid, start)))
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            warn!("no eligible desktop processes to freeze");
+            return false;
         }
         let now = now_seconds();
-        let frozen_count = frozen.len();
-        let payload = json!({
+        let planned = candidates.iter().map(|(pid, _)| *pid).collect::<Vec<_>>();
+        let identities = candidates.iter().map(|(pid, start)| (pid.to_string(), json!(start)))
+            .collect::<Map<String, Value>>();
+        let mut payload = json!({
             "enabled": true,
             "sleeping": true,
             "mode": "full",
@@ -259,15 +264,33 @@ impl SleepManager {
             "reason": reason,
             "entered_at": now,
             "updated_at": now,
-            "frozen_pids": frozen.clone(),
-            "frozen_count": frozen_count,
+            "frozen_pids": planned,
+            "frozen_start_times": identities,
+            "frozen_count": candidates.len(),
         });
         if let Err(error) = self.write_state(&payload) {
-            warn!(%error, "failed to persist sleep state after freezing processes");
-            for pid in frozen {
-                send_signal(pid, SIGCONT);
+            warn!(%error, "failed to persist sleep manifest; desktop left running");
+            return false;
+        }
+
+        let mut frozen = Vec::new();
+        for (pid, start) in candidates {
+            if proc_starttime(pid) == Some(start) && send_signal(pid, SIGSTOP) {
+                frozen.push(pid);
+            }
+        }
+        if frozen.is_empty() {
+            // No process changed state. Restore the pre-sleep state.
+            if let Err(error) = self.write_state(&state) {
+                warn!(%error, "failed to restore state after empty sleep");
             }
             return false;
+        }
+        payload["frozen_pids"] = json!(frozen);
+        payload["frozen_count"] = json!(frozen.len());
+        if let Err(error) = self.write_state(&payload) {
+            // The earlier manifest is durable and still permits safe wake.
+            warn!(%error, "failed to narrow persisted sleep manifest");
         }
         info!(reason, frozen = frozen.len(), "entered internal sleep");
         true
@@ -282,12 +305,35 @@ impl SleepManager {
         let state = self.read_state();
         let pids = state.get("frozen_pids").and_then(Value::as_array).cloned().unwrap_or_default();
         let mut resumed = 0_u64;
+        let mut pending = Vec::new();
         for value in &pids {
-            if let Some(pid) = value.as_u64().and_then(|pid| i32::try_from(pid).ok()) {
-                if send_signal(pid, SIGCONT) {
-                    resumed += 1;
-                }
+            let Some(pid) = value.as_u64().and_then(|pid| i32::try_from(pid).ok()) else { continue; };
+            let Some(actual) = proc_starttime(pid) else { continue; };
+            let expected = state.get("frozen_start_times")
+                .and_then(Value::as_object)
+                .and_then(|map| map.get(&pid.to_string()))
+                .and_then(Value::as_u64);
+            match expected {
+                Some(start) if start != actual => continue,
+                // Legacy manifests only contain numeric PIDs. Never signal
+                // a legacy PID that is no longer stopped.
+                None if !matches!(proc_state(pid).as_str(), "T" | "t") => continue,
+                _ => {}
             }
+            if send_signal(pid, SIGCONT) {
+                resumed += 1;
+            } else if proc_starttime(pid) == Some(actual) {
+                pending.push(pid);
+            }
+        }
+        if !pending.is_empty() {
+            let mut failed = state.clone();
+            failed["frozen_pids"] = json!(pending);
+            failed["frozen_count"] = json!(pending.len());
+            failed["updated_at"] = json!(now_seconds());
+            let _ = self.write_state(&failed);
+            warn!(remaining = pending.len(), "sleep wake incomplete");
+            return false;
         }
         let now = now_seconds();
         let payload = json!({
@@ -414,17 +460,20 @@ impl SleepManager {
     }
 
     fn desktop_ready_state(&self) -> Option<(Instant, f64)> {
-        if !self.config.desktop_ready_path.exists() {
-            return None;
-        }
         let mut ready = self.ready_at.lock().unwrap_or_else(|error| error.into_inner());
-        if ready.is_none() {
-            let modified = fs::metadata(&self.config.desktop_ready_path)
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or_else(|_| SystemTime::now());
-            let wall = modified.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
-            let elapsed = (now_seconds() - wall).max(0.0);
-            *ready = Some((Instant::now() - Duration::from_secs_f64(elapsed), wall));
+        let modified = match fs::metadata(&self.config.desktop_ready_path).and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(_) => {
+                *ready = None;
+                return None;
+            }
+        };
+        let now = now_seconds();
+        let wall = modified.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64().min(now);
+        if ready.as_ref().is_none_or(|(_, previous)| *previous != wall) {
+            let elapsed = (now - wall).max(0.0);
+            let instant = Instant::now();
+            *ready = Some((instant.checked_sub(Duration::from_secs_f64(elapsed)).unwrap_or(instant), wall));
         }
         *ready
     }
@@ -533,7 +582,7 @@ impl SleepManager {
         for entry in entries.flatten() {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue; };
             let Ok(pid) = name.parse::<i32>() else { continue; };
-            if pid <= 1 || protected.contains(&pid) {
+            if pid <= 1 || protected.contains(&pid) || !process_owned(pid) {
                 continue;
             }
             let comm = proc_comm(pid);
@@ -638,7 +687,22 @@ fn is_protected_process(pid: i32, comm: &str, cmdline: &str) -> bool {
     PROTECTED_CMD_PATTERNS.iter().any(|pattern| haystack.contains(pattern))
 }
 
+fn proc_starttime(pid: i32) -> Option<u64> {
+    let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let right = text.rfind(')')?;
+    text.get(right + 2..)?.split_whitespace().nth(19)?.parse().ok()
+}
+
+fn process_owned(pid: i32) -> bool {
+    let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else { return false; };
+    let uid = status.lines().find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|value| value.parse::<u32>().ok());
+    uid == Some(unsafe { getuid() })
+}
+
 fn send_signal(pid: i32, signal: i32) -> bool {
+    if pid <= 1 || !process_owned(pid) { return false; }
     let result = unsafe { kill(pid, signal) };
     result == 0
 }
@@ -669,6 +733,14 @@ mod tests {
     }
 
     #[test]
+    fn process_identity_is_available_for_the_runtime_and_pid_zero_is_rejected() {
+        assert!(proc_starttime(std::process::id() as i32).is_some());
+        assert!(process_owned(std::process::id() as i32));
+        assert!(!send_signal(0, 0));
+        assert!(!send_signal(1, 0));
+    }
+
+    #[test]
     fn idle_timer_waits_for_desktop_readiness_marker() {
         let temp = tempfile::tempdir().unwrap();
         let ready_path = temp.path().join("desktop-ready");
@@ -694,5 +766,9 @@ mod tests {
         let (ready_instant, ready_wall) = manager.desktop_ready_state().unwrap();
         assert!(ready_wall > 0.0);
         assert!(ready_instant.elapsed() < Duration::from_secs(5));
+        fs::remove_file(&ready_path).unwrap();
+        assert!(manager.desktop_ready_state().is_none());
+        fs::write(&ready_path, b"ready again").unwrap();
+        assert!(manager.desktop_ready_state().unwrap().0.elapsed() < Duration::from_secs(5));
     }
 }

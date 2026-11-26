@@ -88,6 +88,16 @@ fi
 log "started interval=${interval}s qq_fail_threshold=${qq_fail_threshold} x11_fail_threshold=${x11_fail_threshold}"
 
 while true; do
+    if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
+        safe_restart "session-auth-bridge" "python3 -u /scripts/session_auth_bridge.py >>\"${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}\" 2>&1"
+    fi
+
+    # An intentional desktop freeze is not a crashed X11/audio process.
+    if grep -Eq '"sleeping"[[:space:]]*:[[:space:]]*true' "${SELKIES_CONTAINER_SLEEP_STATE_PATH:-/run/selkies-runtime/container-sleep.json}" 2>/dev/null; then
+        sleep "$interval"
+        continue
+    fi
+
     if is_true "${ENABLE_STALONETRAY:-false}" && is_true "${WATCHDOG_TRAY:-true}"; then
         if ! pgrep -x stalonetray >/dev/null 2>&1; then
             safe_restart "tray" "stalonetray --dockapp-mode simple"
@@ -108,10 +118,6 @@ while true; do
 
     if ! pgrep -f "/scripts/notification_bridge.py" >/dev/null 2>&1; then
         safe_restart "notification-bridge" "nice -n 10 /scripts/run-notification-bridge.sh"
-    fi
-
-    if ! pgrep -f "/scripts/session_auth_bridge.py" >/dev/null 2>&1; then
-        safe_restart "session-auth-bridge" "python3 -u /scripts/session_auth_bridge.py >>\"${SELKIES_SESSION_AUTH_LOG_PATH:-/config/logs/session-auth-bridge.log}\" 2>&1"
     fi
 
     # Sleep/control runtime is supervised by s6, not by this desktop watchdog.

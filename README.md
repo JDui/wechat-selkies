@@ -61,9 +61,11 @@
 
 ### 2.08
 
-- Rust 运行时扩展：新增有界音频 Ring Buffer 和 XTEST 键盘注入 FFI；本地链接 push/pull、Preferences API、休眠管理和下载复制/缓存/HTTP 流迁入现有 Tokio/Axum Sidecar。Python 仅保留 XDND/X11 选择适配与 Session/Auth 业务。
+- Rust 运行时扩展：有界音频 Ring Buffer、XTEST 键盘注入 FFI；本地链接、Session/PIN/Auth、Preferences、休眠管理及文件上传、下载复制/缓存/HTTP 流统一到 Tokio/Axum Sidecar，由 s6 监督。Python 保留 XDND 选择/几何适配、诊断日志、发现接口及 IME、WebSocket 主业务。
+- 传输与控制隔离：Tokio 2 个异步 worker、最多 16 个阻塞 worker，上传分片、下载准备、下载发送分别限并发，文件校验单 worker。下载缓存初始化失败仅禁用原生下载，不阻断登录；下载令牌拒绝并发重复消费，关闭连接释放任务。
+- 音频回调合并唤醒、分批消费，慢客户端仅丢弃过期音频；音频设备探测和采集启停使用独立单线程 Executor。休眠记录进程启动身份，唤醒失败不虚报成功，watchdog 不重启正常冻结的桌面。详情见 [Rust 运行时迁移与验收](docs/ops/rust-runtime-2.08.md)。
 
-- 实时链路保护：音频队列改为有界队列，原生音频回调使用 `call_soon_threadsafe` 直接入队，避免每个 20ms 音频包创建一个协程任务；原生音视频采集启停从 asyncio 默认线程池隔离到专用 2 线程 Executor。通知与本地链接桥以较低 CPU 调度优先级运行，避免辅助服务抢占桌面交互。
+- 实时链路保护：视频采集启停使用专用 2 线程 Executor；通知服务降低 CPU 调度优先级，本地链接请求不再进入独立 Python HTTP 服务。
 
 - 降低后台轮询密度：Process Watchdog 从 10 秒调整为 20 秒；通知窗口回退扫描从 1.2 秒调整为 3 秒；空闲焦点检查调整为 5 秒；局域网发现状态轮询调整为 5 秒。
 - 局域网发现关闭时不再创建 Zeroconf 实例，避免无效的 mDNS socket / 线程常驻。
