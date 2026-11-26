@@ -1,7 +1,4 @@
 import importlib.util
-import io
-import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,30 +10,6 @@ SPEC = importlib.util.spec_from_file_location(
 )
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
-
-
-class FakeHandler:
-    def __init__(self):
-        self.status = None
-        self.headers = {}
-        self.body = io.BytesIO()
-        self.wfile = self.body
-        self.connection = mock.Mock()
-        self.close_connection = False
-        self.json_error = None
-
-    def send_response(self, status):
-        self.status = status
-
-    def send_header(self, key, value):
-        self.headers[key] = value
-
-    def end_headers(self):
-        pass
-
-    def send_json(self, status, payload):
-        self.status = status
-        self.json_error = payload
 
 
 class DownloadAdapterTests(unittest.TestCase):
@@ -51,7 +24,7 @@ class DownloadAdapterTests(unittest.TestCase):
         self.identity = ("sid_other", 43)
         self.assertIsNone(self.manager.geometry())
 
-    def test_submit_delegates_source_copy_to_rust_sidecar(self):
+    def test_submit_delegates_copy_and_validation_to_rust(self):
         result = {"id": "axi-drop-" + "a" * 48, "state": "preparing"}
         with mock.patch.object(self.manager, "_sidecar_request", return_value=(202, result)) as request:
             job_id = self.manager.submit([("/config/Downloads/video.mp4", 1234)], self.manager.current())
@@ -90,33 +63,15 @@ class DownloadAdapterTests(unittest.TestCase):
         self.assertEqual(status["phase"], "idle")
         self.assertEqual(status["jobs"][0]["token"], "token")
 
-    def test_stream_verifies_rust_job_and_reports_completion(self):
-        with tempfile.TemporaryDirectory() as directory:
-            self.manager.cache_root = Path(directory)
-            job_id = "axi-drop-" + "c" * 48
-            token = "test-token"
-            data = b"video-content"
-            (self.manager.cache_root / (job_id + ".data")).write_bytes(data)
-            verify = {"id": job_id, "name": "video.mp4", "size": len(data)}
-            with mock.patch.object(self.manager, "_sidecar_request", side_effect=[
-                (200, verify),
-                (200, {"ok": True}),
-            ]) as request:
-                handler = FakeHandler()
-                self.manager.stream(handler, "sid_test", job_id, token)
-            self.assertEqual(handler.status, 200)
-            self.assertEqual(handler.body.getvalue(), data)
-            self.assertEqual(handler.headers["Content-Length"], str(len(data)))
-            finish = request.call_args_list[-1]
-            self.assertTrue(finish.kwargs["payload"]["success"])
-            self.assertEqual(finish.kwargs["payload"]["token"], token)
+    def test_adapter_has_no_python_copy_or_stream_worker(self):
+        self.assertFalse(hasattr(self.manager, "copy"))
+        self.assertFalse(hasattr(self.manager, "open_source"))
+        self.assertFalse(hasattr(self.manager, "stream"))
+        self.assertFalse(hasattr(self.manager, "sweep"))
 
-    def test_stream_rejects_expired_rust_job(self):
-        with mock.patch.object(self.manager, "_sidecar_request", side_effect=module.DownloadError("download-expired")):
-            handler = FakeHandler()
-            self.manager.stream(handler, "sid_test", "axi-drop-" + "d" * 48, "bad")
-        self.assertEqual(handler.status, 410)
-        self.assertEqual(handler.json_error["error"], "download-expired")
+    def test_sidecar_errors_keep_specific_user_facing_reason(self):
+        self.assertEqual(module.error_details(module.DownloadError("size-limit"))[0], "size-limit")
+        self.assertIn("临时缓存", module.error_details(module.DownloadError("size-limit"))[1])
 
 
 if __name__ == "__main__":
