@@ -7,8 +7,7 @@
   var runtime = window.__SELKIES_RUNTIME__ || {};
   var toolPreferencesReady = false;
   var VAAPI_ENCODER_HINTS = new Set(["vaapih264enc"]);
-  var CPU_ONLY_ENCODERS = new Set(["jpeg", "x264enc-striped"]);
-  var STABLE_ENCODERS = new Set(["x264enc", "x264enc-striped", "jpeg", "h265enc", "av1enc"]);
+  var STABLE_ENCODERS = new Set(["x264enc", "h265enc", "av1enc"]);
   var FALLBACK_ENCODER = "x264enc";
   var badgeRefreshTimer = null;
   var lastServerUseCpu = null;
@@ -4207,7 +4206,7 @@
       var values = Array.prototype.slice.call(selects[i].options || []).map(function (opt) {
         return String(opt.value || "").toLowerCase();
       });
-      if (values.indexOf("x264enc") >= 0 && values.indexOf("jpeg") >= 0) {
+      if (values.indexOf("x264enc") >= 0) {
         candidate = selects[i];
         if (selects[i].offsetParent !== null) {
           return selects[i];
@@ -4215,29 +4214,6 @@
       }
     }
     return candidate;
-  }
-
-  function ensureEncoderOptions(select) {
-    if (!select) return;
-    var values = Array.prototype.slice.call(select.options || []).map(function (opt) {
-      return String(opt.value || "").toLowerCase();
-    });
-    if (values.indexOf("x264enc-striped") < 0) {
-      var option = document.createElement("option");
-      option.value = "x264enc-striped";
-      option.textContent = "x264enc-striped";
-      var insertAfter = Array.prototype.slice.call(select.options || []).find(function (opt) {
-        return String(opt.value || "").toLowerCase() === "x264enc";
-      });
-      if (insertAfter && insertAfter.nextSibling) {
-        select.insertBefore(option, insertAfter.nextSibling);
-      } else {
-        select.appendChild(option);
-      }
-    }
-    if (String(getStoredValue("encoder") || "").toLowerCase() === "x264enc-striped") {
-      select.value = "x264enc-striped";
-    }
   }
 
   function ensureEncoderBadge(select) {
@@ -4257,10 +4233,6 @@
   function handleEncoderModeSideEffects(select) {
     if (!select) return;
     var value = String(select.value || "").toLowerCase();
-    if (CPU_ONLY_ENCODERS.has(value)) {
-      setUseCpuFlag(true);
-      return;
-    }
     if (VAAPI_ENCODER_HINTS.has(value) || value === "av1enc") {
       setUseCpuFlag(false);
       return;
@@ -4273,7 +4245,6 @@
   function updateEncoderBadge() {
     var select = findEncoderSelect();
     if (!select) return;
-    ensureEncoderOptions(select);
     var badge = ensureEncoderBadge(select);
     if (!badge) return;
 
@@ -4286,6 +4257,11 @@
     }
 
     var selectedEncoder = String(select.value || getStoredValue("encoder") || "").toLowerCase();
+    if (!STABLE_ENCODERS.has(selectedEncoder)) {
+      selectedEncoder = FALLBACK_ENCODER;
+      select.value = FALLBACK_ENCODER;
+      setStoredValue("encoder", FALLBACK_ENCODER);
+    }
     var mode = encoderMode(selectedEncoder);
     badge.textContent = mode;
     badge.dataset.mode = mode.toLowerCase();
@@ -6509,37 +6485,11 @@
   function runEncoderResetSequence() {
     clearEncoderResetTimers();
     var encoder = currentEncoderName();
-    if (encoder === "h265enc" || encoder === "av1enc") {
+    if (encoder === "x264enc" || encoder === "h265enc" || encoder === "av1enc") {
       sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
       return;
     }
-    var canToggleVaapi = encoder === "x264enc" && sanitizeBool(runtime.driAvailable, false);
-    if (canToggleVaapi) {
-      postPrimarySettings({ encoder: encoder, use_cpu: true });
-      encoderResetTimerIds.push(
-        window.setTimeout(function () {
-          postPrimarySettings({ encoder: encoder, use_cpu: false });
-        }, 750)
-      );
-      encoderResetTimerIds.push(
-        window.setTimeout(function () {
-          sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-        }, 1500)
-      );
-      return;
-    }
 
-    postPrimarySettings({ encoder: "jpeg", use_cpu: true });
-    encoderResetTimerIds.push(
-      window.setTimeout(function () {
-        postPrimarySettings({ encoder: encoder, use_cpu: readUseCpuHint(false) });
-      }, 850)
-    );
-    encoderResetTimerIds.push(
-      window.setTimeout(function () {
-        sendRawDataCommand("FORCE_STREAM_RECOVER,primary");
-      }, 1600)
-    );
   }
 
   function getDynamicLatencyConfigSignature(config) {
