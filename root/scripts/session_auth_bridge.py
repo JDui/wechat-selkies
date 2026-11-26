@@ -318,6 +318,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not request_has_valid_session(self):
                 self.send_empty(HTTPStatus.UNAUTHORIZED)
                 return
+            if DOWNLOADS is None:
+                self.send_json(HTTPStatus.OK, {
+                    "ok": True, "native_ready": False, "phase": "idle",
+                    "error": "", "error_id": "", "jobs": [],
+                })
+                return
             client = query.get("client", [""])[0]
             self.send_json(HTTPStatus.OK, DOWNLOADS.status(download_identity(), client))
             return
