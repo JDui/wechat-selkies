@@ -414,7 +414,6 @@ pub fn router(state: AppState) -> Router {
         .route("/sleep/sleep", post(sleep_manual))
         .route("/native-download/jobs", post(download_create))
         .route("/native-download/state", get(download_state))
-        .route("/native-download/jobs/{id}", get(download_verify))
         .route("/native-download/file/{id}", get(download_stream))
         .route("/upload-api/v1/sessions", post(create_session))
         .route(
@@ -551,6 +550,132 @@ struct DownloadVerifyQuery {
     epoch: u64,
 }
 
+struct DownloadStreamState {
+    file: tokio::fs::File,
+    manager: Arc<download::DownloadManager>,
+    id: String,
+    token: String,
+    session_id: String,
+    session_epoch: u64,
+    finished: bool,
+}
+
+impl Drop for DownloadStreamState {
+    fn drop(&mut self) {
+        self.manager.finish_file(
+            &self.id,
+            &self.token,
+            &self.session_id,
+            self.session_epoch,
+            self.finished,
+        );
+    }
+}
+
+fn content_disposition_name(name: &str) -> String {
+    let clean = name.chars()
+        .filter(|character| !character.is_control() && *character != '/' && *character != '\\')
+        .take(180)
+        .collect::<String>();
+    let clean = if clean.is_empty() { "download" } else { &clean };
+    let encoded = clean.as_bytes().iter().map(|byte| {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+            (*byte as char).to_string()
+        } else {
+            format!("%{byte:02X}")
+        }
+    }).collect::<String>();
+    format!("attachment; filename=\"download\"; filename*=UTF-8''{encoded}")
+}
+
+async fn download_create(
+    State(state): State<AppState>,
+    Json(request): Json<DownloadCreateRequest>,
+) -> Result<(StatusCode, Json<download::DownloadJobStatus>), ApiError> {
+    let result = state.downloads.create_job(
+        request.source,
+        request.session_id,
+        request.session_epoch,
+        request.client,
+    ).await;
+    match result {
+        Ok(job) => Ok((StatusCode::ACCEPTED, Json(job))),
+        Err(error) => {
+            let (status, code) = match error.as_str() {
+                "already-preparing" => (StatusCode::CONFLICT, "already-preparing"),
+                "queue-full" => (StatusCode::CONFLICT, "queue-full"),
+                "session-expired" => (StatusCode::UNAUTHORIZED, "session-expired"),
+                "invalid-client" => (StatusCode::BAD_REQUEST, "invalid-client"),
+                "source-outside-allowed-roots" => (StatusCode::FORBIDDEN, "source-outside-allowed-roots"),
+                "source-missing" => (StatusCode::NOT_FOUND, "source-missing"),
+                "permission-denied" => (StatusCode::FORBIDDEN, "permission-denied"),
+                "size-limit" => (StatusCode::PAYLOAD_TOO_LARGE, "size-limit"),
+                "insufficient-space" => (StatusCode::INSUFFICIENT_STORAGE, "insufficient-space"),
+                "source-changed" => (StatusCode::CONFLICT, "source-changed"),
+                "regular-file-required" => (StatusCode::BAD_REQUEST, "regular-file-required"),
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "io-error"),
+            };
+            Err(ApiError::new(status, code, &error))
+        }
+    }
+}
+
+async fn download_state(
+    State(state): State<AppState>,
+    Query(query): Query<DownloadStateQuery>,
+) -> Json<download::DownloadStatus> {
+    Json(state.downloads.status(&query.sid, query.epoch, &query.client))
+}
+
+async fn download_stream(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<DownloadVerifyQuery>,
+) -> Result<Response, ApiError> {
+    let info = state.downloads.verify_file(&id, &query.token, &query.sid, query.epoch)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
+    let path = state.downloads.cache_file(&id)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(error) => {
+            state.downloads.finish_file(&id, &query.token, &query.sid, query.epoch, false);
+            return Err(internal_error(error));
+        }
+    };
+    let stream_state = DownloadStreamState {
+        file,
+        manager: state.downloads.clone(),
+        id,
+        token: query.token,
+        session_id: query.sid,
+        session_epoch: query.epoch,
+        finished: false,
+    };
+    let stream = futures_util::stream::try_unfold(stream_state, |mut stream_state| async move {
+        if !stream_state.manager.session_matches(&stream_state.session_id, stream_state.session_epoch) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "session changed"));
+        }
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        let count = stream_state.file.read(&mut buffer).await?;
+        if count == 0 {
+            stream_state.finished = true;
+            return Ok(None);
+        }
+        buffer.truncate(count);
+        Ok(Some((Bytes::from(buffer), stream_state)))
+    });
+    let body = Body::from_stream(stream);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", content_disposition_name(&info.name))
+        .header("Content-Length", info.size.to_string())
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(body)
+        .map_err(internal_error)
+}
 
 
 async fn create_session(
