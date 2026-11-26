@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 PORT = int(os.environ.get("SELKIES_SESSION_AUTH_PORT", "38082"))
 PASSWORD = os.environ.get("PASSWORD", "")
 SESSION_MODE = os.environ.get("SELKIES_SESSION_MODE", "pin-takeover")
-STATE_PATH = Path(os.environ.get("SELKIES_SESSION_STATE_PATH", "/run/selkies-active-session.json"))
+STATE_PATH = Path(os.environ.get("SELKIES_SESSION_STATE_PATH", "/run/selkies-runtime/active-session.json"))
 COOKIE_NAME = os.environ.get("SELKIES_SESSION_COOKIE_NAME", "selkies_session")
 COOKIE_PATH = os.environ.get("SELKIES_SESSION_COOKIE_PATH", os.environ.get("SUBFOLDER", "/") or "/")
 SLEEP_MANAGER_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("LOCAL_LINK_BRIDGE_PORT", "38084"))))
@@ -31,7 +31,7 @@ SLEEP_ENABLED = os.environ.get("SELKIES_CONTAINER_SLEEP", "true").strip().lower(
     "yes",
     "on",
 )
-SLEEP_STATE_PATH = Path(os.environ.get("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-container-sleep.json"))
+SLEEP_STATE_PATH = Path(os.environ.get("SELKIES_CONTAINER_SLEEP_STATE_PATH", "/run/selkies-runtime/container-sleep.json"))
 UPLOAD_ENABLED = os.environ.get("SELKIES_UPLOAD_ENABLED", "true").strip().lower() in (
     "1",
     "true",
