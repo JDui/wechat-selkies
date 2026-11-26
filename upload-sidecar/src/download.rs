@@ -5,7 +5,7 @@ use std::{
     io::{Read, Write},
     os::{
         fd::FromRawFd,
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{MetadataExt, PermissionsExt},
     },
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
@@ -133,7 +133,7 @@ impl DownloadManager {
         if config.max_file_bytes == 0 || config.max_cache_bytes == 0 || config.max_jobs == 0 {
             return Err("invalid download limits".into());
         }
-        if config.cache_root.is_symlink() {
+        if fs::symlink_metadata(&config.cache_root).map(|metadata| metadata.file_type().is_symlink()).unwrap_or(false) {
             return Err("download cache must not be a symlink".into());
         }
         fs::create_dir_all(&config.cache_root).map_err(|error| format!("create download cache: {error}"))?;
