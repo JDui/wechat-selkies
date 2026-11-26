@@ -1,4 +1,4 @@
-# Real-time pipeline isolation — 2.07
+# Real-time pipeline isolation — 2.08
 
 ## Changes
 
