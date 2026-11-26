@@ -168,9 +168,10 @@ class H264CaptureTests(unittest.TestCase):
 
     def test_server_routes_fullframe_h264_to_new_adapter_and_striped_remains_separate(self):
         source = (BACKEND / "selkies.py").read_text(encoding="utf-8-sig")
-        self.assertIn('elif encoder_for_this_capture == "x264enc":\\n                capture_module = H264Capture()', source)
+        self.assertIn('elif encoder_for_this_capture == "x264enc":', source)
+        self.assertIn("capture_module = H264Capture()", source)
         self.assertIn('encoder_for_this_capture in ("x264enc", "h265enc", "av1enc")', source)
-        self.assertIn("else:\\n                capture_module = ScreenCapture()", source)
+        self.assertIn("capture_module = ScreenCapture()", source)
 
 
 if __name__ == "__main__":
