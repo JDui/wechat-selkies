@@ -1,0 +1,36 @@
+name: Rust Runtime
+
+on:
+  push:
+    branches: [AXiVer]
+    paths:
+      - "upload-sidecar/**"
+      - "Dockerfile"
+      - "root/lsiopy/lib/python3.12/site-packages/selkies/rust_native.py"
+      - "root/lsiopy/lib/python3.12/site-packages/selkies/selkies.py"
+      - "root/lsiopy/lib/python3.12/site-packages/selkies/input_handler.py"
+  pull_request:
+    paths:
+      - "upload-sidecar/**"
+      - "Dockerfile"
+      - "root/lsiopy/lib/python3.12/site-packages/selkies/rust_native.py"
+      - "root/lsiopy/lib/python3.12/site-packages/selkies/selkies.py"
+      - "root/lsiopy/lib/python3.12/site-packages/selkies/input_handler.py"
+
+permissions:
+  contents: read
+
+jobs:
+  rust-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test Rust runtime
+        working-directory: upload-sidecar
+        run: cargo test --locked
+      - name: Build binary and native runtime library
+        working-directory: upload-sidecar
+        run: cargo build --locked --release
+      - name: Verify native shared library
+        run: test -s upload-sidecar/target/release/libselkies_upload_sidecar.so
