@@ -185,7 +185,6 @@ configure_audio_environment
 start_tray
 start_audio_service
 start_notification_daemon
-start_container_sleep_manager
 start_session_auth_bridge
 start_notification_bridge
 
