@@ -667,4 +667,32 @@ mod tests {
         assert!(is_protected_process(124, "selkies-upload-sidecar", "selkies-upload-sidecar"));
         assert!(!is_protected_process(125, "wechat", "/opt/wechat/wechat"));
     }
+
+    #[test]
+    fn idle_timer_waits_for_desktop_readiness_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let ready_path = temp.path().join("desktop-ready");
+        let config = SleepConfig {
+            enabled: true,
+            require_pin: true,
+            password_present: true,
+            awake_state_path: temp.path().join("awake.json"),
+            frontend_activity_state_path: temp.path().join("activity.json"),
+            mode_state_path: temp.path().join("mode.json"),
+            state_path: temp.path().join("sleep.json"),
+            desktop_ready_path: ready_path.clone(),
+            check_seconds: 5,
+            startup_grace_seconds: 180,
+            wake_verify_seconds: 8,
+            warning_seconds: 60,
+            activity_future_skew_seconds: 30,
+            adaptive_sleep_idle_seconds: 3600,
+        };
+        let manager = SleepManager::new(config);
+        assert!(manager.desktop_ready_state().is_none());
+        fs::write(&ready_path, b"ready").unwrap();
+        let (ready_instant, ready_wall) = manager.desktop_ready_state().unwrap();
+        assert!(ready_wall > 0.0);
+        assert!(ready_instant.elapsed() < Duration::from_secs(5));
+    }
 }
