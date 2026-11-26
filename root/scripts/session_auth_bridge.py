@@ -605,8 +605,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             if path == "/dock-download/state":
                 self.send_json(200, DOWNLOADS.status(download_identity(), query.get("client", [""])[0]))
-            elif path.startswith("/dock-download/file/"):
-                DOWNLOADS.stream(self, download_identity(), path.rsplit("/", 1)[-1], query.get("token", [""])[0])
             else:
                 self.send_json(404, {"ok": False})
             return
