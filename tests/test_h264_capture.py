@@ -166,6 +166,14 @@ class H264CaptureTests(unittest.TestCase):
             self.assertEqual(capture.tunables.video_paintover_crf, 16)
             self.assertEqual(capture.tunables.video_paintover_burst_frames, 3)
 
+    def test_audio_queue_is_bounded_and_native_capture_uses_dedicated_executor(self):
+        source = (BACKEND / "selkies.py").read_text(encoding="utf-8-sig")
+        self.assertIn('asyncio.Queue(maxsize=AUDIO_QUEUE_MAX_CHUNKS)', source)
+        self.assertIn('loop.call_soon_threadsafe(self._enqueue_pcmflux_audio_chunk, data_bytes)', source)
+        self.assertNotIn('run_coroutine_threadsafe(\\n                        self.pcmflux_audio_queue.put', source)
+        self.assertIn('ThreadPoolExecutor(max_workers=2, thread_name_prefix="selkies-capture")', source)
+        self.assertIn('NATIVE_CAPTURE_EXECUTOR, self.pcmflux_module.start_capture', source)
+
     def test_server_routes_fullframe_h264_and_removes_legacy_capture_paths(self):
         source = (BACKEND / "selkies.py").read_text(encoding="utf-8-sig")
         self.assertIn('elif encoder_for_this_capture == "x264enc":', source)
