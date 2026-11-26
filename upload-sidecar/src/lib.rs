@@ -521,7 +521,7 @@ async fn preferences_update(
         .await
         .map_err(internal_error)?
         .map_err(|error| {
-            let status = if matches!(error, preferences::PreferencesError::Invalid(_)) {
+            let status = if matches!(&error, preferences::PreferencesError::Invalid(_)) {
                 StatusCode::BAD_REQUEST
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
