@@ -9,6 +9,7 @@ on:
       - "root/etc/s6-overlay/s6-rc.d/**"
       - "root/defaults/default.conf"
       - "Dockerfile"
+      - "tests/**"
   pull_request:
     paths:
       - "root/scripts/**"
@@ -16,6 +17,7 @@ on:
       - "root/etc/s6-overlay/s6-rc.d/**"
       - "root/defaults/default.conf"
       - "Dockerfile"
+      - "tests/**"
 
 permissions:
   contents: read
