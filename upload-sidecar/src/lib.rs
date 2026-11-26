@@ -57,6 +57,8 @@ pub struct Config {
     pub resume_enabled: bool,
     pub checksum_enabled: bool,
     pub allowed_subdirs: Vec<PathBuf>,
+    pub download_cache_root: PathBuf,
+    pub download_root: PathBuf,
     pub local_link_max_events: usize,
     pub local_link_allowed_schemes: Vec<String>,
 }
@@ -123,6 +125,12 @@ impl Config {
             resume_enabled: enabled("SELKIES_UPLOAD_RESUME_ENABLED", true),
             checksum_enabled: enabled("SELKIES_UPLOAD_CHECKSUM_ENABLED", true),
             allowed_subdirs,
+            download_cache_root: PathBuf::from(
+                std::env::var("SELKIES_DROP_CACHE").unwrap_or_else(|_| "/run/selkies-drop-cache".into()),
+            ),
+            download_root: PathBuf::from(
+                std::env::var("SELKIES_DOWNLOAD_ROOT").unwrap_or_else(|_| "/config".into()),
+            ),
             local_link_max_events,
             local_link_allowed_schemes,
         })
@@ -265,7 +273,11 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
     let local_link_max_events = config.local_link_max_events;
     let sleep = Arc::new(sleep::SleepManager::from_env());
     sleep.start_monitor();
-    let download_config = download::DownloadConfig::from_env(config.state_path.clone());
+    let download_config = download::DownloadConfig::from_env(
+        config.state_path.clone(),
+        config.download_cache_root.clone(),
+        config.download_root.clone(),
+    );
     let downloads = Arc::new(download::DownloadManager::new(download_config)?);
     downloads.start_cleanup();
     let state = AppState {
@@ -1293,6 +1305,8 @@ mod tests {
             resume_enabled: true,
             checksum_enabled: true,
             allowed_subdirs: vec![],
+            download_cache_root: temp.path().join("drop-cache"),
+            download_root: temp.path().join("download-root"),
             local_link_max_events: 256,
             local_link_allowed_schemes: vec!["http".into(), "https".into(), "mailto".into()],
         };
