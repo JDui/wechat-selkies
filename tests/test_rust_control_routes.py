@@ -25,6 +25,7 @@ class RustControlRouteTests(unittest.TestCase):
         self.assertIn("CUPLOAD/auth/check", nginx)
         self.assertIn("CUPLOAD/auth/pin", nginx)
         self.assertIn("CUPLOAD/auth/upload-token", nginx)
+        self.assertIn("CUPLOAD/auth/session", nginx)
 
     def test_preferences_api_is_served_by_rust_sidecar(self):
         nginx = self.read("root/defaults/default.conf")
