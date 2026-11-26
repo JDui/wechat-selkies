@@ -172,23 +172,19 @@ start_session_auth_bridge() {
   nohup python3 -u /scripts/session_auth_bridge.py >>"$SESSION_AUTH_LOG_PATH" 2>&1 &
 }
 
-start_upload_sidecar() {
-  case "${SELKIES_UPLOAD_ENABLED:-true}" in
-    true|TRUE|1|yes|YES|on|ON) ;;
-    *) return ;;
-  esac
+start_rust_runtime_sidecar() {
   if pgrep -f "/usr/local/bin/selkies-upload-sidecar" >/dev/null 2>&1; then
     return
   fi
   local upload_dir="${SELKIES_UPLOAD_DIR:-${FILE_MANAGER_PATH:-/config/uploads}}"
-  local upload_log="${SELKIES_UPLOAD_LOG_PATH:-/config/logs/upload-sidecar.log}"
-  install -d -o abc -g abc -m 775 "$upload_dir" "$upload_dir/.staging" "$(dirname "$upload_log")"
+  local runtime_log="${SELKIES_RUNTIME_SIDECAR_LOG_PATH:-/config/logs/runtime-sidecar.log}"
+  install -d -o abc -g abc -m 775 "$upload_dir" "$upload_dir/.staging" "$(dirname "$runtime_log")"
   export SELKIES_UPLOAD_LISTEN="127.0.0.1:${CUPLOAD}"
-  nohup s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar >>"$upload_log" 2>&1 &
+  nohup s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar >>"$runtime_log" 2>&1 &
 }
 
 start_session_auth_bridge
-start_upload_sidecar
+start_rust_runtime_sidecar
 
 cat > /usr/share/selkies/www/password-login.html <<EOF
 <!doctype html>
