@@ -101,22 +101,6 @@ start_session_auth_bridge() {
     fi
 }
 
-start_container_sleep_manager() {
-    if ! is_true "${SELKIES_CONTAINER_SLEEP:-false}"; then
-        return
-    fi
-    if ! is_true "${SELKIES_CONTAINER_SLEEP_REQUIRE_PIN:-true}" || [ -n "${PASSWORD:-}" ]; then
-        if ! pgrep -f "/scripts/container_sleep_manager.py" >/dev/null 2>&1; then
-            SELKIES_CONTAINER_SLEEP_LOG_PATH="${SELKIES_CONTAINER_SLEEP_LOG_PATH:-/config/logs/container-sleep-manager.log}"
-            if ensure_log_dir "$SELKIES_CONTAINER_SLEEP_LOG_PATH"; then
-                nohup python3 -u /scripts/container_sleep_manager.py >>"$SELKIES_CONTAINER_SLEEP_LOG_PATH" 2>&1 &
-            else
-                nohup python3 -u /scripts/container_sleep_manager.py >/tmp/container-sleep-manager.log 2>&1 &
-            fi
-        fi
-    fi
-}
-
 start_split_fab() {
     if ! pgrep -f "/scripts/split_fab.py" >/dev/null 2>&1; then
         SPLIT_FAB_LOG_PATH="${SPLIT_FAB_LOG_PATH:-/config/logs/split-fab.log}"
