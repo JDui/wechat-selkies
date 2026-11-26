@@ -206,7 +206,7 @@ ENV QQ_WATCHDOG_X11_PING="true"
 ENV QQ_WATCHDOG_X11_TIMEOUT="2"
 ENV SELKIES_ENABLE_BINARY_CLIPBOARD="true"
 ENV SELKIES_PASTE_IMAGE="true"
-ENV SELKIES_ENCODER="x264enc,h265enc,av1enc,x264enc-striped,jpeg"
+ENV SELKIES_ENCODER="x264enc,h265enc,av1enc"
 ENV SELKIES_DEFAULT_FRAMERATE="30"
 ENV SELKIES_DISABLE_GAMEPAD="true"
 ENV SELKIES_DEFAULT_BINARY_CLIPBOARD="true"
@@ -286,12 +286,11 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
     fi
 
 LABEL org.opencontainers.image.version="2.04"
-# Load the pinned Pixelflux 2.2.3 runtime in a private path. Full-frame H.264,
-# HEVC and AV1 share this runtime; the base image copy remains only for legacy
-# striped H.264/JPEG capture until those packet paths are migrated.
-ARG HEVC_PIP_INDEX_URL=https://pypi.org/simple
+# Upgrade the base Selkies Pixelflux package in place. All video codecs now use
+# the same 2.2.3 API; do not install a second private wheel or retain the 1.6.2 ABI.
+ARG PIXELFLUX_PIP_INDEX_URL=https://pypi.org/simple
 RUN /lsiopy/bin/pip install --no-cache-dir --no-deps --only-binary=:all: \
-      --index-url "$HEVC_PIP_INDEX_URL" --target /opt/selkies-pixelflux pixelflux==2.2.3
+      --index-url "$PIXELFLUX_PIP_INDEX_URL" --upgrade pixelflux==2.2.3
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 
