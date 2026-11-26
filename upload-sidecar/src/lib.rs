@@ -6,7 +6,7 @@ use std::{
 };
 
 use axum::{
-    body::to_bytes,
+    body::{to_bytes, Body},
     extract::{Path as AxumPath, Query, Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::{
     fs::{self, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt, SeekFrom},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom},
     sync::{Mutex, RwLock, Semaphore},
 };
 use tracing::{error, info, warn};
@@ -416,6 +416,7 @@ pub fn router(state: AppState) -> Router {
         .route("/native-download/state", get(download_state))
         .route("/native-download/jobs/{id}", get(download_verify))
         .route("/native-download/jobs/{id}/finish", post(download_finish))
+        .route("/native-download/file/{id}", get(download_stream))
         .route("/upload-api/v1/sessions", post(create_session))
         .route(
             "/upload-api/v1/sessions/{id}",
@@ -606,6 +607,94 @@ async fn download_verify(
     state.downloads.verify_file(&id, &query.token, &query.sid, query.epoch)
         .map(Json)
         .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))
+}
+
+struct DownloadStreamState {
+    file: tokio::fs::File,
+    manager: Arc<download::DownloadManager>,
+    id: String,
+    token: String,
+    session_id: String,
+    session_epoch: u64,
+    finished: bool,
+}
+
+impl Drop for DownloadStreamState {
+    fn drop(&mut self) {
+        self.manager.finish_file(
+            &self.id,
+            &self.token,
+            &self.session_id,
+            self.session_epoch,
+            self.finished,
+        );
+    }
+}
+
+fn content_disposition_name(name: &str) -> String {
+    let clean = name.chars()
+        .filter(|character| !character.is_control() && *character != '/' && *character != '\\')
+        .take(180)
+        .collect::<String>();
+    let clean = if clean.is_empty() { "download" } else { &clean };
+    let encoded = clean.as_bytes().iter().map(|byte| {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+            (*byte as char).to_string()
+        } else {
+            format!("%{byte:02X}")
+        }
+    }).collect::<String>();
+    format!("attachment; filename=\"download\"; filename*=UTF-8''{encoded}")
+}
+
+async fn download_stream(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<DownloadVerifyQuery>,
+) -> Result<Response, ApiError> {
+    let info = state.downloads.verify_file(&id, &query.token, &query.sid, query.epoch)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
+    let path = state.downloads.cache_file(&id)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(error) => {
+            state.downloads.finish_file(&id, &query.token, &query.sid, query.epoch, false);
+            return Err(internal_error(error));
+        }
+    };
+    let stream_state = DownloadStreamState {
+        file,
+        manager: state.downloads.clone(),
+        id,
+        token: query.token,
+        session_id: query.sid,
+        session_epoch: query.epoch,
+        finished: false,
+    };
+    let stream = futures_util::stream::try_unfold(stream_state, |mut state| async move {
+        if !state.manager.session_matches(&state.session_id, state.session_epoch) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "session changed"));
+        }
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        let count = state.file.read(&mut buffer).await?;
+        if count == 0 {
+            state.finished = true;
+            return Ok(None);
+        }
+        buffer.truncate(count);
+        Ok(Some((Bytes::from(buffer), state)))
+    });
+    let body = Body::from_stream(stream);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", content_disposition_name(&info.name))
+        .header("Content-Length", info.size.to_string())
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(body)
+        .map_err(internal_error)
 }
 
 async fn download_finish(
