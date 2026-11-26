@@ -386,12 +386,22 @@ impl DownloadManager {
         if size > self.config.max_file_bytes {
             return Err("size-limit".into());
         }
-        let total = {
-            let jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
-            jobs.values().map(|job| job.size).sum::<u64>()
-        };
-        if total.saturating_add(size) > self.config.max_cache_bytes {
-            return Err("size-limit".into());
+        {
+            // Reserve cache capacity atomically before starting the copy. This
+            // prevents parallel jobs from all observing the same free budget.
+            let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
+            let total = jobs.iter()
+                .filter(|(job_id, _)| job_id.as_str() != id)
+                .map(|(_, job)| job.size)
+                .sum::<u64>();
+            if total.saturating_add(size) > self.config.max_cache_bytes {
+                return Err("size-limit".into());
+            }
+            let job = jobs.get_mut(id).ok_or_else(|| "session-or-job-expired".to_string())?;
+            if job.state != "preparing" || job.expires_at < unix_seconds() {
+                return Err("session-or-job-expired".into());
+            }
+            job.size = size;
         }
         let free = available_space(&self.config.cache_root).map_err(|_| "insufficient-space".to_string())?;
         if free < size.saturating_add(self.config.min_free_bytes) {
@@ -517,6 +527,7 @@ impl DownloadManager {
         let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(job) = jobs.get_mut(id) {
             job.state = "error".into();
+            job.size = 0;
             job.error = message.into();
             job.expires_at = unix_seconds().saturating_add(20);
         }
