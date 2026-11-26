@@ -49,120 +49,44 @@ UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false
     "yes",
     "on",
 )
-PREFERENCES_PATH = Path(os.environ.get("SELKIES_UI_PREFERENCES_PATH", "/config/state/ui-preferences.json"))
-PREFERENCES_LOCK = threading.Lock()
-TOOL_PREFERENCES = {
-    "notification_center_enabled", "dock_network_monitor_enabled", "legacy_upload_fallback_enabled",
-    "bottom_action_clipboard_buttons_enabled", "bottom_action_dock_position",
-    "bottom_action_dock_collapsed", "input_sampling_multiplier",
-    "dynamic_low_latency_enabled", "dynamic_low_latency_disable_paint_over",
-}
-DYNAMIC_PREFERENCE_RANGES = {
-    "dynamic_low_latency_hold_ms": (300, 30000),
-    "dynamic_low_latency_fps": (1, 120),
-    "dynamic_throttle_strength": (0, 100),
-    "dynamic_low_latency_h264_crf": (5, 60),
-    "dynamic_low_latency_sample_percent": (10, 100),
-}
-VIDEO_PREFERENCE_RANGES = {"framerate": (1, 240), "h264_crf": (5, 50), "h264_paintover_crf": (5, 50)}
-VIDEO_PREFERENCE_TOGGLES = {"use_paint_over_quality", "h264_streaming_mode", "h264_fullcolor", "use_cpu"}
-LIVE_VIDEO_MODES = {"frame_feedback_mode": ("false", "observe", "true"), "live_paint_mode": ("inherit", "false", "true")}
+PREFERENCES_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", "38084"))
+
+
+def _preferences_sidecar_json(method="GET", patch=None):
+    endpoint = f"http://127.0.0.1:{PREFERENCES_PORT}/preferences"
+    data = None if patch is None else json.dumps(
+        patch, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    request = urllib.request.Request(endpoint, data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=2.0) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        if error.code == HTTPStatus.BAD_REQUEST:
+            raise ValueError("Invalid preference") from error
+        raise OSError("Preferences sidecar request failed") from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise OSError("Preferences sidecar is unavailable") from error
+    try:
+        payload = json.loads(body or "{}")
+    except (TypeError, ValueError) as error:
+        raise OSError("Preferences sidecar returned invalid JSON") from error
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise OSError("Preferences sidecar returned an invalid response")
+    return payload
 
 
 def read_preferences():
-    try:
-        payload = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
-    except FileNotFoundError:
-        return {}
+    return _preferences_sidecar_json("GET").get("preferences", {})
 
 
 def update_preferences(patch):
-    clean = {}
-    for key, value in patch.items():
-        video_key = key.removesuffix("_display2")
-        if video_key == "encoder":
-            if value not in ("x264enc", "x264enc-striped", "jpeg", "h265enc", "av1enc"):
-                raise ValueError("Invalid video encoder")
-            clean[key] = value
-        elif video_key in LIVE_VIDEO_MODES:
-            if value not in LIVE_VIDEO_MODES[video_key]:
-                raise ValueError("Invalid live video mode")
-            clean[key] = value
-        elif video_key in VIDEO_PREFERENCE_TOGGLES:
-            if not isinstance(value, bool) and value not in ("true", "false"):
-                raise ValueError("Invalid video toggle")
-            clean[key] = value is True or value == "true"
-        elif video_key in VIDEO_PREFERENCE_RANGES:
-            try:
-                number = int(str(value))
-            except (TypeError, ValueError):
-                raise ValueError("Invalid video number")
-            minimum, maximum = VIDEO_PREFERENCE_RANGES[video_key]
-            if not minimum <= number <= maximum:
-                raise ValueError("Video value out of range")
-            clean[key] = number
-        elif key in DYNAMIC_PREFERENCE_RANGES:
-            try:
-                number = int(str(value))
-            except (TypeError, ValueError):
-                raise ValueError("Invalid dynamic throttle number")
-            minimum, maximum = DYNAMIC_PREFERENCE_RANGES[key]
-            if not minimum <= number <= maximum:
-                raise ValueError("Dynamic throttle value out of range")
-            clean[key] = number
-        elif key == "dynamic_throttle_mode":
-            if value not in ("idle-low-bandwidth", "idle-low-framerate", "idle-low-occupancy"):
-                raise ValueError("Invalid dynamic throttle mode")
-            clean[key] = value
-        elif key in TOOL_PREFERENCES:
-            if key == "bottom_action_dock_position":
-                if value not in ("top", "bottom"):
-                    raise ValueError("Invalid dock position")
-                clean[key] = value
-            elif key == "input_sampling_multiplier":
-                if isinstance(value, bool):
-                    raise ValueError("Invalid input sampling multiplier")
-                try:
-                    multiplier = float(value)
-                except (TypeError, ValueError):
-                    raise ValueError("Invalid input sampling multiplier")
-                if not (0.5 <= multiplier <= 2):
-                    raise ValueError("Invalid input sampling multiplier")
-                clean[key] = round(multiplier, 2)
-            elif isinstance(value, bool) or value in ("true", "false"):
-                clean[key] = value is True or value == "true"
-            else:
-                raise ValueError("Invalid toggle")
-        elif key.startswith("download_favorites:") and len(key) <= 2048:
-            if not isinstance(value, list) or len(value) > 20:
-                raise ValueError("Invalid favorites")
-            entries = []
-            for item in value:
-                if not isinstance(item, dict):
-                    raise ValueError("Invalid favorite")
-                path, name = item.get("path"), item.get("name")
-                if (not isinstance(path, str) or len(path) > 4096 or
-                    path.startswith("/") or "\\" in path or "\x00" in path or
-                    (path and any(part in ("", ".", "..") for part in path.split("/"))) or
-                    not isinstance(name, str) or not name.strip() or len(name) > 80):
-                    raise ValueError("Invalid favorite path or name")
-                if not any(entry["path"] == path for entry in entries):
-                    entries.append({"path": path, "name": name.strip()})
-            clean[key] = entries
-        else:
-            raise ValueError("Unknown preference")
-    with PREFERENCES_LOCK:
-        state = read_preferences()
-        state.update(clean)
-        body = json.dumps(state, ensure_ascii=False)
-        if len(body.encode("utf-8")) > 262144:
-            raise ValueError("Preferences are too large")
-        PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
-        temporary = PREFERENCES_PATH.with_suffix(".tmp")
-        temporary.write_text(body, encoding="utf-8")
-        temporary.replace(PREFERENCES_PATH)
-        return state
+    if not isinstance(patch, dict):
+        raise ValueError("Invalid preference patch")
+    return _preferences_sidecar_json("POST", patch).get("preferences", {})
 
 
 def diagnostics_env_int(name, default, minimum, maximum=None):
