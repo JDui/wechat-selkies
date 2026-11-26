@@ -1,8 +1,19 @@
+import importlib.util
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "root/scripts" / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 class PreferencesTests(unittest.TestCase):
     def setUp(self):
