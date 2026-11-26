@@ -3,7 +3,7 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:2.05
+    image: wechat-selkies:2.06
     container_name: wechat-selkies
     init: true
     volumes:
@@ -41,7 +41,7 @@ services:
       - PUID=1000         # set user id according to your system
       - PGID=100          # set group id according to your system
       - PROCESS_WATCHDOG=true
-      - WATCHDOG_INTERVAL=10
+      - WATCHDOG_INTERVAL=20
       - WATCHDOG_TRAY=false
       - WATCHDOG_RESTART_WECHAT=true
       - PERSIST_SYSTEM_IDENTITY=true
@@ -49,6 +49,8 @@ services:
       - WATCHDOG_RESTART_QQ=true
       - WATCHDOG_AUDIO=true
       - NOTIFICATION_BRIDGE_LOG_MAX_BYTES=2097152
+      - NOTIFICATION_BRIDGE_FALLBACK_POLL_MS=3000
+      - NOTIFICATION_BRIDGE_IDLE_DEFOCUS_POLL_SECONDS=5
       - X11_WATCHDOG=true
       - X11_WATCHDOG_FAIL_THRESHOLD=6
       - X11_HEALTHCHECK_TIMEOUT=4
@@ -69,6 +71,7 @@ services:
       - SELKIES_UPLOAD_MIN_FREE_BYTES=268435456
       - SELKIES_LEGACY_UPLOAD_ENABLED=false
       - SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED=${SELKIES_LAN_DISCOVERY_DEFAULT_ENABLED:-false}
+      - SELKIES_LAN_DISCOVERY_POLL_SECONDS=5
       - SELKIES_LAN_DISCOVERY_DEFAULT_NAME=${SELKIES_LAN_DISCOVERY_DEFAULT_NAME:-AXISNSBOX-000}
       - SELKIES_LAN_ADVERTISE_ADDRESS=${SELKIES_LAN_ADVERTISE_ADDRESS:-}
       - SELKIES_LAN_ADVERTISE_HTTP_PORT=${SELKIES_HTTP_PORT:-3000}
@@ -128,7 +131,7 @@ services:
   axisnsbox-discovery:
     build:
       context: .
-    image: wechat-selkies:2.05
+    image: wechat-selkies:2.06
     container_name: axisnsbox-discovery
     init: true
     entrypoint: ["python3", "-u", "/scripts/lan_discovery_service.py"]
