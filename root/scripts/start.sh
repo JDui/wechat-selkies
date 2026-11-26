@@ -203,3 +203,5 @@ fi
 # !deprecated: start window switcher application in the background
 # start window switcher application in the background
 # nohup sleep 2 && python /scripts/window_switcher.py > /dev/null 2>&1 &
+
+touch "${SELKIES_DESKTOP_READY_PATH:-/tmp/selkies-desktop-ready}" 2>/dev/null || true
