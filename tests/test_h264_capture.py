@@ -166,12 +166,15 @@ class H264CaptureTests(unittest.TestCase):
             self.assertEqual(capture.tunables.video_paintover_crf, 16)
             self.assertEqual(capture.tunables.video_paintover_burst_frames, 3)
 
-    def test_server_routes_fullframe_h264_to_new_adapter_and_striped_remains_separate(self):
+    def test_server_routes_fullframe_h264_and_removes_legacy_capture_paths(self):
         source = (BACKEND / "selkies.py").read_text(encoding="utf-8-sig")
         self.assertIn('elif encoder_for_this_capture == "x264enc":', source)
         self.assertIn("capture_module = H264Capture()", source)
         self.assertIn('encoder_for_this_capture in ("x264enc", "h265enc", "av1enc")', source)
-        self.assertIn("capture_module = ScreenCapture()", source)
+        self.assertNotIn("x264enc-striped", source)
+        self.assertNotIn("StripeCallback", source)
+        self.assertNotIn("ScreenCapture", source)
+        self.assertNotIn('"jpeg"', source)
 
 
 if __name__ == "__main__":
