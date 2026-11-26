@@ -60,8 +60,8 @@ impl AuthConfig {
             upload_enabled: enabled("SELKIES_UPLOAD_ENABLED", true),
             upload_max_file_size: number("SELKIES_UPLOAD_MAX_FILE_SIZE", max_file_size, 1, u64::MAX),
             upload_token_ttl_seconds: number("SELKIES_UPLOAD_TOKEN_TTL_SECONDS", 300, 30, 86_400),
-            upload_chunk_size,
-            upload_max_concurrency,
+            upload_chunk_size: chunk_size,
+            upload_max_concurrency: max_concurrency,
             upload_allow_overwrite: enabled("SELKIES_UPLOAD_ALLOW_OVERWRITE", false),
             upload_root: upload_root.to_string_lossy().to_string(),
         }
