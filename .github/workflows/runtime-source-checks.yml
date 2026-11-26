@@ -37,9 +37,11 @@ jobs:
             root/scripts/session_auth_bridge.py \
             root/lsiopy/lib/python3.12/site-packages/selkies/selkies.py \
             root/lsiopy/lib/python3.12/site-packages/selkies/input_handler.py \
-            root/lsiopy/lib/python3.12/site-packages/selkies/rust_native.py
+            root/lsiopy/lib/python3.12/site-packages/selkies/rust_native.py \
+            root/lsiopy/lib/python3.12/site-packages/selkies/audio_mailbox.py
       - name: Run Python adapter tests
         run: |
+          python -m unittest discover -s tests -p 'test_audio_mailbox.py'
           python -m unittest discover -s tests -p 'test_container_download.py'
           python -m unittest discover -s tests -p 'test_rust_control_routes.py'
           python -m unittest discover -s tests -p 'test_upload_auth.py'
