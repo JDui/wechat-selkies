@@ -4,7 +4,7 @@
 
 当前维护分支：`AXiVer`。此前的 Intel 版本保存在 `_intel`，更早的备份保存在 `_AMDGPU`。
 
-本分支使用 Mesa `radeonsi` 驱动，提供 H.264、H.265 和 AV1 推流。全帧 H.264、HEVC 与 AV1 共用升级后的 Pixelflux 2.2.3；H.264 支持实时帧率和 Paint-over 热更新。启动时自动选择 AMD 渲染节点并检查 H.264 编码能力；无可用硬件时由启动配置显式锁定 CPU。H.264 运行时初始化失败不会静默切回旧 ABI。AV1 单独检查所选设备和客户端能力，失败时回退 H.264。源码版本及示例镜像标签为 `2.07`；硬件编码与客户端硬解的实际表现需在目标设备上验证。部署和编码支持见 [AMD 图形支持说明](docs/ops/amd-780m.md)、[H.264 迁移说明](docs/ops/h264-pixelflux-2.2.3.md)及 [AV1 接入说明](docs/ops/av1-1.90.md)。
+本分支使用 Mesa `radeonsi` 驱动，提供 H.264、H.265 和 AV1 推流。全帧 H.264、HEVC 与 AV1 共用升级后的 Pixelflux 2.2.3；H.264 支持实时帧率和 Paint-over 热更新。启动时自动选择 AMD 渲染节点并检查 H.264 编码能力；无可用硬件时由启动配置显式锁定 CPU。H.264 运行时初始化失败不会静默切回旧 ABI。AV1 单独检查所选设备和客户端能力，失败时回退 H.264。源码版本及示例镜像标签为 `2.08`；硬件编码与客户端硬解的实际表现需在目标设备上验证。部署和编码支持见 [AMD 图形支持说明](docs/ops/amd-780m.md)、[H.264 迁移说明](docs/ops/h264-pixelflux-2.2.3.md)及 [AV1 接入说明](docs/ops/av1-1.90.md)。
 
 ## 界面截图
 
@@ -59,7 +59,9 @@
 
 ## 近期更新
 
-### 2.07
+### 2.08
+
+- Rust 运行时扩展：新增有界音频 Ring Buffer 和 XTEST 键盘注入 FFI；本地链接 push/pull 迁入现有 Tokio/Axum Sidecar，移除常驻 Python Local Link Bridge。
 
 - 实时链路保护：音频队列改为有界队列，原生音频回调使用 `call_soon_threadsafe` 直接入队，避免每个 20ms 音频包创建一个协程任务；原生音视频采集启停从 asyncio 默认线程池隔离到专用 2 线程 Executor。通知与本地链接桥以较低 CPU 调度优先级运行，避免辅助服务抢占桌面交互。
 
@@ -95,7 +97,7 @@
 当前 AMD 适配需要从源码构建，旧 Intel 离线包不包含这些改动。在仓库目录执行：
 
 ```bash
-docker build -t wechat-selkies:2.07 .
+docker build -t wechat-selkies:2.08 .
 ```
 
 启动：
@@ -110,7 +112,7 @@ docker run -d \
   -e PASSWORD=1234 \
   --shm-size=1g \
   --restart unless-stopped \
-  wechat-selkies:2.07
+  wechat-selkies:2.08
 ```
 
 访问：
@@ -133,7 +135,7 @@ docker compose up -d --build
 ```yaml
 services:
   wechat-selkies:
-    image: wechat-selkies:2.07
+    image: wechat-selkies:2.08
     container_name: wechat-selkies
     init: true
     ports:
@@ -304,7 +306,7 @@ docker run -d \
   -v ./config:/config \
   --entrypoint python3 \
   --restart unless-stopped \
-  wechat-selkies:2.07 \
+  wechat-selkies:2.08 \
   -u /scripts/lan_discovery_service.py
 ```
 
@@ -367,14 +369,14 @@ docker run -d \
 本地构建：
 
 ```bash
-docker build -t wechat-selkies:2.07 .
+docker build -t wechat-selkies:2.08 .
 ```
 
 构建依赖两个构建参数，普通 `docker build` 已内置默认值，用 BuildKit / buildx 时会自动注入真实平台：
 
 - `TARGETPLATFORM` / `BUILDPLATFORM`：默认 `linux/amd64`。
 - `QQ_LOCAL_URL`：可选，指定 QQ `.deb` 的下载镜像地址，覆盖官方 CDN。
-- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有同架构的 `wechat-selkies:1.84` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.84 -t wechat-selkies:2.07 .` 复用微信 / QQ 安装层，安装 AMD Mesa 驱动并构建当前源码覆盖层和上传组件。
+- `RUNTIME_BASE`：默认 `app-base`（完整构建）。本机已有同架构的 `wechat-selkies:1.84` 时，可用 `docker build --build-arg RUNTIME_BASE=wechat-selkies:1.84 -t wechat-selkies:2.08 .` 复用微信 / QQ 安装层，安装 AMD Mesa 驱动并构建当前源码覆盖层和上传组件。
 
 如果构建时 QQ 下载报 `curl: (22) ... error: 403`，说明官方 CDN 拒绝了自动化下载，此时用任意可达地址替代即可（内网镜像、对象存储，或本机临时 HTTP 服务）：
 
@@ -387,13 +389,13 @@ docker run --rm -v "$PWD/vendor:/out" --entrypoint bash wechat-selkies:1.59 -c '
   dpkg-deb -Zgzip --build /tmp/b /out/linuxqq.deb'
 
 python3 -m http.server 8899 --directory vendor &
-docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:2.07 .
+docker build --build-arg QQ_LOCAL_URL="http://host.docker.internal:8899/linuxqq.deb" -t wechat-selkies:2.08 .
 ```
 
 导出镜像：
 
 ```bash
-docker save -o wechat-selkies-2.07.tar wechat-selkies:2.07
+docker save -o wechat-selkies-2.08.tar wechat-selkies:2.08
 ```
 
 仓库根目录的 `.dockerignore` 采用白名单，只放行 `Dockerfile`、`root/` 和 `upload-sidecar/`，避免把 Release 的 `.tar` 包和客户端构建产物传进构建上下文。
