@@ -92,7 +92,7 @@ services:
       - DRI_NODE=${DRI_NODE:-auto}
       - SELKIES_ENABLE_BINARY_CLIPBOARD=true
       - SELKIES_PASTE_IMAGE=true
-      - SELKIES_ENCODER=x264enc,h265enc,av1enc,x264enc-striped,jpeg
+      - SELKIES_ENCODER=x264enc,h265enc,av1enc
       - SELKIES_DEFAULT_ENCODER=x264enc
       - SELKIES_DEFAULT_FRAMERATE=30
       - SELKIES_FRAME_FEEDBACK=${SELKIES_FRAME_FEEDBACK:-false}
