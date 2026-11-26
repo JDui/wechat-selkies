@@ -31,6 +31,7 @@ pub mod native;
 pub mod local_link;
 pub mod sleep;
 pub mod download;
+pub mod auth;
 pub mod preferences;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -149,6 +150,7 @@ pub struct AppState {
     sleep: Arc<sleep::SleepManager>,
     downloads: Arc<download::DownloadManager>,
     preferences: Arc<preferences::PreferencesStore>,
+    auth: Arc<auth::AuthManager>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +275,15 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         .map_err(|error| format!("create staging directory: {error}"))?;
     reject_symlink(&canonical_root.join(".staging")).await?;
     let local_link_max_events = config.local_link_max_events;
+    let auth_config = auth::AuthConfig::from_env(
+        config.state_path.clone(),
+        config.upload_root.clone(),
+        config.max_file_size,
+        config.chunk_size,
+        config.max_concurrency,
+    );
+    let auth = Arc::new(auth::AuthManager::new(auth_config));
+    auth.initialize()?;
     let sleep = Arc::new(sleep::SleepManager::from_env());
     sleep.start_monitor();
     let download_config = download::DownloadConfig::from_env(
@@ -293,6 +304,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         sleep,
         downloads,
         preferences,
+        auth,
     };
     start_session_cleanup(&state);
     Ok(state)
@@ -425,6 +437,12 @@ async fn remove_staging_file(path: &Path) -> std::io::Result<()> {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/auth/check", get(auth_check))
+        .route("/auth/pin", post(auth_pin))
+        .route("/auth/logout", post(auth_logout))
+        .route("/auth/session", get(auth_session))
+        .route("/auth/upload-token", post(auth_upload_token))
+        .route("/auth/dock-download/state", get(auth_download_state))
         .route("/local-link/push", post(local_link_push))
         .route("/local-link/pull", get(local_link_pull))
         .route("/local-link/health", get(local_link_health))
@@ -453,6 +471,66 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+async fn auth_check(State(state): State<AppState>, headers: HeaderMap) -> StatusCode {
+    if !state.auth.password_enabled() { return StatusCode::NO_CONTENT; }
+    if state.sleep.is_sleeping() { return StatusCode::UNAUTHORIZED; }
+    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
+    let original_uri = headers.get("x-original-uri").and_then(|value| value.to_str().ok());
+    if state.auth.is_valid_request(cookie, None, original_uri) { StatusCode::NO_CONTENT } else { StatusCode::UNAUTHORIZED }
+}
+
+async fn auth_pin(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+    if !state.auth.password_enabled() { return Ok(StatusCode::NO_CONTENT.into_response()); }
+    let pin = headers.get("x-pin").and_then(|value| value.to_str().ok()).unwrap_or("");
+    if !state.auth.verify_pin(pin) { return Ok(StatusCode::UNAUTHORIZED.into_response()); }
+    if state.sleep.is_sleeping() {
+        let manager = state.sleep.clone();
+        let woke = tokio::task::spawn_blocking(move || manager.leave_sleep("pin")).await.map_err(internal_error)?;
+        if !woke { return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "wakeup_failed", "container wakeup failed")); }
+    }
+    let (token, session) = state.auth.new_session().map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "session_create_failed", error))?;
+    let body = Json(serde_json::json!({ "ok": true, "session_id": session.get("session_id").cloned().unwrap_or(Value::Null), "session_epoch": session.get("session_epoch").cloned().unwrap_or(Value::Null) }));
+    let mut response = body.into_response();
+    let cookie = state.auth.cookie_header(&token, false);
+    let value = axum::http::HeaderValue::from_str(&cookie).map_err(internal_error)?;
+    response.headers_mut().insert(axum::http::header::SET_COOKIE, value);
+    Ok(response)
+}
+
+async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
+    state.auth.logout(cookie).map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "logout_failed", error))?;
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    let value = axum::http::HeaderValue::from_str(&state.auth.cookie_header("", true)).map_err(internal_error)?;
+    response.headers_mut().insert(axum::http::header::SET_COOKIE, value);
+    Ok(response)
+}
+
+async fn auth_session(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
+    if !state.auth.password_enabled() { return Ok(Json(serde_json::json!({ "ok": true, "enabled": false }))); }
+    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
+    if !state.auth.is_valid_cookie(cookie) { return Err(ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired")); }
+    let mut payload = state.auth.session_payload();
+    if let Some(object) = payload.as_object_mut() { object.insert("sleeping".into(), serde_json::json!(state.sleep.is_sleeping())); }
+    Ok(Json(payload))
+}
+
+async fn auth_upload_token(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
+    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
+    let original_uri = headers.get("x-original-uri").and_then(|value| value.to_str().ok());
+    if !state.auth.is_valid_request(cookie, None, original_uri) { return Err(ApiError::new(StatusCode::UNAUTHORIZED, "stale_session", "session expired")); }
+    state.auth.upload_token().map(Json).map_err(|error| {
+        let (status, code) = match error.as_str() { "disabled" => (StatusCode::SERVICE_UNAVAILABLE, "upload-disabled"), "session-expired" => (StatusCode::UNAUTHORIZED, "session-expired"), _ => (StatusCode::INTERNAL_SERVER_ERROR, "upload-token-failed") };
+        ApiError::new(status, code, error)
+    })
+}
+
+async fn auth_download_state(State(state): State<AppState>, headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> Result<Json<download::DownloadStatus>, ApiError> {
+    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
+    if !state.auth.is_valid_cookie(cookie) { return Err(ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired")); }
+    let (session_id, session_epoch) = state.auth.current_identity().ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired"))?;
+    Ok(Json(state.downloads.status(&session_id, session_epoch, query.get("client").map(String::as_str).unwrap_or(""))))
+}
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "ok": true,
