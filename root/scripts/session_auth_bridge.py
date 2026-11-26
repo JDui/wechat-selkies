@@ -49,50 +49,6 @@ UPLOAD_ALLOW_OVERWRITE = os.environ.get("SELKIES_UPLOAD_ALLOW_OVERWRITE", "false
     "yes",
     "on",
 )
-PREFERENCES_PORT = int(os.environ.get("SELKIES_UPLOAD_PORT", os.environ.get("SELKIES_CONTAINER_SLEEP_PORT", os.environ.get("LOCAL_LINK_BRIDGE_PORT", "38084"))))
-
-
-def _preferences_sidecar_json(method="GET", patch=None):
-    endpoint = f"http://127.0.0.1:{PREFERENCES_PORT}/preferences"
-    data = None if patch is None else json.dumps(
-        patch, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")
-    request = urllib.request.Request(endpoint, data=data, method=method)
-    if data is not None:
-        request.add_header("Content-Type", "application/json")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    for attempt in range(5):
-        try:
-            with opener.open(request, timeout=2.0) as response:
-                body = response.read().decode("utf-8", errors="replace")
-            break
-        except urllib.error.HTTPError as error:
-            if error.code == HTTPStatus.BAD_REQUEST:
-                raise ValueError("Invalid preference") from error
-            raise OSError("Preferences sidecar request failed") from error
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            if attempt == 4:
-                raise OSError("Preferences sidecar is unavailable") from error
-            time.sleep(0.2)
-    try:
-        payload = json.loads(body or "{}")
-    except (TypeError, ValueError) as error:
-        raise OSError("Preferences sidecar returned invalid JSON") from error
-    if not isinstance(payload, dict) or not payload.get("ok"):
-        raise OSError("Preferences sidecar returned an invalid response")
-    return payload
-
-
-def read_preferences():
-    return _preferences_sidecar_json("GET").get("preferences", {})
-
-
-def update_preferences(patch):
-    if not isinstance(patch, dict):
-        raise ValueError("Invalid preference patch")
-    return _preferences_sidecar_json("POST", patch).get("preferences", {})
-
-
 def diagnostics_env_int(name, default, minimum, maximum=None):
     try:
         value = int(str(os.environ.get(name, default)).strip())
@@ -536,15 +492,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_json(404, {"ok": False})
             return
-        if path == "/preferences":
-            if not request_has_valid_session(self):
-                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False})
-                return
-            try:
-                self.send_json(HTTPStatus.OK, {"ok": True, "preferences": read_preferences()})
-            except (OSError, ValueError):
-                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False})
-            return
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"ok": True})
             return
@@ -605,22 +552,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_json(200, DOWNLOADS.status(download_identity(), payload.get("client")))
             except ValueError as error:
                 self.send_json(409, {"ok": False, "error": str(error)})
-            return
-        if path == "/preferences":
-            if not request_has_valid_session(self):
-                self.send_json(HTTPStatus.UNAUTHORIZED, {"ok": False})
-                return
-            patch = self.read_json_body()
-            if patch is None:
-                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False})
-                return
-            try:
-                state = update_preferences(patch)
-                self.send_json(HTTPStatus.OK, {"ok": True, "preferences": state})
-            except ValueError:
-                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False})
-            except OSError:
-                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False})
             return
         if path == "/upload-token":
             if not UPLOAD_ENABLED:
