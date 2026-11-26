@@ -443,7 +443,6 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(auth_logout))
         .route("/auth/session", get(auth_session))
         .route("/auth/upload-token", post(auth_upload_token))
-        .route("/auth/dock-download/state", get(auth_download_state))
         .route("/local-link/push", post(local_link_push))
         .route("/local-link/pull", get(local_link_pull))
         .route("/local-link/health", get(local_link_health))
@@ -527,12 +526,6 @@ async fn auth_upload_token(State(state): State<AppState>, headers: HeaderMap) ->
     })
 }
 
-async fn auth_download_state(State(state): State<AppState>, headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> Result<Json<download::DownloadStatus>, ApiError> {
-    let cookie = headers.get("cookie").and_then(|value| value.to_str().ok());
-    if !state.auth.is_valid_cookie(cookie) { return Err(ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired")); }
-    let (session_id, session_epoch) = state.auth.current_identity().ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", "session expired"))?;
-    Ok(Json(state.downloads.status(&session_id, session_epoch, query.get("client").map(String::as_str).unwrap_or(""))))
-}
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "ok": true,
