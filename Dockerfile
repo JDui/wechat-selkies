@@ -288,7 +288,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="2.07"
+LABEL org.opencontainers.image.version="2.08"
 # Upgrade the base Selkies Pixelflux package in place. All video codecs now use
 # the same 2.2.3 API; do not install a second private wheel or retain the 1.6.2 ABI.
 ARG PIXELFLUX_PIP_INDEX_URL=https://pypi.org/simple
