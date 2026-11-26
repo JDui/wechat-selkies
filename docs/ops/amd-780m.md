@@ -4,7 +4,7 @@
 
 ## 本次适配
 
-- 复用全帧 H.264 VA-API 路径，界面协议名称仍为 `x264enc`。关闭 CPU 编码且设备可用时调用硬件，JPEG / 分片 H.264 仍使用 CPU。
+- 复用全帧 H.264 VA-API 路径，界面协议名称仍为 `x264enc`。关闭 CPU 编码且设备可用时调用硬件，CPU 编码也统一走全帧 H.264，不再提供分片 / JPEG 编码模式。
 - amd64 镜像安装 Ubuntu Mesa 的 `mesa-va-drivers`、`libdrm-amdgpu1` 和 `vainfo`，使用 `radeonsi`。删除复用 Intel 镜像时遗留的 Intel APT 源和 pin，不再安装 Intel 专用媒体驱动。已有驱动包不强制卸载或降级。
 - `configure-amd-gpu.py` 按 sysfs 厂商 ID `0x1002` 筛选字符设备，不假定 AMD 位于 `renderD128`。自动模式逐个探测 AMD 节点，显式路径只检测指定节点。
 - 在基础镜像 `init-video` 配置权限之后，以实际桌面用户 `abc` 探测 H.264 普通 `EncSlice`，每个节点超时 8 秒。驱动固定为 `radeonsi`，不受旧 `INTEL_VAAPI_DRIVER=iHD` 或 `LIBVA_DRIVER_NAME=iHD` 干扰。
@@ -62,7 +62,7 @@ AMD 初始化阶段已完成 8 项设备选择 / 探测 / 回退定向测试。�
 
 ## H.265 前后端支持
 
-2026-11-17：`AXiVer` 已加入可选 `h265enc`，默认仍为 H.264。复用上游 [pixelflux 2.2.3](https://github.com/selkies-project/pixelflux/tree/2.2.3)，固定安装到 `/opt/selkies-pixelflux`，供全帧 H.264、H.265 和 AV1 共用；H.264 不再保留旧 ABI 回退。无需新增独立 FFmpeg 推流进程。
+2026-11-17：`AXiVer` 已加入可选 `h265enc`，默认仍为 H.264。复用上游 [pixelflux 2.2.3](https://github.com/selkies-project/pixelflux/tree/2.2.3)，通过升级基础 Pixelflux 安装包提供 H.264、H.265 和 AV1 共用的 2.2.3 API；不再安装第二份私有 wheel，也不保留旧 H.264 ABI。无需新增独立 FFmpeg 推流进程。
 
 - 后端提供 X11 全帧 HEVC Main、8-bit、4:2:0；继续使用原有视频队列、ACK、背压、空闲节流与恢复逻辑。HEVC Annex-B 帧使用独立类型 5，与 H.264 类型 4 区分。
 - 浏览器先用 WebCodecs 探测 HEVC，再根据首个关键帧 SPS 的真实 profile / level 配置解码器。不按浏览器名称猜测能力。
