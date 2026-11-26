@@ -7,7 +7,7 @@ use std::{
 
 use axum::{
     body::to_bytes,
-    extract::{Path as AxumPath, Request, State},
+    extract::{Path as AxumPath, Query, Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -54,6 +54,8 @@ pub struct Config {
     pub resume_enabled: bool,
     pub checksum_enabled: bool,
     pub allowed_subdirs: Vec<PathBuf>,
+    pub local_link_max_events: usize,
+    pub local_link_allowed_schemes: Vec<String>,
 }
 
 impl Config {
@@ -86,6 +88,19 @@ impl Config {
                 (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
             })
             .collect();
+        let local_link_max_events = parse("LOCAL_LINK_BRIDGE_MAX_EVENTS", "256")? as usize;
+        if !(16..=4096).contains(&local_link_max_events) {
+            return Err("LOCAL_LINK_BRIDGE_MAX_EVENTS must be between 16 and 4096".into());
+        }
+        let local_link_allowed_schemes = std::env::var("LOCAL_LINK_BRIDGE_ALLOWED_SCHEMES")
+            .unwrap_or_else(|_| "http,https,mailto".into())
+            .split(',')
+            .map(|item| item.trim().to_ascii_lowercase())
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>();
+        if local_link_allowed_schemes.is_empty() {
+            return Err("LOCAL_LINK_BRIDGE_ALLOWED_SCHEMES must not be empty".into());
+        }
         Ok(Self {
             listen: std::env::var("SELKIES_UPLOAD_LISTEN")
                 .unwrap_or_else(|_| "127.0.0.1:38084".into()),
@@ -105,6 +120,8 @@ impl Config {
             resume_enabled: enabled("SELKIES_UPLOAD_RESUME_ENABLED", true),
             checksum_enabled: enabled("SELKIES_UPLOAD_CHECKSUM_ENABLED", true),
             allowed_subdirs,
+            local_link_max_events,
+            local_link_allowed_schemes,
         })
     }
 }
@@ -116,6 +133,7 @@ pub struct AppState {
     sessions: Arc<SessionCache>,
     permits: Arc<Semaphore>,
     started_at: Instant,
+    local_links: Arc<local_link::LocalLinkQueue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +263,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         root: Arc::new(canonical_root),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         started_at: Instant::now(),
+        local_links: Arc::new(local_link::LocalLinkQueue::new(config.local_link_max_events)),
     };
     start_session_cleanup(&state);
     Ok(state)
@@ -373,6 +392,9 @@ async fn remove_staging_file(path: &Path) -> std::io::Result<()> {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/local-link/push", post(local_link_push))
+        .route("/local-link/pull", get(local_link_pull))
+        .route("/local-link/health", get(local_link_health))
         .route("/upload-api/v1/sessions", post(create_session))
         .route(
             "/upload-api/v1/sessions/{id}",
@@ -396,6 +418,45 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "chunk_size": state.config.chunk_size,
         "max_concurrency": state.config.max_concurrency,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalLinkPushRequest {
+    url: String,
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalLinkPullQuery {
+    since: Option<u64>,
+}
+
+async fn local_link_push(
+    State(state): State<AppState>,
+    Json(request): Json<LocalLinkPushRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let url = local_link::validate_url(&request.url, &state.config.local_link_allowed_schemes)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid_url", "invalid URL or scheme"))?;
+    let source = request.source.unwrap_or_else(|| "xdg-open".into());
+    let source = source.chars().filter(|ch| !ch.is_control()).take(64).collect::<String>();
+    let id = state.local_links.push(url, source);
+    Ok(Json(serde_json::json!({ "ok": true, "id": id })))
+}
+
+async fn local_link_pull(
+    State(state): State<AppState>,
+    Query(query): Query<LocalLinkPullQuery>,
+) -> Json<serde_json::Value> {
+    let (events, latest_id) = state.local_links.pull(query.since.unwrap_or(0));
+    Json(serde_json::json!({
+        "ok": true,
+        "events": events,
+        "latest_id": latest_id,
+    }))
+}
+
+async fn local_link_health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": true }))
 }
 
 async fn create_session(
