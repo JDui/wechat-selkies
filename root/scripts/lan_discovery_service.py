@@ -22,7 +22,7 @@ STATUS_PATH = pathlib.Path(
 )
 POLL_SECONDS = max(
     0.5,
-    min(10.0, float(os.getenv("SELKIES_LAN_DISCOVERY_POLL_SECONDS", "1") or "1")),
+    min(30.0, float(os.getenv("SELKIES_LAN_DISCOVERY_POLL_SECONDS", "5") or "5")),
 )
 STOP_REQUESTED = False
 
@@ -98,27 +98,34 @@ def status_payload(state, running=False, address="", error=""):
 
 
 def run():
-    try:
-        from zeroconf import IPVersion, ServiceInfo, Zeroconf
-    except ImportError as exc:
-        state = read_discovery_state(STATE_PATH)
-        atomic_write_status(status_payload(state, error=f"zeroconf unavailable: {exc}"))
-        raise
-
-    zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
     registered_info = None
     active_key = None
     last_error = ""
+    zeroconf = None
+    zeroconf_types = None
     try:
         while not STOP_REQUESTED:
             state = read_discovery_state(STATE_PATH)
             identity = build_identity_payload(state)
             address = ""
+
+            # Do not create Zeroconf sockets/threads while discovery is disabled.
             if identity["enabled"]:
+                if zeroconf is None:
+                    try:
+                        from zeroconf import IPVersion, ServiceInfo, Zeroconf
+                        zeroconf_types = (ServiceInfo, Zeroconf)
+                        zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
+                    except Exception as exc:
+                        last_error = f"zeroconf unavailable: {exc}"
+                        atomic_write_status(status_payload(state, error=last_error))
+                        time.sleep(POLL_SECONDS)
+                        continue
                 try:
                     address = resolve_advertise_address()
                 except Exception as exc:
                     last_error = str(exc)
+
             desired_key = (
                 identity["enabled"],
                 identity["name"],
@@ -128,7 +135,7 @@ def run():
                 address,
             )
             if desired_key != active_key:
-                if registered_info is not None:
+                if registered_info is not None and zeroconf is not None:
                     try:
                         zeroconf.unregister_service(registered_info)
                     except Exception as exc:
@@ -140,6 +147,7 @@ def run():
                     try:
                         if not address:
                             address = resolve_advertise_address()
+                        ServiceInfo, _Zeroconf = zeroconf_types
                         registered_info = build_service_info(ServiceInfo, state, address)
                         zeroconf.register_service(registered_info)
                         print(
@@ -151,9 +159,16 @@ def run():
                         registered_info = None
                         last_error = str(exc)
                         print(f"[lan-discovery] registration failed: {exc}", flush=True)
+                    active_key = desired_key if registered_info is not None else None
                 else:
                     print("[lan-discovery] broadcasting disabled", flush=True)
-                active_key = desired_key if (not identity["enabled"] or registered_info is not None) else None
+                    active_key = desired_key
+                    if zeroconf is not None:
+                        try:
+                            zeroconf.close()
+                        finally:
+                            zeroconf = None
+                            zeroconf_types = None
 
             atomic_write_status(
                 status_payload(
@@ -165,12 +180,13 @@ def run():
             )
             time.sleep(POLL_SECONDS)
     finally:
-        if registered_info is not None:
+        if registered_info is not None and zeroconf is not None:
             try:
                 zeroconf.unregister_service(registered_info)
             except Exception:
                 pass
-        zeroconf.close()
+        if zeroconf is not None:
+            zeroconf.close()
         state = read_discovery_state(STATE_PATH)
         atomic_write_status(status_payload(state, running=False))
 
