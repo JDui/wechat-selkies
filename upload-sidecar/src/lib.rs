@@ -577,7 +577,14 @@ async fn download_create(
                 "queue-full" => (StatusCode::CONFLICT, "queue-full"),
                 "session-expired" => (StatusCode::UNAUTHORIZED, "session-expired"),
                 "invalid-client" => (StatusCode::BAD_REQUEST, "invalid-client"),
-                _ => (StatusCode::BAD_REQUEST, "download-error"),
+                "source-outside-allowed-roots" => (StatusCode::FORBIDDEN, "source-outside-allowed-roots"),
+                "source-missing" => (StatusCode::NOT_FOUND, "source-missing"),
+                "permission-denied" => (StatusCode::FORBIDDEN, "permission-denied"),
+                "size-limit" => (StatusCode::PAYLOAD_TOO_LARGE, "size-limit"),
+                "insufficient-space" => (StatusCode::INSUFFICIENT_STORAGE, "insufficient-space"),
+                "source-changed" => (StatusCode::CONFLICT, "source-changed"),
+                "regular-file-required" => (StatusCode::BAD_REQUEST, "regular-file-required"),
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "io-error"),
             };
             Err(ApiError::new(status, code, &error))
         }
