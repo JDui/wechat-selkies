@@ -27,7 +27,7 @@ extract_link_target() {
 bridge_local_link() {
     local url="$1"
     local source="${2:-open}"
-    local port="${LOCAL_LINK_BRIDGE_PORT:-38080}"
+    local port="${SELKIES_UPLOAD_PORT:-38084}"
 
     python3 - "$url" "$port" "$source" <<'PY'
 import json
@@ -38,10 +38,10 @@ import urllib.request
 url = sys.argv[1]
 port = int(sys.argv[2])
 source = sys.argv[3]
-endpoint = "http://127.0.0.1:%d/push" % port
-payload = urllib.parse.urlencode({"url": url, "source": source}).encode("utf-8")
+endpoint = "http://127.0.0.1:%d/local-link/push" % port
+payload = json.dumps({"url": url, "source": source}).encode("utf-8")
 request = urllib.request.Request(endpoint, data=payload, method="POST")
-request.add_header("Content-Type", "application/x-www-form-urlencoded")
+request.add_header("Content-Type", "application/json")
 with urllib.request.urlopen(request, timeout=1.5) as response:
     body = response.read().decode("utf-8", errors="replace")
     parsed = json.loads(body)
