@@ -29,6 +29,7 @@ use uuid::Uuid;
 pub mod native;
 pub mod local_link;
 pub mod sleep;
+pub mod download;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -136,6 +137,7 @@ pub struct AppState {
     started_at: Instant,
     local_links: Arc<local_link::LocalLinkQueue>,
     sleep: Arc<sleep::SleepManager>,
+    downloads: Arc<download::DownloadManager>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +264,9 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
     let local_link_max_events = config.local_link_max_events;
     let sleep = Arc::new(sleep::SleepManager::from_env());
     sleep.start_monitor();
+    let download_config = download::DownloadConfig::from_env(config.state_path.clone());
+    let downloads = Arc::new(download::DownloadManager::new(download_config)?);
+    downloads.start_cleanup();
     let state = AppState {
         permits: Arc::new(Semaphore::new(config.max_concurrency)),
         config: Arc::new(config),
@@ -270,6 +275,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         started_at: Instant::now(),
         local_links: Arc::new(local_link::LocalLinkQueue::new(local_link_max_events)),
         sleep,
+        downloads,
     };
     start_session_cleanup(&state);
     Ok(state)
@@ -406,6 +412,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sleep/activity", post(sleep_activity))
         .route("/sleep/wake", post(sleep_wake))
         .route("/sleep/sleep", post(sleep_manual))
+        .route("/native-download/jobs", post(download_create))
+        .route("/native-download/state", get(download_state))
+        .route("/native-download/jobs/{id}", get(download_verify))
+        .route("/native-download/jobs/{id}/finish", post(download_finish))
         .route("/upload-api/v1/sessions", post(create_session))
         .route(
             "/upload-api/v1/sessions/{id}",
@@ -517,6 +527,88 @@ async fn sleep_manual(State(state): State<AppState>) -> Result<Json<serde_json::
     }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
+
+
+#[derive(Debug, Deserialize)]
+struct DownloadCreateRequest {
+    source: String,
+    session_id: String,
+    session_epoch: u64,
+    client: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadStateQuery {
+    sid: String,
+    epoch: u64,
+    client: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadVerifyQuery {
+    token: String,
+    sid: String,
+    epoch: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadFinishRequest {
+    token: String,
+    sid: String,
+    epoch: u64,
+    success: bool,
+}
+
+async fn download_create(
+    State(state): State<AppState>,
+    Json(request): Json<DownloadCreateRequest>,
+) -> Result<(StatusCode, Json<download::DownloadJobStatus>), ApiError> {
+    let result = state.downloads.create_job(
+        request.source,
+        request.session_id,
+        request.session_epoch,
+        request.client,
+    ).await;
+    match result {
+        Ok(job) => Ok((StatusCode::ACCEPTED, Json(job))),
+        Err(error) => {
+            let (status, code) = match error.as_str() {
+                "already-preparing" | "queue-full" => (StatusCode::CONFLICT, error.as_str()),
+                "session-expired" => (StatusCode::UNAUTHORIZED, error.as_str()),
+                "invalid-client" => (StatusCode::BAD_REQUEST, error.as_str()),
+                _ => (StatusCode::BAD_REQUEST, error.as_str()),
+            };
+            Err(ApiError::new(status, code, &error))
+        }
+    }
+}
+
+async fn download_state(
+    State(state): State<AppState>,
+    Query(query): Query<DownloadStateQuery>,
+) -> Json<download::DownloadStatus> {
+    Json(state.downloads.status(&query.sid, query.epoch, &query.client))
+}
+
+async fn download_verify(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<DownloadVerifyQuery>,
+) -> Result<Json<download::DownloadFileInfo>, ApiError> {
+    state.downloads.verify_file(&id, &query.token, &query.sid, query.epoch)
+        .map(Json)
+        .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))
+}
+
+async fn download_finish(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<DownloadFinishRequest>,
+) -> Json<serde_json::Value> {
+    state.downloads.finish_file(&id, &request.token, &request.sid, request.epoch, request.success);
+    Json(serde_json::json!({ "ok": true }))
+}
+
 
 async fn create_session(
     State(state): State<AppState>,
