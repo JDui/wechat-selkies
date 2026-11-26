@@ -47,7 +47,7 @@ pub struct DownloadConfig {
 }
 
 impl DownloadConfig {
-    pub fn from_env(state_path: PathBuf) -> Self {
+    pub fn from_env(state_path: PathBuf, cache_root: PathBuf, download_root: PathBuf) -> Self {
         let number = |name: &str, default: u64| {
             std::env::var(name).ok().and_then(|value| value.parse::<u64>().ok()).unwrap_or(default)
         };
@@ -60,8 +60,8 @@ impl DownloadConfig {
             .map(PathBuf::from)
             .collect();
         Self {
-            cache_root: PathBuf::from(std::env::var("SELKIES_DROP_CACHE").unwrap_or_else(|_| "/run/selkies-drop-cache".into())),
-            download_root: PathBuf::from(std::env::var("SELKIES_DOWNLOAD_ROOT").unwrap_or_else(|_| "/config".into())),
+            cache_root,
+            download_root,
             state_path,
             source_roots,
             use_default_roots,
@@ -137,6 +137,7 @@ impl DownloadManager {
             return Err("download cache must not be a symlink".into());
         }
         fs::create_dir_all(&config.cache_root).map_err(|error| format!("create download cache: {error}"))?;
+        fs::create_dir_all(&config.download_root).map_err(|error| format!("create download root: {error}"))?;
         let cache_root = fs::canonicalize(&config.cache_root).map_err(|error| format!("canonicalize download cache: {error}"))?;
         let download_root = fs::canonicalize(&config.download_root).map_err(|error| format!("canonicalize download root: {error}"))?;
         if cache_root.starts_with(&download_root) || cache_root == Path::new("/var/tmp") || cache_root.components().count() < 3 {
