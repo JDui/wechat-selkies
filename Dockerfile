@@ -271,7 +271,7 @@ FROM ${RUNTIME_BASE} AS runtime
 ARG TARGETPLATFORM=linux/amd64
 ENV DRI_NODE="auto"
 ENV LIBVA_DRIVER_NAME="radeonsi"
-ENV SELKIES_ENCODER="x264enc,h265enc,av1enc,x264enc-striped,jpeg"
+ENV SELKIES_ENCODER="x264enc,h265enc,av1enc"
 LABEL org.opencontainers.image.title="WeChat Selkies AMD Radeon"
 LABEL org.opencontainers.image.description="WeChat Linux desktop with AMD Radeon H.264, HEVC and AV1 via Mesa VA-API"
 # Radeon 780M uses the existing pixelflux VA-API pipeline with Mesa radeonsi.
