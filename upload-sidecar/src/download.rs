@@ -307,6 +307,9 @@ impl DownloadManager {
     }
 
     pub fn finish_file(&self, id: &str, token: &str, session_id: &str, session_epoch: u64, success: bool) {
+        if self.validate_session(session_id, session_epoch).is_err() {
+            return;
+        }
         let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(job) = jobs.get_mut(id) {
             if job.session_id != session_id || job.session_epoch != session_epoch ||
