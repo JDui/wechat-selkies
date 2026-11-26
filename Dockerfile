@@ -285,12 +285,13 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="2.03"
-# Keep the stable legacy H.264 ABI. Load the upstream HEVC/AV1 runtime by its
-# private path instead of upgrading the pixelflux package used by that pipeline.
+LABEL org.opencontainers.image.version="2.04"
+# Load the pinned Pixelflux 2.2.3 runtime in a private path. Full-frame H.264,
+# HEVC and AV1 share this runtime; the base image copy remains only for legacy
+# striped H.264/JPEG capture until those packet paths are migrated.
 ARG HEVC_PIP_INDEX_URL=https://pypi.org/simple
 RUN /lsiopy/bin/pip install --no-cache-dir --no-deps --only-binary=:all: \
-      --index-url "$HEVC_PIP_INDEX_URL" --target /opt/selkies-hevc pixelflux==2.2.3
+      --index-url "$HEVC_PIP_INDEX_URL" --target /opt/selkies-pixelflux pixelflux==2.2.3
 COPY /root /
 COPY --from=upload-sidecar-builder /build/target/release/selkies-upload-sidecar /usr/local/bin/selkies-upload-sidecar
 
