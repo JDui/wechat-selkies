@@ -42,6 +42,7 @@ pub unsafe extern "C" fn selkies_audio_queue_push(
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
+    let was_empty = chunks.is_empty();
     let dropped = if chunks.len() >= queue.capacity {
         chunks.pop_front();
         queue.dropped.fetch_add(1, Ordering::Relaxed);
@@ -50,7 +51,7 @@ pub unsafe extern "C" fn selkies_audio_queue_push(
         0
     };
     chunks.push_back(source.to_vec());
-    dropped
+    if dropped != 0 { 1 } else if was_empty { 2 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -248,7 +249,7 @@ mod tests {
         let second = b"second";
         let third = b"third";
         unsafe {
-            assert_eq!(selkies_audio_queue_push(queue, first.as_ptr(), first.len()), 0);
+            assert_eq!(selkies_audio_queue_push(queue, first.as_ptr(), first.len()), 2);
             assert_eq!(selkies_audio_queue_push(queue, second.as_ptr(), second.len()), 0);
             assert_eq!(selkies_audio_queue_push(queue, third.as_ptr(), third.len()), 1);
             assert_eq!(selkies_audio_queue_len(queue), 2);
