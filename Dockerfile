@@ -200,7 +200,7 @@ ENV SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS="3600"
 ENV SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS="5"
 ENV SELKIES_HIDDEN_STREAM_IDLE_SECONDS="60"
 ENV SELKIES_AUTO_SPLIT="false"
-ENV QQ_EXTRA_FLAGS="--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-features=CalculateNativeWinOcclusion"
+ENV QQ_EXTRA_FLAGS="--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-accelerated-video-decode --disable-features=CalculateNativeWinOcclusion"
 ENV QQ_NICE_LEVEL="-2"
 ENV QQ_WATCHDOG_HANG_DETECT="true"
 ENV QQ_WATCHDOG_FAIL_THRESHOLD="3"
@@ -288,7 +288,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="2.08"
+LABEL org.opencontainers.image.version="2.09"
 # Upgrade the base Selkies Pixelflux package in place. All video codecs now use
 # the same 2.2.3 API; do not install a second private wheel or retain the 1.6.2 ABI.
 ARG PIXELFLUX_PIP_INDEX_URL=https://pypi.org/simple

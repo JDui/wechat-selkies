@@ -3,7 +3,7 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:2.08
+    image: wechat-selkies:2.09
     container_name: wechat-selkies
     init: true
     volumes:
@@ -82,7 +82,7 @@ services:
       - SELKIES_CONTAINER_SLEEP_IDLE_SECONDS=180
       - SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS=180
       - CUSTOM_WS_PORT=8081
-      - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-features=CalculateNativeWinOcclusion
+      - QQ_EXTRA_FLAGS=--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-accelerated-video-decode --disable-features=CalculateNativeWinOcclusion
       - SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS=3600
       - SELKIES_ADAPTIVE_SLEEP_CHECK_SECONDS=5
       - SELKIES_HIDDEN_STREAM_IDLE_SECONDS=60
@@ -132,7 +132,7 @@ services:
   axisnsbox-discovery:
     build:
       context: .
-    image: wechat-selkies:2.08
+    image: wechat-selkies:2.09
     container_name: axisnsbox-discovery
     init: true
     entrypoint: ["python3", "-u", "/scripts/lan_discovery_service.py"]

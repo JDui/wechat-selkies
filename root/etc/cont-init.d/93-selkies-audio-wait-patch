@@ -19,6 +19,13 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
+if "# SELKIES_PULSE_SOCKET" not in text:
+    shebang, separator, script = text.partition("\n")
+    text = shebang + separator + """# SELKIES_PULSE_SOCKET
+audio_uid="$(id -u "${AUDIO_SERVICE_USER:-abc}" 2>/dev/null || echo "${PUID:-1000}")"
+export PULSE_RUNTIME_PATH="${XDG_RUNTIME_DIR:-/run/user/$audio_uid}/pulse"
+export PULSE_SERVER="unix:$PULSE_RUNTIME_PATH/native"
+""" + script
 old_blocks = [
     """  until [ -f /defaults/pid ]; do
     sleep .5
@@ -34,8 +41,7 @@ old_blocks = [
   if [ ! -f /defaults/pid ]; then
     echo "[svc-selkies] warning: /defaults/pid not found after ${audio_ready_timeout}s; continuing Selkies startup" >&2
   fi""",
-]
-new = """  audio_ready_timeout="${SELKIES_AUDIO_READY_TIMEOUT_SECONDS:-15}"
+    """  audio_ready_timeout="${SELKIES_AUDIO_READY_TIMEOUT_SECONDS:-15}"
   if ! [[ "$audio_ready_timeout" =~ ^[0-9]+$ ]]; then
     audio_ready_timeout="15"
   fi
@@ -47,6 +53,20 @@ new = """  audio_ready_timeout="${SELKIES_AUDIO_READY_TIMEOUT_SECONDS:-15}"
   done
   if [ ! -f /defaults/pid ]; then
     echo "[svc-selkies] warning: /defaults/pid not found after ${audio_ready_timeout}s; continuing Selkies startup" >&2
+  fi""",
+]
+new = """  audio_ready_timeout="${SELKIES_AUDIO_READY_TIMEOUT_SECONDS:-15}"
+  if ! [[ "$audio_ready_timeout" =~ ^[0-9]+$ ]]; then
+    audio_ready_timeout="15"
+  fi
+  # SELKIES_AUDIO_READY_COUNTER_PATCH
+  audio_ready_waited=0
+  until [ -S "$PULSE_RUNTIME_PATH/native" ] || [ "$audio_ready_waited" -ge "$audio_ready_timeout" ]; do
+    sleep 1
+    audio_ready_waited=$((audio_ready_waited + 1))
+  done
+  if [ ! -S "$PULSE_RUNTIME_PATH/native" ]; then
+    echo "[svc-selkies] warning: PulseAudio socket not found after ${audio_ready_timeout}s; continuing Selkies startup" >&2
   fi"""
 
 for old in old_blocks:
@@ -70,18 +90,21 @@ pactl_new = """  # SELKIES_PACTL_TIMEOUT_PATCH
   if ! [[ "$pactl_timeout" =~ ^[0-9]+$ ]]; then
     pactl_timeout="5"
   fi
-  timeout "$pactl_timeout" s6-setuidgid abc with-contenv pactl \\
+  timeout "$pactl_timeout" s6-setuidgid abc pactl \\
     load-module module-null-sink \\
     sink_name="output" \\
     sink_properties=device.description="output" || \\
     echo "[svc-selkies] warning: pactl output sink setup timed out or failed; continuing Selkies startup" >&2
-  timeout "$pactl_timeout" s6-setuidgid abc with-contenv pactl \\
+  timeout "$pactl_timeout" s6-setuidgid abc pactl \\
     load-module module-null-sink \\
     sink_name="input" \\
     sink_properties=device.description="input" || \\
     echo "[svc-selkies] warning: pactl input sink setup timed out or failed; continuing Selkies startup" >&2"""
 
-if "SELKIES_PACTL_TIMEOUT_PATCH" not in text:
+if "SELKIES_PACTL_TIMEOUT_PATCH" in text:
+    text = text.replace('timeout "$pactl_timeout" s6-setuidgid abc with-contenv pactl',
+                        'timeout "$pactl_timeout" s6-setuidgid abc pactl')
+else:
     if pactl_old in text:
         text = text.replace(pactl_old, pactl_new, 1)
     else:

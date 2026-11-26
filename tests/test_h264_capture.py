@@ -86,14 +86,19 @@ class H264PacketTests(unittest.TestCase):
     def test_wire_header_marks_idr_and_preserves_wrapping_frame_id(self):
         frame = Frame(65537, b"\x00\x00\x00\x01\x67SPS\x00\x00\x00\x01\x68PPS\x00\x00\x00\x01\x65IDR")
         data, frame_id = h264.packet(frame, 1920, 1080)
-        self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (1, 1, 1, 0, 1920, 1080))
+        self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (4, 1, 1, 0, 1920, 1080))
         self.assertEqual(frame_id, 1)
         self.assertEqual(data[10:], bytes(frame))
 
     def test_delta_frame_is_not_marked_as_keyframe(self):
         frame = Frame(7, b"\x00\x00\x00\x01\x41delta")
         data, frame_id = h264.packet(frame, 1280, 720)
-        self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (1, 0, 7, 0, 1280, 720))
+        self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (4, 0, 7, 0, 1280, 720))
+
+    def test_rejects_a_native_stripe_header_as_payload(self):
+        frame = Frame(7, b"\x04\x10\x00\x07\x00\x00\x05\x00\x02\xd0\x00\x06\x00\x00\x00\x01\x41delta")
+        with self.assertRaisesRegex(RuntimeError, "non-Annex-B"):
+            h264.packet(frame, 1280, 720)
 
     def test_rejects_wrong_codec_frame_type(self):
         with self.assertRaisesRegex(RuntimeError, "Unexpected Pixelflux frame type"):
@@ -113,6 +118,7 @@ class H264CaptureTests(unittest.TestCase):
         self.assertEqual([frame_id for _, frame_id in delivered], [10, 11])
         self.assertEqual(capture.settings.codec, "h264")
         self.assertTrue(capture.settings.video_fullframe)
+        self.assertTrue(capture.settings.omit_stripe_headers)
         self.assertEqual(capture.settings.video_crf, 24)
         self.assertEqual(capture.settings.video_paintover_crf, 18)
         self.assertTrue(capture.settings.video_streaming_mode)

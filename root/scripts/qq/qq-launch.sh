@@ -5,6 +5,7 @@ set -euo pipefail
 default_flags=(
     --disable-renderer-backgrounding
     --disable-backgrounding-occluded-windows
+    --disable-accelerated-video-decode
     --disable-features=CalculateNativeWinOcclusion
 )
 
