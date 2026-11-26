@@ -61,7 +61,7 @@
 
 ### 2.08
 
-- Rust 运行时扩展：新增有界音频 Ring Buffer 和 XTEST 键盘注入 FFI；本地链接 push/pull 迁入现有 Tokio/Axum Sidecar，移除常驻 Python Local Link Bridge。
+- Rust 运行时扩展：新增有界音频 Ring Buffer 和 XTEST 键盘注入 FFI；本地链接 push/pull、Preferences API、休眠管理和下载复制/缓存/HTTP 流迁入现有 Tokio/Axum Sidecar。Python 仅保留 XDND/X11 选择适配与 Session/Auth 业务。
 
 - 实时链路保护：音频队列改为有界队列，原生音频回调使用 `call_soon_threadsafe` 直接入队，避免每个 20ms 音频包创建一个协程任务；原生音视频采集启停从 asyncio 默认线程池隔离到专用 2 线程 Executor。通知与本地链接桥以较低 CPU 调度优先级运行，避免辅助服务抢占桌面交互。
 
