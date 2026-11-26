@@ -3,7 +3,7 @@ services:
   wechat-selkies:
     build:
       context: .
-    image: wechat-selkies:2.06
+    image: wechat-selkies:2.07
     container_name: wechat-selkies
     init: true
     volumes:
@@ -118,6 +118,7 @@ services:
       - SELKIES_RENDER_STALL_WATCHDOG=true
       - SELKIES_RENDER_STALL_THRESHOLD_MS=12000
       - SELKIES_RENDER_STALL_COOLDOWN_MS=25000
+      - SELKIES_AUDIO_QUEUE_MAX_CHUNKS=10
       - SELKIES_AUDIO_WATCHDOG=true
       - SELKIES_AUDIO_START_INTERVAL_MS=8000
       - SELKIES_AUDIO_PACKET_STALL_MS=15000
