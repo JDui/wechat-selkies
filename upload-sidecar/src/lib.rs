@@ -545,10 +545,8 @@ struct DownloadStateQuery {
 }
 
 #[derive(Debug, Deserialize)]
-struct DownloadVerifyQuery {
+struct DownloadStreamQuery {
     token: String,
-    sid: String,
-    epoch: u64,
 }
 
 struct DownloadStreamState {
@@ -631,16 +629,18 @@ async fn download_state(
 async fn download_stream(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
-    Query(query): Query<DownloadVerifyQuery>,
+    Query(query): Query<DownloadStreamQuery>,
 ) -> Result<Response, ApiError> {
-    let info = state.downloads.verify_file(&id, &query.token, &query.sid, query.epoch)
+    let (session_id, session_epoch) = state.downloads.current_identity()
+        .map_err(|error| ApiError::new(StatusCode::UNAUTHORIZED, "session-expired", &error))?;
+    let info = state.downloads.verify_file(&id, &query.token, &session_id, session_epoch)
         .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
     let path = state.downloads.cache_file(&id)
         .map_err(|error| ApiError::new(StatusCode::GONE, "download-expired", &error))?;
     let file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(error) => {
-            state.downloads.finish_file(&id, &query.token, &query.sid, query.epoch, false);
+            state.downloads.finish_file(&id, &query.token, &session_id, session_epoch, false);
             return Err(internal_error(error));
         }
     };
@@ -649,8 +649,8 @@ async fn download_stream(
         manager: state.downloads.clone(),
         id,
         token: query.token,
-        session_id: query.sid,
-        session_epoch: query.epoch,
+        session_id,
+        session_epoch,
         finished: false,
     };
     let stream = futures_util::stream::try_unfold(stream_state, |mut stream_state| async move {
