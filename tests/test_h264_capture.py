@@ -46,7 +46,7 @@ def legacy_settings(**changes):
 
 class NativeCapture:
     def __init__(self, frames=None, info=None):
-        self.frames = list(frames or [Frame(0, b"\\x00\\x00\\x00\\x01\\x67SPS\\x00\\x00\\x00\\x01\\x68PPS\\x00\\x00\\x00\\x01\\x65IDR")])
+        self.frames = list(frames or [Frame(0, b"\x00\x00\x00\x01\x67SPS\x00\x00\x00\x01\x68PPS\x00\x00\x00\x01\x65IDR")])
         self.info = info or {"codec": "h264", "hardware": True, "fullcolor": False, "striped": False}
         self.callback = None
         self.settings = None
@@ -84,14 +84,14 @@ def module_for(capture):
 
 class H264PacketTests(unittest.TestCase):
     def test_wire_header_marks_idr_and_preserves_wrapping_frame_id(self):
-        frame = Frame(65537, b"\\x00\\x00\\x00\\x01\\x67SPS\\x00\\x00\\x00\\x01\\x68PPS\\x00\\x00\\x00\\x01\\x65IDR")
+        frame = Frame(65537, b"\x00\x00\x00\x01\x67SPS\x00\x00\x00\x01\x68PPS\x00\x00\x00\x01\x65IDR")
         data, frame_id = h264.packet(frame, 1920, 1080)
         self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (1, 1, 1, 0, 1920, 1080))
         self.assertEqual(frame_id, 1)
         self.assertEqual(data[10:], bytes(frame))
 
     def test_delta_frame_is_not_marked_as_keyframe(self):
-        frame = Frame(7, b"\\x00\\x00\\x00\\x01\\x41delta")
+        frame = Frame(7, b"\x00\x00\x00\x01\x41delta")
         data, frame_id = h264.packet(frame, 1280, 720)
         self.assertEqual(struct.unpack("!BBHHHH", data[:10]), (1, 0, 7, 0, 1280, 720))
 
@@ -102,9 +102,9 @@ class H264PacketTests(unittest.TestCase):
 
 class H264CaptureTests(unittest.TestCase):
     def test_uses_private_runtime_and_preserves_keyframe_then_delta_order(self):
-        key = Frame(10, b"\\x00\\x00\\x00\\x01\\x67SPS\\x00\\x00\\x00\\x01\\x68PPS\\x00\\x00\\x00\\x01\\x65IDR")
-        delta = Frame(11, b"\\x00\\x00\\x00\\x01\\x41delta")
-        capture = NativeCapture([Frame(9, b"\\x00\\x00\\x00\\x01\\x41early"), key, delta])
+        key = Frame(10, b"\x00\x00\x00\x01\x67SPS\x00\x00\x00\x01\x68PPS\x00\x00\x00\x01\x65IDR")
+        delta = Frame(11, b"\x00\x00\x00\x01\x41delta")
+        capture = NativeCapture([Frame(9, b"\x00\x00\x00\x01\x41early"), key, delta])
         module = module_for(capture)
         delivered = []
         with patch.object(h264, "runtime", return_value=module):
@@ -117,10 +117,10 @@ class H264CaptureTests(unittest.TestCase):
         self.assertEqual(capture.settings.video_paintover_crf, 18)
         self.assertTrue(capture.settings.video_streaming_mode)
         self.assertEqual(capture.idr_requests, 1)
-        capture.callback(Frame(12, b"\\x00\\x00\\x00\\x01\\x41next"))
+        capture.callback(Frame(12, b"\x00\x00\x00\x01\x41next"))
         self.assertEqual([frame_id for _, frame_id in delivered], [10, 11, 12])
         adapter.stop_capture()
-        capture.callback(Frame(13, b"\\x00\\x00\\x00\\x01\\x41late"))
+        capture.callback(Frame(13, b"\x00\x00\x00\x01\x41late"))
         self.assertEqual(len(delivered), 3)
 
     def test_requires_hardware_when_cpu_encoding_is_not_requested(self):
@@ -142,7 +142,7 @@ class H264CaptureTests(unittest.TestCase):
         self.assertEqual(capture.stops, 1)
 
     def test_waits_for_idr_and_times_out_without_publishing_delta_frames(self):
-        capture = NativeCapture([Frame(1, b"\\x00\\x00\\x00\\x01\\x41delta")])
+        capture = NativeCapture([Frame(1, b"\x00\x00\x00\x01\x41delta")])
         callback = Mock()
         with patch.object(h264, "runtime", return_value=module_for(capture)), patch.object(h264, "FIRST_FRAME_TIMEOUT", 0):
             with self.assertRaisesRegex(RuntimeError, "no IDR frame"):
