@@ -139,7 +139,7 @@ ENV AUTO_START_QQ="false"
 ENV DISABLE_CORE_DUMPS="true"
 ENV DESKTOP_APP_LOG_MAX_BYTES="1048576"
 ENV PROCESS_WATCHDOG="true"
-ENV WATCHDOG_INTERVAL="10"
+ENV WATCHDOG_INTERVAL="20"
 ENV WATCHDOG_TRAY="true"
 ENV WATCHDOG_RESTART_WECHAT="true"
 ENV WATCHDOG_RESTART_QQ="true"
@@ -150,8 +150,9 @@ ENV NOTIFICATION_BRIDGE_LOG_PATH="/config/logs/notification-bridge.log"
 ENV NOTIFICATION_BRIDGE_LOG_MAX_BYTES="1048576"
 ENV NOTIFICATION_BRIDGE_RAW_LOG_PATH="/config/logs/notification-bridge-raw.log"
 ENV NOTIFICATION_BRIDGE_MODE_PATH="/config/state/notification-bridge.json"
-ENV NOTIFICATION_BRIDGE_FALLBACK_POLL_MS="1200"
+ENV NOTIFICATION_BRIDGE_FALLBACK_POLL_MS="3000"
 ENV NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS="600"
+ENV NOTIFICATION_BRIDGE_IDLE_DEFOCUS_POLL_SECONDS="5"
 ENV NOTIFICATION_BRIDGE_AUDIO_WECHAT_ENABLED="true"
 ENV NOTIFICATION_BRIDGE_AUDIO_PEAK_THRESHOLD="0.095"
 ENV NOTIFICATION_BRIDGE_AUDIO_MIN_MS="110"
@@ -285,7 +286,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-LABEL org.opencontainers.image.version="2.05"
+LABEL org.opencontainers.image.version="2.06"
 # Upgrade the base Selkies Pixelflux package in place. All video codecs now use
 # the same 2.2.3 API; do not install a second private wheel or retain the 1.6.2 ABI.
 ARG PIXELFLUX_PIP_INDEX_URL=https://pypi.org/simple
