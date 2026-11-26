@@ -1,12 +1,9 @@
 """Thin X11 drag-and-drop adapter; Rust sidecar owns copy, cache and job state."""
-import hmac
 import json
 import os
-from pathlib import Path
 import re
 import threading
 import time
-import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -43,7 +40,6 @@ class Downloads:
     def __init__(self, identity):
         self.identity = identity
         self.port = int(os.environ.get("SELKIES_UPLOAD_PORT", "38084"))
-        self.cache_root = Path(os.environ.get("SELKIES_DROP_CACHE", "/run/selkies-drop-cache"))
         self.lock = threading.RLock()
         self.lease = None
         self.phase = "idle"
@@ -194,70 +190,6 @@ class Downloads:
                 error_id=error_id,
                 jobs=jobs,
             )
-
-    def stream(self, handler, sid, job_id, token):
-        identity = self.identity()
-        if not identity or identity[0] != sid:
-            handler.send_json(410, dict(ok=False, error="session-expired"))
-            return
-        try:
-            epoch = int(identity[1])
-            _, info = self._sidecar_request(
-                "/native-download/jobs/" + quote(job_id, safe="") + "?" +
-                urlencode({"token": token, "sid": sid, "epoch": epoch}),
-                timeout=3.0,
-            )
-        except (DownloadError, ValueError):
-            handler.send_json(410, dict(ok=False, error="download-expired"))
-            return
-        if info.get("id") != job_id:
-            handler.send_json(410, dict(ok=False, error="download-expired"))
-            return
-
-        path = self.cache_root / (job_id + ".data")
-        success = False
-        try:
-            with path.open("rb") as source:
-                clean = "".join(
-                    char for char in str(info.get("name") or "download")
-                    if not unicodedata.category(char).startswith("C") and char not in "/\\"
-                )[:180] or "download"
-                handler.send_response(200)
-                handler.send_header("Content-Type", "application/octet-stream")
-                handler.send_header(
-                    "Content-Disposition",
-                    "attachment; filename=\"download\"; filename*=UTF-8''" + quote(clean, safe=""),
-                )
-                handler.send_header("Content-Length", str(int(info.get("size") or 0)))
-                handler.send_header("Cache-Control", "no-store")
-                handler.send_header("X-Content-Type-Options", "nosniff")
-                handler.end_headers()
-                handler.connection.settimeout(30)
-                while True:
-                    if self.identity() != identity:
-                        raise ConnectionAbortedError("session-changed")
-                    chunk = source.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    handler.wfile.write(chunk)
-                success = True
-        except OSError:
-            handler.close_connection = True
-        finally:
-            try:
-                self._sidecar_request(
-                    "/native-download/jobs/" + quote(job_id, safe="") + "/finish",
-                    method="POST",
-                    payload={
-                        "token": token,
-                        "sid": sid,
-                        "epoch": epoch,
-                        "success": success,
-                    },
-                    timeout=2.0,
-                )
-            except DownloadError:
-                pass
 
     def start(self):
         def worker():
