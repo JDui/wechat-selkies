@@ -41,7 +41,7 @@ jobs:
       - name: Run Python adapter tests
         run: |
           python -m unittest discover -s tests -p 'test_container_download.py'
-          python -m unittest discover -s tests -p 'test_sleep_preferences.py'
+          python -m unittest discover -s tests -p 'test_rust_control_routes.py'
       - name: Validate shell scripts
         run: |
           bash -n root/scripts/start.sh
