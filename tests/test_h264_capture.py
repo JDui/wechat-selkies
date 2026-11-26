@@ -2,14 +2,18 @@ import ast
 import importlib.util
 from pathlib import Path
 import struct
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "root/lsiopy/lib/python3.12/site-packages/selkies"
 PACKAGE = "h264_capture_tests"
-spec = importlib.util.spec_from_file_location(PACKAGE, BACKEND / "h264_capture.py")
+package = ModuleType(PACKAGE)
+package.__path__ = [str(BACKEND)]
+sys.modules[PACKAGE] = package
+spec = importlib.util.spec_from_file_location(PACKAGE + ".h264_capture", BACKEND / "h264_capture.py")
 h264 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(h264)
 
@@ -163,7 +167,6 @@ class H264CaptureTests(unittest.TestCase):
             self.assertEqual(capture.tunables.video_paintover_burst_frames, 3)
 
     def test_server_routes_fullframe_h264_to_new_adapter_and_striped_remains_separate(self):
-        tree = ast.parse((BACKEND / "selkies.py").read_text(encoding="utf-8-sig"))
         source = (BACKEND / "selkies.py").read_text(encoding="utf-8-sig")
         self.assertIn('elif encoder_for_this_capture == "x264enc":\\n                capture_module = H264Capture()', source)
         self.assertIn('encoder_for_this_capture in ("x264enc", "h265enc", "av1enc")', source)
