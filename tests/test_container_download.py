@@ -17,7 +17,7 @@ class DownloadAdapterTests(unittest.TestCase):
         self.identity = ("sid_test", 42)
         self.manager = module.Downloads(lambda: self.identity)
         self.client = "a" * 32
-        self.manager.configure(self.identity[0], self.client, [10, 20, 640, 480])
+        self.manager.configure(self.identity, self.client, [10, 20, 640, 480])
 
     def test_geometry_lease_is_session_scoped(self):
         self.assertEqual(self.manager.geometry(), [10, 20, 640, 480])
@@ -57,7 +57,7 @@ class DownloadAdapterTests(unittest.TestCase):
             }],
         }
         with mock.patch.object(self.manager, "_sidecar_request", return_value=(200, payload)):
-            status = self.manager.status("sid_test", self.client)
+            status = self.manager.status(self.identity, self.client)
         self.assertTrue(status["ok"])
         self.assertFalse(status["native_ready"])
         self.assertEqual(status["phase"], "idle")
