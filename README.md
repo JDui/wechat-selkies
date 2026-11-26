@@ -65,7 +65,7 @@
 
 - 降低后台轮询密度：Process Watchdog 从 10 秒调整为 20 秒；通知窗口回退扫描从 1.2 秒调整为 3 秒；空闲焦点检查调整为 5 秒；局域网发现状态轮询调整为 5 秒。
 - 局域网发现关闭时不再创建 Zeroconf 实例，避免无效的 mDNS socket / 线程常驻。
-- Notification Bridge 在音频事件检测关闭时不再创建空转音频线程。完整服务审计与 NAS 测量方法见 [运行时开销审计](docs/ops/runtime-overhead-audit-2.07.md)。
+- Notification Bridge 在音频事件检测关闭时不再创建空转音频线程。完整服务审计与 NAS 测量方法见 [运行时开销审计](docs/ops/runtime-overhead-audit-2.06.md)。
 - 输入法候选窗锚点跟随远端画面的点击或触摸位置，画面缩放、窗口尺寸及可见视口变化后重新定位；组词期间保持位置稳定。定位模块独立加载，沿用现有输入焦点、候选提交、发送队列和剪贴板实现。范围与验证见 [候选窗定位修复](docs/ops/ime-candidate-position.md)。
 
 ### 2.02
