@@ -79,7 +79,7 @@ AMD 初始化阶段已完成 8 项设备选择 / 探测 / 回退定向测试。�
 docker build --build-arg RUNTIME_BASE=wechat-selkies:1.85 -t wechat-selkies:hevc-dev .
 ```
 
-如访问 PyPI 困难，可添加 `--build-arg HEVC_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。在 NAS 选择 `h265enc`、关闭 CPU 编码，并检查容器日志中的实际编码器状态及浏览器画面；如果回退，先查看该节点是否提供 HEVC Main 编码能力。
+如访问 PyPI 困难，可添加 `--build-arg PIXELFLUX_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。在 NAS 选择 `h265enc`、关闭 CPU 编码，并检查容器日志中的实际编码器状态及浏览器画面；如果回退，先查看该节点是否提供 HEVC Main 编码能力。
 
 本地已验证：真实软件 H.265 出帧 → WebSocket → Chrome WebCodecs 解码；45 FPS / CRF 24 / 静态优化开启 / Turbo 关闭在刷新并重新登录后恢复；不支持 HEVC 的客户端回退 H.264 且不丢设置。另有持久化重启、参数校验、协商字段解析、GPU 缺少编码器与队列顺序的定向测试。没有用无 GPU 容器的结果替代 780M 硬编验收。
 
