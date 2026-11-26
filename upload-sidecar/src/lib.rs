@@ -303,7 +303,11 @@ fn start_session_cleanup(state: &AppState) {
     let root = state.root.clone();
     let resume_enabled = state.config.resume_enabled;
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let period = Duration::from_secs(60);
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + period,
+            period,
+        );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_disk_cleanup: Option<Instant> = None;
         loop {
