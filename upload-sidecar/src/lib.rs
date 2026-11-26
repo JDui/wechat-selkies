@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 pub mod native;
 pub mod local_link;
+pub mod sleep;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -134,6 +135,7 @@ pub struct AppState {
     permits: Arc<Semaphore>,
     started_at: Instant,
     local_links: Arc<local_link::LocalLinkQueue>,
+    sleep: Arc<sleep::SleepManager>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +260,8 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         .map_err(|error| format!("create staging directory: {error}"))?;
     reject_symlink(&canonical_root.join(".staging")).await?;
     let local_link_max_events = config.local_link_max_events;
+    let sleep = Arc::new(sleep::SleepManager::from_env());
+    sleep.start_monitor();
     let state = AppState {
         permits: Arc::new(Semaphore::new(config.max_concurrency)),
         config: Arc::new(config),
@@ -265,6 +269,7 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         sessions: Arc::new(RwLock::new(HashMap::new())),
         started_at: Instant::now(),
         local_links: Arc::new(local_link::LocalLinkQueue::new(local_link_max_events)),
+        sleep,
     };
     start_session_cleanup(&state);
     Ok(state)
@@ -396,6 +401,11 @@ pub fn router(state: AppState) -> Router {
         .route("/local-link/push", post(local_link_push))
         .route("/local-link/pull", get(local_link_pull))
         .route("/local-link/health", get(local_link_health))
+        .route("/sleep/health", get(sleep_status))
+        .route("/sleep/status", get(sleep_status))
+        .route("/sleep/activity", post(sleep_activity))
+        .route("/sleep/wake", post(sleep_wake))
+        .route("/sleep/sleep", post(sleep_manual))
         .route("/upload-api/v1/sessions", post(create_session))
         .route(
             "/upload-api/v1/sessions/{id}",
@@ -458,6 +468,54 @@ async fn local_link_pull(
 
 async fn local_link_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true }))
+}
+
+async fn sleep_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let manager = state.sleep.clone();
+    let payload = tokio::task::spawn_blocking(move || manager.status_payload())
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(payload))
+}
+
+async fn sleep_activity(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let manager = state.sleep.clone();
+    let payload = tokio::task::spawn_blocking(move || manager.record_activity())
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(payload))
+}
+
+async fn sleep_wake(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let manager = state.sleep.clone();
+    let wake_manager = manager.clone();
+    let ok = tokio::task::spawn_blocking(move || wake_manager.leave_sleep("pin"))
+        .await
+        .map_err(internal_error)?;
+    let sleeping = manager.is_sleeping();
+    if !ok || sleeping {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "wakeup_failed",
+            "container did not leave sleep state",
+        ));
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "sleeping": false })))
+}
+
+async fn sleep_manual(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let manager = state.sleep.clone();
+    let ok = tokio::task::spawn_blocking(move || manager.enter_sleep("manual"))
+        .await
+        .map_err(internal_error)?;
+    if !ok {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sleep_disabled",
+            "container sleep is disabled",
+        ));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn create_session(
