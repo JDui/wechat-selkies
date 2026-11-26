@@ -166,6 +166,8 @@ def run():
                     if zeroconf is not None:
                         try:
                             zeroconf.close()
+                        except Exception as exc:
+                            print(f"[lan-discovery] close failed: {exc}", flush=True)
                         finally:
                             zeroconf = None
                             zeroconf_types = None
