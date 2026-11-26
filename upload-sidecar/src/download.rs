@@ -397,7 +397,13 @@ impl DownloadManager {
             return Err("insufficient-space".into());
         }
         let mut output = OpenOptions::new().write(true).create_new(true).open(part)
-            .map_err(|error| if error.kind() == std::io::ErrorKind::PermissionDenied { "permission-denied".into() } else { "io-error".into() })?;
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    String::from("permission-denied")
+                } else {
+                    String::from("io-error")
+                }
+            })?;
         let mut copied = 0_u64;
         let mut buffer = vec![0_u8; 1024 * 1024];
         loop {
