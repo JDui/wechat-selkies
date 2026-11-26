@@ -1,5 +1,10 @@
 #!/usr/bin/with-contenv bash
 set -e
 
+runtime_dir="${SELKIES_RUNTIME_STATE_DIR:-/run/selkies-runtime}"
+install -d -o abc -g abc -m 700 "$runtime_dir"
+export SELKIES_SESSION_STATE_PATH="${SELKIES_SESSION_STATE_PATH:-$runtime_dir/active-session.json}"
+export SELKIES_CONTAINER_SLEEP_STATE_PATH="${SELKIES_CONTAINER_SLEEP_STATE_PATH:-$runtime_dir/container-sleep.json}"
+export SELKIES_SESSION_COOKIE_PATH="${SELKIES_SESSION_COOKIE_PATH:-${SUBFOLDER:-/}}"
 export SELKIES_UPLOAD_LISTEN="${SELKIES_UPLOAD_LISTEN:-127.0.0.1:${SELKIES_UPLOAD_PORT:-${SELKIES_CONTAINER_SLEEP_PORT:-${LOCAL_LINK_BRIDGE_PORT:-38084}}}}"
 exec s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar
