@@ -5,10 +5,7 @@ set -euo pipefail
 default_flags=(
     --disable-renderer-backgrounding
     --disable-backgrounding-occluded-windows
-    --disable-gpu
-    --disable-gpu-compositing
-    --disable-gpu-rasterization
-    --disable-features=CalculateNativeWinOcclusion,UseSkiaRenderer
+    --disable-features=CalculateNativeWinOcclusion
 )
 
 qq_flags_raw="${QQ_EXTRA_FLAGS:-}"
