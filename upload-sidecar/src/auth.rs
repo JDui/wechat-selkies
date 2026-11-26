@@ -105,6 +105,10 @@ impl AuthManager {
         !self.config.password.is_empty()
     }
 
+    pub fn verify_pin(&self, pin: &str) -> bool {
+        self.password_enabled() && constant_time_eq(pin.as_bytes(), self.config.password.as_bytes())
+    }
+
     pub fn is_valid_request(&self, cookie_header: Option<&str>, query: Option<&str>, original_uri: Option<&str>) -> bool {
         if !self.password_enabled() {
             return true;
