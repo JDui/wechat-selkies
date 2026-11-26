@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+export SELKIES_UPLOAD_LISTEN="${SELKIES_UPLOAD_LISTEN:-127.0.0.1:${SELKIES_UPLOAD_PORT:-38084}}"
+exec s6-setuidgid abc /usr/local/bin/selkies-upload-sidecar
