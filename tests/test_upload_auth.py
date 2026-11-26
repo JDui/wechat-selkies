@@ -13,10 +13,6 @@ BRIDGE_PATH = (
 )
 
 
-def decode_base64url(value):
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-
-
 class UploadAuthTests(unittest.TestCase):
     def load_bridge(self, temporary):
         state_path = Path(temporary) / "session.json"
