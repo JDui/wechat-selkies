@@ -48,6 +48,7 @@ pub struct SleepConfig {
     pub frontend_activity_state_path: PathBuf,
     pub mode_state_path: PathBuf,
     pub state_path: PathBuf,
+    pub desktop_ready_path: PathBuf,
     pub check_seconds: u64,
     pub startup_grace_seconds: u64,
     pub wake_verify_seconds: u64,
@@ -76,6 +77,7 @@ impl SleepConfig {
             frontend_activity_state_path: PathBuf::from(std::env::var("SELKIES_FRONTEND_ACTIVITY_STATE_PATH").unwrap_or_else(|_| "/tmp/selkies-frontend-activity.json".into())),
             mode_state_path: PathBuf::from(std::env::var("NOTIFICATION_BRIDGE_MODE_PATH").unwrap_or_else(|_| "/config/state/notification-bridge.json".into())),
             state_path: PathBuf::from(std::env::var("SELKIES_CONTAINER_SLEEP_STATE_PATH").unwrap_or_else(|_| "/run/selkies-container-sleep.json".into())),
+            desktop_ready_path: PathBuf::from(std::env::var("SELKIES_DESKTOP_READY_PATH").unwrap_or_else(|_| "/tmp/selkies-desktop-ready".into())),
             check_seconds: number("SELKIES_CONTAINER_SLEEP_CHECK_SECONDS", 5, 2, 60),
             startup_grace_seconds: number("SELKIES_CONTAINER_SLEEP_STARTUP_GRACE_SECONDS", 180, 15, 3600),
             wake_verify_seconds: number("SELKIES_CONTAINER_SLEEP_WAKE_VERIFY_SECONDS", 8, 1, 60),
@@ -89,8 +91,7 @@ impl SleepConfig {
 #[derive(Clone)]
 pub struct SleepManager {
     config: SleepConfig,
-    started_at: Instant,
-    started_at_wall: f64,
+    ready_at: Arc<Mutex<Option<(Instant, f64)>>>,
     state_lock: Arc<Mutex<()>>,
 }
 
@@ -114,8 +115,7 @@ impl SleepManager {
     pub fn new(config: SleepConfig) -> Self {
         Self {
             config,
-            started_at: Instant::now(),
-            started_at_wall: now_seconds(),
+            ready_at: Arc::new(Mutex::new(None)),
             state_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -153,7 +153,9 @@ impl SleepManager {
         let mode = self.read_sleep_mode();
         let last_interaction_at = self.latest_frontend_interaction_at();
         let idle_seconds = mode.idle_seconds;
-        let reference_at = last_interaction_at.max(self.started_at_wall).max(mode.settings_updated_at.min(now));
+        let ready_state = self.desktop_ready_state();
+        let ready_wall = ready_state.as_ref().map(|(_, wall)| *wall).unwrap_or(now);
+        let reference_at = last_interaction_at.max(ready_wall).max(mode.settings_updated_at.min(now));
         let idle_for = (now - reference_at).max(0.0);
         let awake = self.awake_clients_snapshot(now);
         let warning_deadline = normalize_timestamp(state.get("warning_deadline_at"), 0.0);
@@ -168,7 +170,10 @@ impl SleepManager {
             "sleeping"
         } else if !mode.adaptive_enabled {
             "adaptive-sleep-disabled"
-        } else if self.started_at.elapsed().as_secs() < self.config.startup_grace_seconds {
+        } else if ready_state.as_ref()
+            .map(|(instant, _)| instant.elapsed().as_secs() < self.config.startup_grace_seconds)
+            .unwrap_or(true)
+        {
             "startup-grace"
         } else if idle_for < idle_seconds as f64 {
             "idle-window"
@@ -326,13 +331,17 @@ impl SleepManager {
             return;
         }
         let now = now_seconds();
-        if self.started_at.elapsed().as_secs() < self.config.startup_grace_seconds {
+        let Some((ready_instant, _)) = self.desktop_ready_state() else {
+            self.clear_pending_sleep_locked("desktop not ready");
+            return;
+        };
+        if ready_instant.elapsed().as_secs() < self.config.startup_grace_seconds {
             self.clear_pending_sleep_locked("startup grace");
             return;
         }
 
         let last_interaction = self.latest_frontend_interaction_at();
-        let reference = last_interaction.max(self.started_at_wall).max(mode.settings_updated_at.min(now));
+        let reference = last_interaction.max(self.desktop_ready_state().map(|(_, wall)| wall).unwrap_or(now)).max(mode.settings_updated_at.min(now));
         let awake = self.awake_clients_snapshot(now);
         let pending_started = normalize_timestamp(state.get("warning_started_at"), 0.0);
         let pending = state.get("pending_sleep").and_then(Value::as_bool).unwrap_or(false);
@@ -402,6 +411,22 @@ impl SleepManager {
         } else {
             info!(idle_seconds, warning_seconds = self.config.warning_seconds, "started sleep warning");
         }
+    }
+
+    fn desktop_ready_state(&self) -> Option<(Instant, f64)> {
+        if !self.config.desktop_ready_path.exists() {
+            return None;
+        }
+        let mut ready = self.ready_at.lock().unwrap_or_else(|error| error.into_inner());
+        if ready.is_none() {
+            let modified = fs::metadata(&self.config.desktop_ready_path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or_else(|_| SystemTime::now());
+            let wall = modified.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+            let elapsed = (now_seconds() - wall).max(0.0);
+            *ready = Some((Instant::now() - Duration::from_secs_f64(elapsed), wall));
+        }
+        *ready
     }
 
     fn read_sleep_mode(&self) -> SleepMode {
