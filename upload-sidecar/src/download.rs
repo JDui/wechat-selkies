@@ -153,7 +153,7 @@ impl DownloadManager {
             }
         }
         if marker.exists() {
-            if marker.is_symlink() || fs::read_to_string(&marker).ok().as_deref() != Some("selkies native download cache v1\n") {
+            if fs::symlink_metadata(&marker).map(|metadata| metadata.file_type().is_symlink()).unwrap_or(false) || fs::read_to_string(&marker).ok().as_deref() != Some("selkies native download cache v1\n") {
                 return Err("download cache ownership marker mismatch".into());
             }
         } else {
