@@ -341,7 +341,9 @@ mod tests {
         let handles = workers.into_iter().map(|(key, value)| {
             let store = store.clone();
             thread::spawn(move || {
-                store.update(json!({key: value})).unwrap();
+                let mut patch = Map::new();
+                patch.insert(key.to_string(), value);
+                store.update(Value::Object(patch)).unwrap();
             })
         }).collect::<Vec<_>>();
         for handle in handles {
