@@ -245,6 +245,7 @@ impl SleepManager {
             }
         }
         let now = now_seconds();
+        let frozen_count = frozen.len();
         let payload = json!({
             "enabled": true,
             "sleeping": true,
@@ -253,8 +254,8 @@ impl SleepManager {
             "reason": reason,
             "entered_at": now,
             "updated_at": now,
-            "frozen_pids": frozen,
-            "frozen_count": frozen.len(),
+            "frozen_pids": frozen.clone(),
+            "frozen_count": frozen_count,
         });
         if let Err(error) = self.write_state(&payload) {
             warn!(%error, "failed to persist sleep state after freezing processes");
@@ -488,10 +489,10 @@ impl SleepManager {
         }
         if let Some(object) = state.as_object_mut() {
             object.insert("enabled".into(), json!(self.feature_enabled()));
-            object.entry("sleeping".into()).or_insert(json!(false));
-            object.entry("frozen_pids".into()).or_insert(json!([]));
-            object.entry("updated_at".into()).or_insert(json!(now_seconds()));
-            object.entry("pending_sleep".into()).or_insert(json!(false));
+            object.entry("sleeping".to_string()).or_insert(json!(false));
+            object.entry("frozen_pids".to_string()).or_insert(json!([]));
+            object.entry("updated_at".to_string()).or_insert(json!(now_seconds()));
+            object.entry("pending_sleep".to_string()).or_insert(json!(false));
         }
         state
     }
