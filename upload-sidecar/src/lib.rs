@@ -257,13 +257,14 @@ pub async fn build_state(config: Config) -> Result<AppState, String> {
         .await
         .map_err(|error| format!("create staging directory: {error}"))?;
     reject_symlink(&canonical_root.join(".staging")).await?;
+    let local_link_max_events = config.local_link_max_events;
     let state = AppState {
         permits: Arc::new(Semaphore::new(config.max_concurrency)),
         config: Arc::new(config),
         root: Arc::new(canonical_root),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         started_at: Instant::now(),
-        local_links: Arc::new(local_link::LocalLinkQueue::new(config.local_link_max_events)),
+        local_links: Arc::new(local_link::LocalLinkQueue::new(local_link_max_events)),
     };
     start_session_cleanup(&state);
     Ok(state)
