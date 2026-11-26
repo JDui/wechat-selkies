@@ -42,6 +42,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_container_download.py'
           python -m unittest discover -s tests -p 'test_rust_control_routes.py'
+          python -m unittest discover -s tests -p 'test_upload_auth.py'
       - name: Validate shell scripts
         run: |
           bash -n root/scripts/start.sh
