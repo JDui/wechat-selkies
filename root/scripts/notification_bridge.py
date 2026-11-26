@@ -59,7 +59,7 @@ def parse_float_env(name, default_value, min_value, max_value):
 HOST = os.getenv("NOTIFICATION_BRIDGE_HOST", "127.0.0.1")
 PORT = parse_int_env("NOTIFICATION_BRIDGE_PORT", 38081, 1024, 65535)
 MAX_EVENTS = parse_int_env("NOTIFICATION_BRIDGE_MAX_EVENTS", 256, 16, 4096)
-FALLBACK_POLL_MS = parse_int_env("NOTIFICATION_BRIDGE_FALLBACK_POLL_MS", 1200, 300, 10000)
+FALLBACK_POLL_MS = parse_int_env("NOTIFICATION_BRIDGE_FALLBACK_POLL_MS", 3000, 1000, 10000)
 MODE_STATE_PATH = pathlib.Path(os.getenv("NOTIFICATION_BRIDGE_MODE_PATH", "/config/state/notification-bridge.json"))
 LAN_DISCOVERY_STATUS_PATH = pathlib.Path(
     os.getenv("SELKIES_LAN_DISCOVERY_STATUS_PATH", "/config/state/lan-discovery-status.json")
@@ -73,6 +73,7 @@ FRONTEND_ACTIVITY_STATE_PATH = pathlib.Path(
     os.getenv("SELKIES_NOTIFICATION_ACTIVITY_STATE_PATH", "/tmp/selkies-notification-activity.json")
 )
 IDLE_DEFOCUS_SECONDS = parse_int_env("NOTIFICATION_BRIDGE_IDLE_DEFOCUS_SECONDS", 600, 0, 1800)
+IDLE_DEFOCUS_POLL_SECONDS = parse_int_env("NOTIFICATION_BRIDGE_IDLE_DEFOCUS_POLL_SECONDS", 5, 2, 30)
 ADAPTIVE_SLEEP_IDLE_OPTIONS = {60, 900, 1800, 2700, 3600}
 ADAPTIVE_SLEEP_DEFAULT_IDLE_SECONDS = parse_int_env(
     "SELKIES_ADAPTIVE_SLEEP_IDLE_SECONDS", 3600, 60, 3600
@@ -663,7 +664,7 @@ def monitor_idle_defocus():
                 defocus_done = True
         except Exception as exc:
             print(f"[notification-bridge] idle defocus monitor error: {exc}", flush=True)
-        time.sleep(1.0)
+        time.sleep(IDLE_DEFOCUS_POLL_SECONDS)
 
 
 def pulse_props_to_text_map(props):
@@ -1361,8 +1362,9 @@ def main():
     monitor_thread.start()
     fallback_thread = threading.Thread(target=poll_fallback_window_events, daemon=True)
     fallback_thread.start()
-    audio_thread = threading.Thread(target=monitor_wechat_audio_events, daemon=True)
-    audio_thread.start()
+    if WECHAT_AUDIO_ENABLED:
+        audio_thread = threading.Thread(target=monitor_wechat_audio_events, daemon=True)
+        audio_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), NotificationBridgeHandler)
     server.daemon_threads = True
     server.serve_forever()
