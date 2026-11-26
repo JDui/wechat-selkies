@@ -55,7 +55,8 @@ services:
       - X11_WATCHDOG_FAIL_THRESHOLD=6
       - X11_HEALTHCHECK_TIMEOUT=4
       - SELKIES_SESSION_MODE=pin-takeover
-      - SELKIES_SESSION_STATE_PATH=/run/selkies-active-session.json
+      - SELKIES_SESSION_STATE_PATH=/run/selkies-runtime/active-session.json
+      - SELKIES_CONTAINER_SLEEP_STATE_PATH=/run/selkies-runtime/container-sleep.json
       - SELKIES_SESSION_AUTH_PORT=38082
       - SELKIES_UPLOAD_ENABLED=true
       - SELKIES_UPLOAD_PORT=38084
