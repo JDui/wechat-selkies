@@ -253,6 +253,23 @@ impl DownloadManager {
         self.get_job_status(&id, true).ok_or_else(|| "job creation failed".into())
     }
 
+    fn get_job_status(&self, id: &str, include_token: bool) -> Option<DownloadJobStatus> {
+        let jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
+        let job = jobs.get(id)?;
+        Some(DownloadJobStatus {
+            id: job.id.clone(),
+            state: job.state.clone(),
+            name: job.name.clone(),
+            size: job.size,
+            error: job.error.clone(),
+            token: if include_token && job.state == "ready" && !job.used {
+                Some(job.token.clone())
+            } else {
+                None
+            },
+        })
+    }
+
     pub fn status(&self, session_id: &str, session_epoch: u64, client: &str) -> DownloadStatus {
         let jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
         let mut selected = jobs.values()
